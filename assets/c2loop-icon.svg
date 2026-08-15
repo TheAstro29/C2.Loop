@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4A7359"/>
+      <stop offset="100%" stop-color="#2C4C3A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- พื้นหลังรูปสี่เหลี่ยมมุมโค้งสไตล์ app icon -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- เครื่องหมายวงวน "C2 LOOP" — สื่อถึงวงจรอุปกรณ์ (คลัง -> เบิกออกไปติดตั้ง -> คืนกลับเข้าคลัง) หมุนวนต่อเนื่อง -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round">
+    <path d="M149,256 C149,185 207,128 277,128 C325,128 367,155 388,194"/>
+    <path d="M363,256 C363,327 305,384 235,384 C187,384 145,357 124,318"/>
+  </g>
+  <g fill="#FFFFFF">
+    <path d="M331,128 L389,192 L320,213 Z"/>
+    <path d="M181,384 L123,320 L192,299 Z"/>
+  </g>
+</svg>

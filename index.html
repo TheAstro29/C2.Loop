@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#3F654D">
+  <title>C2 LOOP — ระบบคลังอุปกรณ์ C2TECH</title>
+  <link rel="icon" type="image/svg+xml" href="assets/c2loop-icon.svg">
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div id="app-loader">
+    <div class="loader-badge"><img src="assets/c2loop-mark-white.svg" alt="" class="loader-spin"></div>
+    <div class="loader-text">C2 LOOP — กำลังโหลด...</div>
+  </div>
+
+  <!-- โอเวอร์เลย์แสดงสถานะ "กำลังโหลด/ส่งข้อมูล" ทั่วทั้งแอป (ขึ้นอัตโนมัติทุกครั้งที่มีการส่งคำขอไปเซิร์ฟเวอร์ ไม่ต้องเซ็ตรายจุด) -->
+  <div id="globalLoadingOverlay" class="no-print" aria-hidden="true">
+    <div class="loader-badge loader-badge-sm"><img src="assets/c2loop-mark-white.svg" alt="" class="loader-spin"></div>
+  </div>
+
+  <div id="offlineBanner" class="offline-banner no-print" style="display:none;">
+    <i class="fas fa-wifi"></i> <span id="offlineBannerText">ออฟไลน์ — การเปลี่ยนแปลงจะถูกส่งอัตโนมัติเมื่อกลับมาออนไลน์</span>
+  </div>
+
+  <!-- Login -->
+  <div id="login-screen">
+    <div class="login-card">
+      <img src="assets/c2loop-mark-green.svg" alt="C2 LOOP" class="login-logo">
+      <h1>C2TECH</h1>
+      <h2>C2 LOOP — ระบบคลังอุปกรณ์</h2>
+      <div id="login-error"></div>
+      <form id="login-form">
+        <label for="login-username">Username / Email</label>
+        <input type="text" id="login-username" autocomplete="username" required>
+        <label for="login-password">รหัสผ่าน</label>
+        <input type="password" id="login-password" autocomplete="current-password" required>
+        <button type="submit" id="login-submit-btn">เข้าสู่ระบบ</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- App shell -->
+  <div id="app-shell">
+    <div class="sidebar">
+      <div class="brand-block">
+        <div class="brand-badge"><img src="assets/c2loop-mark-white.svg" alt="C2 LOOP"></div>
+        <div>
+          <div class="brand-name">C2 LOOP</div>
+          <div class="brand-tagline">ระบบคลังอุปกรณ์ C2TECH</div>
+        </div>
+      </div>
+
+      <div class="nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
+        <i class="fas fa-chart-line"></i> <span>Dashboard</span>
+      </div>
+      <div class="nav-item" data-view="moisturlyzer" onclick="switchView('moisturlyzer')">
+        <i class="fas fa-tint"></i> <span>MoisturLyzer</span>
+      </div>
+      <div class="nav-item" data-view="gateway" onclick="switchView('gateway')">
+        <i class="fas fa-broadcast-tower"></i> <span>Gateway</span>
+      </div>
+      <div class="nav-item" data-view="simcard" onclick="switchView('simcard')">
+        <i class="fas fa-sim-card"></i> <span>SimCard</span>
+      </div>
+      <div class="nav-item" data-view="colorSorterParts" onclick="switchView('colorSorterParts')">
+        <i class="fas fa-cogs"></i> <span>อะไหล่ Color Sorter</span>
+      </div>
+      <div class="nav-item" data-view="panolyzerParts" onclick="switchView('panolyzerParts')">
+        <i class="fas fa-cogs"></i> <span>อะไหล่ Panolyzer</span>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <div class="nav-item" data-view="issue" onclick="switchView('issue')">
+        <i class="fas fa-dolly"></i> <span>เบิกอุปกรณ์</span>
+      </div>
+      <div class="nav-item admin-only" data-view="approvals" onclick="switchView('approvals')">
+        <i class="fas fa-check-circle"></i> <span>อนุมัติการเบิก</span>
+        <span class="nav-badge" id="pendingBadge" style="display:none;"></span>
+      </div>
+      <div class="nav-item" data-view="history" onclick="switchView('history')">
+        <i class="fas fa-history"></i> <span>ประวัติการเบิก/คืน</span>
+      </div>
+      <div class="nav-item admin-only" data-view="users" onclick="switchView('users')">
+        <i class="fas fa-users-cog"></i> <span>จัดการผู้ใช้งาน</span>
+      </div>
+      <div class="nav-item admin-only" data-view="manageparts" onclick="switchView('manageparts')">
+        <i class="fas fa-toolbox"></i> <span>จัดการอะไหล่</span>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="user-chip" id="userChip"></div>
+        <div class="sync-status">
+          <span class="sync-dot" id="syncDot"></span>
+          <span id="syncLabel">กำลังซิงค์...</span>
+        </div>
+        <button class="btn-logout" onclick="logout()"><i class="fas fa-sign-out-alt"></i> ออกจากระบบ</button>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="main-header">
+        <button class="mobile-back-btn no-print" id="mobileBackBtn" onclick="showMobileHome()"><i class="fas fa-chevron-left"></i> เมนู</button>
+        <h2 id="viewTitle">Dashboard</h2>
+        <div class="cache-note" id="cacheNote"></div>
+      </div>
+      <div id="viewContent"></div>
+    </div>
+  </div>
+
+  <!-- Phase 10: หน้าแรกแบบตารางไอคอนสำหรับมือถือ (ทับเนื้อหาปกติ แสดงเฉพาะจอมือถือ) -->
+  <div id="mobileHomeScreen" class="no-print"></div>
+
+  <!-- ใบเบิก/รายงานสำหรับสั่งพิมพ์ — ปกติซ่อนอยู่ แสดงเฉพาะตอนสั่งพิมพ์ผ่าน printSlip() -->
+  <div id="printSlipRoot"></div>
+
+  <!-- โมดัลตัวอย่างรูปรายงาน (สำหรับคัดลอก/บันทึกไปวางส่งใน LINE) -->
+  <div id="imagePreviewModal" class="image-modal-overlay no-print" style="display:none;">
+    <div class="image-modal">
+      <div class="image-modal-head">
+        <h3>รูปรายงาน</h3>
+        <button class="btn-sm" onclick="closeImagePreviewModal()">✕ ปิด</button>
+      </div>
+      <div class="image-modal-body">
+        <img id="reportPreviewImg" alt="รูปรายงาน Dashboard">
+      </div>
+      <div class="image-modal-actions">
+        <button class="btn-primary" id="copyImageBtn" onclick="copyReportImage()">คัดลอกรูป</button>
+        <a class="btn-primary" id="downloadImageBtn" download="dashboard-report.png">บันทึกรูป</a>
+      </div>
+      <div class="form-msg" id="imageModalMsg"></div>
+    </div>
+  </div>
+
+  <!-- โมดัลฟอร์มทั่วไป — ใช้ร่วมกันสำหรับแก้ไขข้อมูลอุปกรณ์ / รายการเบิก (Phase 5, Admin เท่านั้น) -->
+  <div id="genericFormModal" class="image-modal-overlay no-print" style="display:none;">
+    <div class="image-modal">
+      <div class="image-modal-head">
+        <h3 id="genericFormModalTitle">แก้ไขข้อมูล</h3>
+        <button class="btn-sm" onclick="closeGenericFormModal()">✕ ปิด</button>
+      </div>
+      <div class="image-modal-body" id="genericFormModalBody"></div>
+      <div class="image-modal-actions">
+        <button class="btn-primary" id="genericFormSaveBtn">บันทึก</button>
+      </div>
+      <div class="form-msg" id="genericFormModalMsg"></div>
+    </div>
+  </div>
+
+  <!-- โมดัลแสดงรหัสผ่านใหม่หลังสุ่ม (Phase 5) -->
+  <div id="passwordResultModal" class="image-modal-overlay no-print" style="display:none;">
+    <div class="image-modal">
+      <div class="image-modal-head">
+        <h3>รหัสผ่านใหม่</h3>
+        <button class="btn-sm" onclick="closePasswordResultModal()">✕ ปิด</button>
+      </div>
+      <div class="image-modal-body">
+        <p id="passwordResultUserLabel"></p>
+        <div class="password-display" id="passwordResultText"></div>
+      </div>
+      <div class="image-modal-actions">
+        <button class="btn-primary" id="copyPasswordBtn" onclick="copyNewPassword()">คัดลอกรหัสผ่าน</button>
+      </div>
+      <div class="form-msg" id="passwordResultMsg"></div>
+    </div>
+  </div>
+
+  <!-- โมดัลยืนยัน/แจ้งเตือน C2TECH (Phase 7 — แทน native confirm()/alert(), รองรับ Mobile) -->
+  <div id="c2Modal" class="c2-modal-overlay no-print" role="dialog" aria-modal="true" style="display:none;">
+    <div class="c2-modal-card">
+      <div class="c2-modal-icon" id="c2ModalIcon"></div>
+      <h3 class="c2-modal-title" id="c2ModalTitle"></h3>
+      <p class="c2-modal-message" id="c2ModalMessage"></p>
+      <div class="c2-modal-actions">
+        <button type="button" class="c2-modal-btn-cancel" id="c2ModalCancelBtn">ยกเลิก</button>
+        <button type="button" class="c2-modal-btn-ok" id="c2ModalOkBtn">ตกลง</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- โมดัลประวัติอะไหล่ (Phase 10) -->
+  <div id="partHistoryModal" class="image-modal-overlay no-print" style="display:none;">
+    <div class="image-modal">
+      <div class="image-modal-head">
+        <h3 id="partHistoryModalTitle">ประวัติอะไหล่</h3>
+        <button class="btn-sm" onclick="closePartHistoryModal()">✕ ปิด</button>
+      </div>
+      <div class="image-modal-body" id="partHistoryModalBody" style="text-align:left;"></div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

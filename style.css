@@ -1,0 +1,620 @@
+:root {
+  --green: #3F654D;
+  --green-dark: #2C4C3A;
+  --green-light: #E9F1EC;
+  --gray: #666666;
+  --text: #201E1D;
+  --danger: #d64545;
+  --warning: #e08e0b;
+  --info: #2f6fb0;
+  --ok: #2f9e58;
+  --border: #E1E6E3;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+  background: #F5F7F6;
+  color: var(--text);
+}
+
+h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-title,
+.login-card h1, .login-card h2, .main-header h2 {
+  font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+
+/* ---------- Loader ---------- */
+/* พื้นหลังฟ้าขาวเบลออ่อนๆ (frosted glass) แทนพื้นเขียวทึบเดิม — ให้ตัวโลโก้ที่หมุนอยู่เป็นจุดเด่นเดียวกลางจอ */
+#app-loader {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(245, 247, 246, .9);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; color: var(--green-dark);
+  transition: opacity .3s ease;
+}
+#app-loader.hidden { opacity: 0; pointer-events: none; }
+.loader-text { margin-top: 18px; font-weight: 600; letter-spacing: .5px; font-size: 14px; }
+
+/* เครื่องหมาย C2 LOOP สีขาวบนวงกลมเขียวแบรนด์ — ใช้ทั้งตอนโหลดแอปครั้งแรกและตอนกำลังส่งข้อมูลระหว่างใช้งาน */
+.loader-badge {
+  width: 84px; height: 84px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--green), var(--green-dark));
+  box-shadow: 0 10px 28px rgba(44,76,58,.32);
+  display: flex; align-items: center; justify-content: center;
+}
+.loader-badge img { width: 46px; height: 46px; display: block; }
+.loader-badge-sm { width: 62px; height: 62px; box-shadow: 0 8px 22px rgba(44,76,58,.28); }
+.loader-badge-sm img { width: 34px; height: 34px; }
+.loader-spin { animation: loaderSpin 1.3s linear infinite; }
+@keyframes loaderSpin { to { transform: rotate(360deg); } }
+
+/* ---------- โอเวอร์เลย์แสดงสถานะ "กำลังส่ง/โหลดข้อมูล" ทั่วทั้งแอป ----------
+   ขึ้นอัตโนมัติทุกครั้งที่มีการเรียก apiPost() (กดปุ่มส่งคำขอ/บันทึก/ลบ/อนุมัติ ฯลฯ ทุกจุดในแอป)
+   ไม่ต้องเซ็ตเป็นรายจุด — ทำให้มั่นใจได้ว่าไม่มีเมนูไหนกดแล้ว "เงียบ" จนไม่รู้ว่ากำลังทำงานอยู่
+   หน้าจอเบลอสีขาวอ่อนๆ ทั้งจอ + โลโก้หมุนอยู่ตรงกลาง (ดีไซน์เดียวกับตอนโหลดแอปครั้งแรก) */
+#globalLoadingOverlay {
+  position: fixed; inset: 0; z-index: 6000;
+  background: rgba(255,255,255,.55);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity .18s ease;
+}
+#globalLoadingOverlay.active { opacity: 1; pointer-events: auto; }
+
+/* ---------- Login screen ---------- */
+#login-screen {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--green-dark), var(--green));
+}
+.login-card {
+  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 36px 32px; width: 340px; max-width: 90vw;
+}
+.login-logo { width: 56px; height: 56px; display: block; margin: 0 auto 14px; }
+.login-card h1 {
+  font-size: 15px; color: var(--green); letter-spacing: 1px; margin: 0 0 4px;
+  text-transform: uppercase; font-weight: 700; text-align: center;
+}
+.login-card h2 { margin: 0 0 22px; font-size: 20px; color: var(--green-dark); text-align: center; }
+.login-card label { font-size: 13px; color: var(--gray); display: block; margin-bottom: 6px; }
+.login-card input {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 16px; font-size: 14px;
+}
+.login-card input:focus { outline: none; border-color: var(--green); }
+.login-card button {
+  width: 100%; padding: 11px; border: none; border-radius: 8px;
+  background: var(--green); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer;
+  transition: background .15s;
+}
+.login-card button:hover { background: var(--green-dark); }
+.login-card button:disabled { opacity: .6; cursor: default; }
+#login-error {
+  color: var(--danger); font-size: 13px; margin: -8px 0 14px; display: none;
+}
+
+/* ---------- App shell ---------- */
+#app-shell { display: none; }
+#app-shell.visible { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 230px; flex-shrink: 0; background: var(--green-dark); color: #fff;
+  display: flex; flex-direction: column; padding: 22px 16px;
+}
+.brand-block { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+.brand-badge {
+  width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.14);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.brand-badge img { width: 24px; height: 24px; display: block; }
+.brand-name { font-weight: 700; font-size: 18px; line-height: 1.15; letter-spacing: .3px; }
+.brand-tagline { font-size: 10.5px; opacity: .7; margin-top: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
+  color: rgba(255,255,255,.85); cursor: pointer; font-size: 14px; margin-bottom: 4px;
+  transition: background .15s;
+}
+.nav-item:hover { background: rgba(255,255,255,.08); }
+.nav-item.active { background: rgba(255,255,255,.16); color: #fff; font-weight: 600; }
+.nav-item i { width: 18px; text-align: center; }
+.nav-item.admin-only { display: none; }
+.nav-item.admin-only.role-visible { display: flex; }
+.nav-divider { height: 1px; background: rgba(255,255,255,.15); margin: 10px 0; }
+.nav-badge {
+  margin-left: auto; background: var(--danger); color: #fff; font-size: 10px; font-weight: 700;
+  padding: 1px 7px; border-radius: 20px;
+}
+
+.sidebar-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.15); }
+.user-chip { font-size: 13px; margin-bottom: 10px; opacity: .9; }
+.user-chip .role-badge {
+  display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 20px;
+  background: rgba(255,255,255,.2); margin-left: 6px; text-transform: uppercase;
+}
+.sync-status { font-size: 11px; opacity: .7; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #7bd88f; }
+.sync-dot.stale { background: #e0b04a; }
+.sync-dot.offline { background: #d66; }
+.btn-logout {
+  width: 100%; padding: 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,.3);
+  background: transparent; color: #fff; cursor: pointer; font-size: 13px;
+}
+.btn-logout:hover { background: rgba(255,255,255,.1); }
+
+.main {
+  flex: 1; padding: 26px 30px; overflow-x: hidden;
+}
+.main-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+.main-header h2 { margin: 0; color: var(--green-dark); font-size: 21px; }
+.cache-note { font-size: 12px; color: var(--gray); }
+
+/* ---------- Dashboard ---------- */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.kpi-card {
+  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px;
+  border-left: 4px solid var(--green);
+}
+.kpi-card-title {
+  font-size: 15px; font-weight: 700; color: var(--green-dark); margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.kpi-stat-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.kpi-stat-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.kpi-stat-dot.dot-info { background: var(--info); }
+.kpi-stat-dot.dot-warn { background: var(--warning); }
+.kpi-stat-dot.dot-danger { background: var(--danger); }
+.kpi-stat-row:first-of-type .kpi-stat-label { margin-left: 16px; }
+.kpi-stat-label { font-size: 13px; color: var(--gray); flex: 1; }
+.kpi-stat-value { font-size: 17px; font-weight: 700; color: var(--green-dark); }
+.kpi-stat-value.info { color: var(--info); }
+.kpi-stat-value.warn { color: var(--warning); }
+.kpi-stat-value.danger { color: var(--danger); }
+.kpi-stat-sub { font-size: 11px; color: var(--gray); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
+
+.asset-summary-table { width: 100%; }
+
+/* ---------- Table ---------- */
+.controls-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.controls-row input, .controls-row select {
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: #fff;
+}
+.controls-row input { flex: 1; min-width: 200px; }
+
+.table-card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.table-scroll { overflow-x: auto; max-height: 62vh; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  position: sticky; top: 0; background: var(--green); color: #fff; text-align: left;
+  padding: 10px 12px; white-space: nowrap; font-weight: 600;
+}
+tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+tbody tr:nth-child(even) { background: var(--green-light); }
+tbody tr:hover { background: #dbe9e0; }
+.badge-stock { color: var(--ok); font-weight: 600; }
+.badge-used { color: var(--info); font-weight: 600; }
+.empty-row td { text-align: center; color: var(--gray); padding: 24px; }
+
+/* ---------- Phase 2: forms, basket, transaction cards ---------- */
+.form-card {
+  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 20px;
+}
+.form-card h3 { margin: 0 0 14px; font-size: 15px; color: var(--green-dark); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.form-grid.full { grid-template-columns: 1fr; }
+.form-field label { display: block; font-size: 12px; color: var(--gray); margin-bottom: 5px; }
+.form-field input, .form-field select, .form-field textarea {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-family: inherit;
+}
+.form-field textarea { resize: vertical; min-height: 60px; }
+
+.picker-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.picker-row select, .picker-row input { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.picker-row input { flex: 1; min-width: 200px; }
+
+.picker-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; }
+.picker-list-item {
+  display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.picker-list-item:last-child { border-bottom: none; }
+.picker-list-item:nth-child(even) { background: var(--green-light); }
+.picker-empty { padding: 16px; text-align: center; color: var(--gray); font-size: 13px; }
+
+.btn-sm {
+  padding: 5px 12px; border-radius: 6px; border: none; font-size: 12px; cursor: pointer; font-weight: 600;
+}
+.btn-add { background: var(--green); color: #fff; }
+.btn-add:hover { background: var(--green-dark); }
+.btn-remove { background: var(--green-light); color: var(--danger); }
+.btn-remove:hover { background: #f0d9d9; }
+
+.basket-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
+.basket-table th { text-align: left; padding: 8px 10px; background: var(--green-light); color: var(--green-dark); }
+.basket-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.basket-table select { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; }
+.basket-table input[type="text"] { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; width: 100%; box-sizing: border-box; }
+.basket-empty { color: var(--gray); font-size: 13px; padding: 14px 0; }
+
+/* Phase 6: กติกาบังคับ Gateway/SimCard ตอนเบิก MoisturLyzer */
+.req-label { font-size: 12px; color: var(--green-dark); font-weight: 600; }
+.req-warn { color: var(--danger); }
+.req-empty { border-color: var(--danger) !important; background: #fdf1f1; }
+
+/* Phase 8: อะไหล่ Color Sorter / Panolyzer */
+.section-subtitle { margin: 0 0 12px; font-size: 15px; color: var(--green-dark); }
+.picker-qty-controls { display: flex; align-items: center; gap: 8px; }
+.qty-input-sm { width: 64px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; }
+.basket-table input[type="number"] { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; width: 80px; }
+
+.btn-primary {
+  padding: 11px 22px; border: none; border-radius: 8px; background: var(--green); color: #fff;
+  font-weight: 600; font-size: 14px; cursor: pointer;
+}
+.btn-primary:hover { background: var(--green-dark); }
+.btn-primary:disabled { opacity: .55; cursor: default; }
+.form-msg { font-size: 13px; margin-top: 10px; padding: 8px 12px; border-radius: 8px; display: none; }
+.form-msg.error { display: block; background: #fdeaea; color: var(--danger); }
+.form-msg.success { display: block; background: #e8f5eb; color: var(--ok); }
+
+.status-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+}
+.status-PendingApproval { background: #fdf1de; color: var(--warning); }
+.status-Approved, .status-Issued { background: #e5f2ea; color: var(--ok); }
+.status-Rejected { background: #fbe6e6; color: var(--danger); }
+.status-Returned { background: #e6eef7; color: var(--info); }
+
+.txn-card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 20px; margin-bottom: 14px; }
+.txn-card-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.txn-title { font-weight: 700; color: var(--green-dark); font-size: 14px; }
+.txn-meta { font-size: 12px; color: var(--gray); margin-top: 2px; }
+.txn-items { font-size: 13px; margin: 10px 0; }
+.txn-item-row { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.txn-item-row:last-child { border-bottom: none; }
+.txn-actions { display: flex; gap: 8px; margin-top: 10px; }
+.btn-approve { background: var(--ok); color: #fff; }
+.btn-approve:hover { background: #257c46; }
+.btn-reject { background: var(--danger); color: #fff; }
+.btn-reject:hover { background: #b83636; }
+.btn-return { background: var(--info); color: #fff; }
+.btn-return:hover { background: #245a8f; }
+.empty-state { text-align: center; color: var(--gray); padding: 40px; }
+
+/* Phase 5: ดำเนินการแบบกลุ่ม (bulk actions) */
+.txn-select { display: flex; align-items: center; margin-right: 4px; }
+.txn-select input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: var(--green); }
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: var(--sub2, #D2DCD8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-bottom: 14px;
+}
+.bulk-select-all { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--green-dark); cursor: pointer; }
+.bulk-select-all input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--green); }
+.bulk-progress { font-size: 12px; color: var(--gray); flex: 1; }
+.bulk-action-buttons { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.bulk-action-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Mobile ---------- */
+.mobile-top-bar { display: none; }
+@media (max-width: 900px) {
+  #app-shell.visible { flex-direction: column; }
+  .sidebar {
+    width: 100%; flex-direction: row; align-items: center; padding: 10px 12px; gap: 6px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    /* ล็อคแถบเมนูด้านบนให้ติดหน้าจอเสมอตอนเลื่อนหน้าจอมือถือ ไม่ต้องเลื่อนกลับขึ้นไปด้านบนเพื่อสลับเมนู */
+    position: sticky; top: 0; z-index: 60; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  }
+  .sidebar .brand-block { display: none; }
+  .nav-item {
+    flex-shrink: 0; flex-direction: column; gap: 3px; padding: 6px 10px; font-size: 11px; text-align: center;
+  }
+  .nav-item span { display: block; white-space: nowrap; }
+  .sidebar-footer { margin-top: 0; margin-left: auto; flex-shrink: 0; border: none; padding: 0; display: flex; align-items: center; gap: 10px; }
+  .user-chip, .sync-status { display: none; }
+  .btn-logout { width: auto; padding: 8px 12px; flex-shrink: 0; font-size: 12px; white-space: nowrap; }
+  .main { padding: 18px 16px; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .form-grid { grid-template-columns: 1fr; }
+  .basket-table { display: block; overflow-x: auto; white-space: nowrap; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .slip-info-grid { grid-template-columns: 1fr; }
+  .report-doc { padding: 18px; }
+  .report-header { flex-direction: column; align-items: flex-start; }
+  .report-header-date { text-align: left; }
+}
+
+/* ---------- Phase 3: offline banner ---------- */
+.offline-banner {
+  background: var(--warning); color: #fff; text-align: center; padding: 8px 12px; font-size: 13px; font-weight: 600;
+}
+
+/* ---------- Phase 4: charts ---------- */
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.chart-card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
+.chart-card h3 { margin: 0 0 12px; font-size: 14px; color: var(--green-dark); }
+.chart-card canvas { max-height: 260px; }
+.dashboard-actions { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.btn-secondary {
+  padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border); background: #fff;
+  color: var(--green-dark); font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.btn-secondary:hover { background: var(--green-light); }
+
+/* ---------- Phase 4: image preview modal (สร้างรูปรายงานสำหรับ LINE) ---------- */
+.image-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 2000;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.image-modal { background: #fff; border-radius: var(--radius); max-width: 560px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 20px; }
+.image-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.image-modal-head h3 { margin: 0; color: var(--green-dark); font-size: 16px; }
+.image-modal-body { text-align: center; margin-bottom: 16px; }
+.image-modal-body img { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; }
+.image-modal-actions { display: flex; gap: 10px; justify-content: center; }
+.image-modal-actions a.btn-primary { text-decoration: none; text-align: center; display: inline-block; }
+
+/* ---------- Phase 7: C2TECH custom confirm/alert modal (แทน native confirm()/alert()) ---------- */
+.c2-modal-overlay {
+  position: fixed; inset: 0; background: rgba(20, 30, 24, .46); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  z-index: 3000; display: flex; align-items: center; justify-content: center; padding: 20px;
+  opacity: 0; pointer-events: none; transition: opacity .18s ease;
+}
+.c2-modal-overlay.open { opacity: 1; pointer-events: auto; }
+.c2-modal-card {
+  background: #fff; border-radius: 18px; max-width: 420px; width: 100%; max-height: 88vh; overflow-y: auto;
+  padding: 26px 24px 20px; box-shadow: 0 20px 50px rgba(20, 40, 28, .25), 0 2px 8px rgba(0,0,0,.06);
+  transform: scale(.92) translateY(8px); opacity: 0; transition: transform .2s cubic-bezier(.34,1.56,.64,1), opacity .18s ease;
+  text-align: center;
+}
+.c2-modal-overlay.open .c2-modal-card { transform: scale(1) translateY(0); opacity: 1; }
+.c2-modal-icon {
+  width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;
+  font-size: 26px; font-weight: 700;
+}
+.c2-modal-icon.confirm { background: #eaf2ff; color: var(--info); }
+.c2-modal-icon.success { background: #e8f5eb; color: var(--ok); }
+.c2-modal-icon.error { background: #fdeaea; color: var(--danger); }
+.c2-modal-icon.warning { background: #fff4e2; color: var(--warning); }
+.c2-modal-title { margin: 0 0 8px; font-size: 17px; color: var(--green-dark); font-weight: 700; }
+.c2-modal-message { margin: 0 0 20px; font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-line; }
+.c2-modal-actions { display: flex; gap: 10px; justify-content: center; }
+.c2-modal-actions button { flex: 1; max-width: 180px; padding: 11px 16px; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; border: none; }
+.c2-modal-btn-cancel { background: #f0f2f0; color: var(--gray); }
+.c2-modal-btn-cancel:hover { background: #e4e8e4; }
+.c2-modal-btn-ok { background: var(--green); color: #fff; }
+.c2-modal-btn-ok:hover { background: var(--green-dark); }
+.c2-modal-btn-ok.danger { background: var(--danger); }
+.c2-modal-btn-ok.danger:hover { background: #b93838; }
+
+@media (max-width: 640px) {
+  .c2-modal-overlay { align-items: flex-end; padding: 0; }
+  .c2-modal-card {
+    max-width: 100%; border-radius: 20px 20px 0 0; max-height: 80vh; padding: 22px 20px 24px;
+    transform: translateY(100%); box-shadow: 0 -8px 30px rgba(20,40,28,.2);
+  }
+  .c2-modal-overlay.open .c2-modal-card { transform: translateY(0); }
+  .c2-modal-card::before {
+    content: ""; display: block; width: 40px; height: 4px; background: var(--border); border-radius: 4px; margin: -8px auto 16px;
+  }
+  .c2-modal-actions { flex-direction: column-reverse; }
+  .c2-modal-actions button { max-width: none; padding: 13px 16px; }
+}
+
+/* ---------- Phase 4: user management ---------- */
+.users-table-wrap { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 20px; }
+.users-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.users-table th { background: var(--green); color: #fff; text-align: left; padding: 10px 12px; }
+.users-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.users-table tr:nth-child(even) { background: var(--green-light); }
+.status-pill { padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+.status-pill.active { background: #e5f2ea; color: var(--ok); }
+.status-pill.inactive { background: #f0f0f0; color: var(--gray); }
+
+/* ---------- Phase 5: เอกสารทางการของ C2TECH (letterhead) — ใช้ร่วมกันทั้ง Dashboard/รูปรายงาน LINE/ใบเบิกพิมพ์ ---------- */
+.report-doc {
+  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 28px 32px; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+.report-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.report-logo { height: 44px; width: auto; object-fit: contain; }
+.report-header-text { flex: 1; min-width: 180px; }
+.report-doc-title { font-size: 21px; font-weight: 700; color: var(--green); line-height: 1.25; }
+.report-doc-sub { font-size: 12px; color: var(--gray); letter-spacing: .3px; margin-top: 2px; }
+.report-header-date { text-align: right; font-size: 11px; color: var(--gray); text-transform: uppercase; letter-spacing: .4px; }
+.report-date-value { font-size: 14px; font-weight: 600; color: var(--text); text-transform: none; margin-top: 2px; }
+.report-divider {
+  height: 3px; margin: 16px 0 22px; border-radius: 3px;
+  background: linear-gradient(to right, var(--green) 0%, var(--green) 40%, var(--green-light) 100%);
+}
+.report-footer {
+  margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+  font-size: 11px; color: var(--gray); font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+
+/* ---------- Phase 5: badge เชื่อมโยงอุปกรณ์ (แสดงในรายการ MoisturLyzer) ---------- */
+.badge-linked {
+  display: inline-block; background: var(--green-light); color: var(--green-dark);
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; margin: 1px 2px;
+  white-space: nowrap;
+}
+.no-wrap { white-space: nowrap; }
+
+/* ---------- Phase 5: โมดัลรหัสผ่านใหม่ ---------- */
+.password-display {
+  font-family: "Courier New", monospace; font-size: 22px; font-weight: 700; letter-spacing: 3px;
+  background: var(--green-light); color: var(--green-dark); border: 1px dashed var(--green);
+  border-radius: 8px; padding: 14px; text-align: center; margin-top: 10px; user-select: all;
+}
+
+/* ---------- Print / ใบเบิกอุปกรณ์ (report-doc ใช้สไตล์เดียวกับ Dashboard) ---------- */
+#printSlipRoot { display: none; }
+.print-slip { max-width: 800px; margin: 0 auto; }
+.slip-info-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-bottom: 18px;
+}
+.slip-info-item { display: flex; justify-content: space-between; border-bottom: 1px dotted var(--border); padding-bottom: 4px; }
+.slip-info-label { font-size: 11px; color: var(--gray); text-transform: uppercase; letter-spacing: .3px; }
+.slip-info-value { font-size: 13px; font-weight: 600; color: var(--text); font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.slip-note {
+  font-size: 13px; background: var(--green-light); color: var(--text); padding: 10px 14px;
+  border-radius: 8px; margin-bottom: 18px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+.slip-table { width: 100%; border-collapse: collapse; margin-bottom: 40px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.slip-table th, .slip-table td { border: 1px solid var(--border); padding: 9px 12px; font-size: 13px; text-align: left; }
+.slip-table th { background: var(--green); color: #fff; font-weight: 600; }
+.slip-table tr:nth-child(even) { background: var(--green-light); }
+.signature-row { display: flex; justify-content: space-between; margin-top: 50px; gap: 20px; }
+.signature-box { text-align: center; width: 45%; }
+.signature-line { border-top: 1px solid #333; margin-top: 50px; padding-top: 6px; font-size: 13px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+
+/* ---------- Phase 10: ปุ่ม "กลับเมนู" บนมือถือ (แสดงเฉพาะจอมือถือผ่าน media query ด้านล่าง) ---------- */
+.mobile-back-btn {
+  display: none; align-items: center; gap: 6px; background: none; border: none; color: var(--green);
+  font-size: 13px; font-weight: 700; cursor: pointer; padding: 6px 0; margin-right: 4px;
+}
+
+/* ---------- Phase 10: ประวัติอะไหล่ (timeline) ---------- */
+.history-timeline { display: flex; flex-direction: column; gap: 4px; }
+.history-entry { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.history-entry:last-child { border-bottom: none; }
+.history-entry-icon {
+  width: 32px; height: 32px; border-radius: 50%; background: var(--green-light); color: var(--green-dark);
+  display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0;
+}
+.history-entry-body { flex: 1; min-width: 0; }
+.history-entry-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 3px; }
+.history-entry-head b { color: var(--green-dark); }
+.history-entry-head span { color: var(--gray); font-size: 11.5px; white-space: nowrap; }
+.history-entry-detail { font-size: 12.5px; color: var(--text); line-height: 1.5; word-break: break-word; }
+.history-entry-actor { font-size: 11px; color: var(--gray); margin-top: 3px; }
+
+/* ---------- Phase 10: หน้าแรกแบบตารางไอคอนสำหรับมือถือ (Mobile Home Screen) ---------- */
+#mobileHomeScreen {
+  display: none; position: fixed; inset: 0; z-index: 1500; background: #F3F5FB;
+  flex-direction: column; overflow-y: auto;
+}
+#mobileHomeScreen.visible { display: flex; }
+
+.mh-header {
+  background: linear-gradient(135deg, var(--green), var(--green-dark));
+  color: #fff; padding: 22px 18px 20px; border-radius: 0 0 24px 24px; flex-shrink: 0;
+}
+.mh-brand-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.mh-brand-row .mh-brand-badge {
+  width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,.16);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.mh-brand-row .mh-brand-badge img { width: 15px; height: 15px; display: block; }
+.mh-brand-row .mh-brand-txt { font-size: 13px; font-weight: 700; letter-spacing: .3px; opacity: .95; }
+.mh-header-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.mh-greeting { font-size: 12px; opacity: .85; }
+.mh-username { font-size: 18px; font-weight: 700; margin-top: 2px; }
+.mh-role-chip {
+  display: inline-block; margin-top: 6px; background: rgba(255,255,255,.18); font-size: 10.5px;
+  padding: 2px 9px; border-radius: 20px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+}
+.mh-header-icons { display: flex; gap: 8px; }
+.mh-icon-btn {
+  width: 38px; height: 38px; border-radius: 50%; background: rgba(255,255,255,.16); border: none;
+  color: #fff; font-size: 15px; display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.mh-icon-btn:hover { background: rgba(255,255,255,.28); }
+.mh-search-box {
+  margin-top: 16px; background: #fff; border-radius: 12px; padding: 10px 13px; display: flex; align-items: center;
+  gap: 9px; box-shadow: 0 6px 16px rgba(20,40,28,.18);
+}
+.mh-search-box i { color: var(--gray); font-size: 13px; }
+.mh-search-box input { border: none; outline: none; flex: 1; font-size: 13px; color: var(--text); background: transparent; font-family: inherit; }
+
+.mh-content { padding: 16px 16px 90px; flex: 1; }
+.mh-alert-card {
+  background: #FFF4E5; border: 1px solid #FBDFAF; border-radius: 14px; padding: 12px 14px;
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px; cursor: pointer;
+}
+.mh-alert-icon {
+  width: 38px; height: 38px; border-radius: 11px; background: var(--warning); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0;
+}
+.mh-alert-text { flex: 1; min-width: 0; }
+.mh-alert-text b { display: block; font-size: 13px; color: var(--text); margin-bottom: 1px; }
+.mh-alert-text span { font-size: 11.5px; color: var(--gray); }
+.mh-alert-card > i { color: var(--gray); flex-shrink: 0; }
+
+.mh-stat-row { display: flex; gap: 8px; margin-bottom: 18px; }
+.mh-stat-pill { flex: 1; background: #fff; border-radius: 12px; padding: 10px; text-align: center; box-shadow: var(--shadow); }
+.mh-stat-num { font-size: 17px; font-weight: 800; color: var(--green-dark); }
+.mh-stat-num.ok { color: var(--ok); }
+.mh-stat-num.warn { color: var(--warning); }
+.mh-stat-lbl { font-size: 10.5px; color: var(--gray); margin-top: 2px; }
+
+.mh-section-title { font-size: 13px; font-weight: 700; color: var(--green-dark); margin: 6px 0 10px; }
+
+.mh-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+.mh-grid.mh-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.mh-tile {
+  background: #fff; border-radius: 14px; padding: 12px 6px 10px; text-align: center; box-shadow: var(--shadow);
+  position: relative; min-height: 88px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 7px; cursor: pointer; min-width: 0;
+}
+.mh-tile:active { transform: scale(.97); }
+.mh-tile-icon {
+  width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  font-size: 17px; color: #fff; flex-shrink: 0;
+}
+.mh-tile-lbl { font-size: 10.5px; font-weight: 600; color: var(--text); line-height: 1.25; }
+.mh-tile-badge {
+  position: absolute; top: 6px; right: 6px; background: var(--danger); color: #fff; font-size: 9.5px; font-weight: 700;
+  min-width: 16px; height: 16px; border-radius: 8px; display: flex; align-items: center; justify-content: center; padding: 0 3px;
+}
+/* สีไอคอนแต่ละเมนู — ใช้แยกแยะเมนูให้จำง่าย (โทนสีนี้เป็นอิสระจากธีมหลัก ปรับได้ตามต้องการ) */
+.mh-c1 { background: #4F7FE0; } .mh-c2 { background: #17A672; } .mh-c3 { background: #2f6fb0; }
+.mh-c4 { background: #8B5CF6; } .mh-c5 { background: #e08e0b; } .mh-c6 { background: #EC6BAA; }
+.mh-c7 { background: var(--green); } .mh-c8 { background: var(--danger); } .mh-c9 { background: var(--gray); }
+
+.mh-tabbar {
+  position: fixed; bottom: 0; left: 0; right: 0; background: #fff; display: flex; padding: 8px 4px calc(10px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -6px 16px rgba(20,40,28,.10); z-index: 1501;
+}
+.mh-tab-item {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--gray);
+  font-size: 10px; font-weight: 600; position: relative; padding: 4px 0; cursor: pointer;
+}
+.mh-tab-item i { font-size: 17px; }
+.mh-tab-item.active { color: var(--green); }
+.mh-tab-badge {
+  position: absolute; top: -2px; right: 26%; background: var(--danger); color: #fff; font-size: 9px; font-weight: 700;
+  min-width: 14px; height: 14px; border-radius: 7px; display: flex; align-items: center; justify-content: center;
+}
+
+@media (max-width: 760px) {
+  .mobile-back-btn { display: flex; }
+}
+/* กันไว้อีกชั้น — ไม่ให้หน้าแรกแบบตารางไอคอนโผล่บนจอกว้างแม้ JS จะยังไม่ทัน sync ตอน resize */
+@media (min-width: 761px) {
+  #mobileHomeScreen.visible { display: none !important; }
+}
+
+@media print {
+  body.print-slip-active > *:not(#printSlipRoot) { display: none !important; }
+  body.print-slip-active #printSlipRoot { display: block !important; }
+  body.print-slip-active .report-doc { box-shadow: none; }
+
+  body.print-dashboard-active .sidebar,
+  body.print-dashboard-active .no-print,
+  body.print-dashboard-active #offlineBanner { display: none !important; }
+  body.print-dashboard-active .main { padding: 0; }
+  body.print-dashboard-active .report-doc { box-shadow: none; }
+}
