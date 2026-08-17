@@ -446,8 +446,16 @@ function hideMobileHome() {
   syncMobileHomeVisibility();
 }
 
+let _lastIsMobileViewport = isMobileViewport();
 window.addEventListener("resize", () => {
-  if (state.user) syncMobileHomeVisibility();
+  if (!state.user) return;
+  syncMobileHomeVisibility();
+  // ถ้าข้ามเส้นแบ่งมือถือ/เดสก์ท็อป ให้ render หน้าปัจจุบันใหม่ (ตาราง <-> การ์ด, กราฟ Dashboard เดสก์ท็อป/มือถือ)
+  const nowMobile = isMobileViewport();
+  if (nowMobile !== _lastIsMobileViewport) {
+    _lastIsMobileViewport = nowMobile;
+    if (!state.mobileHomeVisible) renderCurrentView();
+  }
 });
 
 // เมนูหลัก (เรียงตามเมนูด้านซ้ายจริง) — adminOnly = แสดงเฉพาะ Admin, badge = true ให้แปะจำนวนรออนุมัติ
@@ -800,12 +808,23 @@ function computeSummary(rows, cfg) {
   return { total, stock, used, activated, notActivated, activatedUsed };
 }
 
+// สีประจำแต่ละหมวดอุปกรณ์บนหน้า Dashboard มือถือ — ใช้สีเดียวกับไอคอนหน้าแรกมือถือ (mh-c2..mh-c6) เพื่อให้สื่อความหมายตรงกันทั้งแอป
+const DASHBOARD_CATEGORY_META = {
+  moisturlyzer: { icon: "fa-tint", color: "#17A672" },
+  gateway: { icon: "fa-broadcast-tower", color: "#2f6fb0" },
+  simcard: { icon: "fa-sim-card", color: "#8B5CF6" },
+  colorSorterParts: { icon: "fa-cogs", color: "#e08e0b" },
+  panolyzerParts: { icon: "fa-cogs", color: "#EC6BAA" },
+};
+
 function renderDashboard() {
   const content = document.getElementById("viewContent");
   const summaries = Object.values(VIEW_CONFIG).map((cfg) => ({
     cfg,
     summary: computeSummary(state.data[cfg.key] || [], cfg),
   }));
+
+  if (isMobileViewport()) { renderDashboardMobile(content, summaries); return; }
 
   let html = `
     <div class="dashboard-actions no-print">
@@ -883,6 +902,83 @@ function renderDashboard() {
   content.innerHTML = html;
   renderMonthlyTrendChart();
   renderStockSnapshotChart(summaries);
+}
+
+// ============================================================
+// Dashboard เวอร์ชันมือถือ — วงแหวนสรุปสัดส่วนคงคลัง + ตารางไอคอนแยกตามประเภท (ดูง่ายกว่ากราฟเดิมบนจอเล็ก)
+// ============================================================
+function renderDashboardMobile(content, summaries) {
+  const isAdmin = state.user.role === "Admin";
+  const totalStock = summaries.reduce((sum, s) => sum + s.summary.stock, 0);
+  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
+
+  // คำนวณส่วนโค้งของวงแหวนแต่ละหมวด (เรียงตาม summaries เดิม ให้สีตรงกับไอคอนหน้าแรกมือถือเสมอ)
+  const RADIUS = 80;
+  const CIRC = 2 * Math.PI * RADIUS;
+  let cumulative = 0;
+  const segments = totalStock > 0 ? summaries
+    .filter((s) => s.summary.stock > 0)
+    .map((s) => {
+      const meta = DASHBOARD_CATEGORY_META[s.cfg.key] || { color: "#3F654D" };
+      const pct = s.summary.stock / totalStock;
+      const arcLen = pct * CIRC;
+      const seg = { color: meta.color, arcLen, offset: -cumulative, pct: Math.round(pct * 100) };
+      cumulative += arcLen;
+      return seg;
+    }) : [];
+
+  const donutSvg = totalStock > 0
+    ? `
+      <svg width="200" height="200" viewBox="0 0 200 200">
+        <g transform="translate(100,100) rotate(-90)">
+          <circle r="${RADIUS}" cx="0" cy="0" fill="none" stroke="#eef1ef" stroke-width="24"/>
+          ${segments.map((seg) => `<circle r="${RADIUS}" cx="0" cy="0" fill="none" stroke="${seg.color}" stroke-width="24" stroke-dasharray="${seg.arcLen.toFixed(1)} ${CIRC.toFixed(1)}" stroke-dashoffset="${seg.offset.toFixed(1)}" stroke-linecap="butt"/>`).join("")}
+        </g>
+        <text x="100" y="96" text-anchor="middle" style="font-size:26px; font-weight:700; fill:#2C4C3A; font-family:inherit;">${totalStock}</text>
+        <text x="100" y="116" text-anchor="middle" style="font-size:11px; fill:#63816F; font-family:inherit;">อยู่ในคลังทั้งหมด</text>
+      </svg>`
+    : `
+      <svg width="200" height="200" viewBox="0 0 200 200">
+        <circle r="${RADIUS}" cx="100" cy="100" fill="none" stroke="#eef1ef" stroke-width="24"/>
+        <text x="100" y="104" text-anchor="middle" style="font-size:13px; fill:#8a938d; font-family:inherit;">ยังไม่มีของในคลัง</text>
+      </svg>`;
+
+  const legendHtml = segments.map((seg, i) => {
+    const s = summaries.filter((x) => x.summary.stock > 0)[i];
+    return `<div class="dash-legend-item"><span class="dash-legend-dot" style="background:${seg.color}"></span>${escapeHtml(s.cfg.title.replace(" (มี S/N)", ""))} ${seg.pct}%</div>`;
+  }).join("");
+
+  content.innerHTML = `
+    <div class="dash-mobile-header">
+      <div class="dash-mobile-title">ภาพรวมคลังอุปกรณ์</div>
+      <div class="dash-mobile-actions no-print">
+        <button class="dash-icon-btn" onclick="printDashboard()" title="พิมพ์รายงาน"><i class="fas fa-print"></i></button>
+        <button class="dash-icon-btn" onclick="generateReportImage(this)" title="สร้างรูปรายงาน"><i class="fas fa-camera"></i></button>
+      </div>
+    </div>
+    <div id="dashboardReportArea">
+      <div class="dash-donut-wrap">${donutSvg}</div>
+      ${segments.length ? `<div class="dash-legend-row">${legendHtml}</div>` : ""}
+      ${isAdmin && pending > 0 ? `
+        <div class="dash-pending-alert" onclick="switchView('approvals')">
+          <div class="dash-pending-icon"><i class="fas fa-clock"></i></div>
+          <div class="dash-pending-text"><b>มีคำขอรออนุมัติ ${pending} รายการ</b><span>แตะเพื่อตรวจสอบและอนุมัติทันที</span></div>
+          <i class="fas fa-chevron-right"></i>
+        </div>` : ""}
+      <div class="section-subtitle" style="margin-top:18px;">แยกตามประเภทอุปกรณ์</div>
+      <div class="dash-cat-grid">
+        ${summaries.map(({ cfg, summary }) => {
+          const meta = DASHBOARD_CATEGORY_META[cfg.key] || { icon: "fa-box", color: "#3F654D" };
+          return `
+          <div class="dash-cat-tile" onclick="switchView('${escapeAttr(cfg.key)}')">
+            <div class="dash-cat-icon" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div>
+            <div class="dash-cat-name">${escapeHtml(cfg.title.replace(" (มี S/N)", ""))}</div>
+            <div class="dash-cat-count">${summary.stock} ในคลัง</div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
 }
 
 // ============================================================
@@ -1115,6 +1211,7 @@ function renderListView(cfg) {
   const content = document.getElementById("viewContent");
   const rows = state.data[cfg.key] || [];
   const isAdmin = state.user.role === "Admin";
+  const mobile = isMobileViewport();
 
   content.innerHTML = `
     <div class="controls-row">
@@ -1125,14 +1222,16 @@ function renderListView(cfg) {
         <option value="used">เบิกออกไปแล้ว</option>
       </select>
     </div>
-    <div class="table-card">
+    ${mobile
+      ? `<div id="listCards" class="mcard-list"></div>`
+      : `<div class="table-card">
       <div class="table-scroll">
         <table>
           <thead><tr>${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>จัดการ</th>" : ""}</tr></thead>
           <tbody id="listTbody"></tbody>
         </table>
       </div>
-    </div>
+    </div>`}
   `;
 
   document.getElementById("searchBox").addEventListener("input", () => renderRows(cfg, rows, isAdmin));
@@ -1143,9 +1242,6 @@ function renderListView(cfg) {
 function renderRows(cfg, rows, isAdmin) {
   const search = (document.getElementById("searchBox").value || "").toLowerCase();
   const statusFilter = document.getElementById("statusFilter").value;
-  const tbody = document.getElementById("listTbody");
-  const hasExtraCol = isAdmin || cfg.partCategory;
-  const colspan = cfg.columns.length + (hasExtraCol ? 1 : 0);
 
   const filtered = rows.filter((row) => {
     const matchesSearch = !search || cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(search));
@@ -1153,6 +1249,19 @@ function renderRows(cfg, rows, isAdmin) {
     const matchesStatus = statusFilter === "all" || (statusFilter === "stock" ? stock : !stock);
     return matchesSearch && matchesStatus;
   });
+
+  if (isMobileViewport()) {
+    renderRowsAsCards(cfg, filtered, isAdmin);
+  } else {
+    renderRowsAsTable(cfg, filtered, isAdmin);
+  }
+}
+
+function renderRowsAsTable(cfg, filtered, isAdmin) {
+  const tbody = document.getElementById("listTbody");
+  if (!tbody) return;
+  const hasExtraCol = isAdmin || cfg.partCategory;
+  const colspan = cfg.columns.length + (hasExtraCol ? 1 : 0);
 
   if (!filtered.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${colspan}">ไม่พบข้อมูล</td></tr>`;
@@ -1187,6 +1296,56 @@ function renderRows(cfg, rows, isAdmin) {
          </td>`
       : (cfg.partCategory ? `<td class="no-wrap">${historyBtn}</td>` : "");
     return `<tr>${cells}${actionsCell}</tr>`;
+  }).join("");
+}
+
+// Phase: มือถือ — แปลงแถวข้อมูลเป็นการ์ด (แทนตารางที่ต้องเลื่อนซ้าย-ขวา) ใช้ร่วมกันทุกประเภทอุปกรณ์/อะไหล่แบบมี S/N
+function renderRowsAsCards(cfg, filtered, isAdmin) {
+  const wrap = document.getElementById("listCards");
+  if (!wrap) return;
+
+  if (!filtered.length) {
+    wrap.innerHTML = `<div class="mcard-empty">ไม่พบข้อมูล</div>`;
+    return;
+  }
+
+  wrap.innerHTML = filtered.map((row) => {
+    const serial = String(row[cfg.serialField] || "");
+    const stock = isStockRow(row, cfg.stockField, cfg.stockRequiresField);
+
+    const bodyRows = cfg.columns
+      .filter((c) => c.field !== cfg.serialField && c.field !== "No" && c.field !== cfg.stockField)
+      .map((c) => {
+        if (c.computed) {
+          const linked = computeLinkedAccessories(serial);
+          const val = linked.length ? linked.join(", ") : "-";
+          return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${escapeHtml(val)}</div></div>`;
+        }
+        const val = row[c.field];
+        if (val === undefined || val === null || val === "") return "";
+        return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${escapeHtml(String(val))}</div></div>`;
+      }).join("");
+
+    const historyBtn = cfg.partCategory
+      ? `<button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
+      : "";
+    const actionsHtml = isAdmin
+      ? `<div class="mcard-actions">
+           <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
+           <button class="btn-sm btn-remove" onclick="deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
+           ${historyBtn}
+         </div>`
+      : (cfg.partCategory ? `<div class="mcard-actions">${historyBtn}</div>` : "");
+
+    return `
+      <div class="mcard">
+        <div class="mcard-head">
+          <div class="mcard-title">${escapeHtml(serial || "-")}</div>
+          <span class="mcard-pill ${stock ? "stock" : "used"}">${stock ? "อยู่ในคลัง" : "เบิกออกแล้ว"}</span>
+        </div>
+        ${bodyRows}
+        ${actionsHtml}
+      </div>`;
   }).join("");
 }
 
@@ -1232,13 +1391,36 @@ function renderPartsListView(viewKey, cfg) {
   const content = document.getElementById("viewContent");
   const rows = state.data[cfg.key] || [];
   const isAdmin = state.user.role === "Admin";
+  const mobile = isMobileViewport();
   const qtyAssetType = PART_QTY_ASSET_TYPE_BY_VIEW[viewKey];
   const qtyParts = getQtyPartsForCategory(PART_CATEGORY_BY_VIEW[viewKey]);
   const qtyColspan = isAdmin ? 6 : 5;
 
-  content.innerHTML = `
-    <h3 class="section-subtitle">อะไหล่แบบนับจำนวน (ไม่มี S/N)</h3>
-    <div class="table-card">
+  const qtyPartsSectionHtml = mobile
+    ? `<div class="mcard-list">
+        ${qtyParts.length ? qtyParts.map((p) => {
+          const issued = computePartIssuedQty(p.PartID, qtyAssetType);
+          const pending = computePartPendingQty(p.PartID, qtyAssetType);
+          const actionsHtml = isAdmin
+            ? `<div class="mcard-actions">
+                 <button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button>
+                 <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
+                 <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
+               </div>`
+            : `<div class="mcard-actions"><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></div>`;
+          return `
+          <div class="mcard">
+            <div class="mcard-head">
+              <div class="mcard-title">${escapeHtml(p.PartName)}</div>
+              <span class="mcard-pill stock">${escapeHtml(String(p.QuantityInStock))} ในสต็อก</span>
+            </div>
+            <div class="mcard-row"><div class="mcard-label">กำลังเบิกอยู่</div><div class="mcard-val">${issued}</div></div>
+            <div class="mcard-row"><div class="mcard-label">รออนุมัติ</div><div class="mcard-val">${pending}</div></div>
+            ${actionsHtml}
+          </div>`;
+        }).join("") : `<div class="mcard-empty">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</div>`}
+      </div>`
+    : `<div class="table-card">
       <div class="table-scroll">
         <table>
           <thead><tr><th>ชื่ออะไหล่</th><th>คงเหลือในสต็อก</th><th>กำลังเบิกอยู่</th><th>รออนุมัติ</th><th>ประวัติ</th>${isAdmin ? "<th>จัดการ</th>" : ""}</tr></thead>
@@ -1258,7 +1440,11 @@ function renderPartsListView(viewKey, cfg) {
           </tbody>
         </table>
       </div>
-    </div>
+    </div>`;
+
+  content.innerHTML = `
+    <h3 class="section-subtitle">อะไหล่แบบนับจำนวน (ไม่มี S/N)</h3>
+    ${qtyPartsSectionHtml}
 
     <h3 class="section-subtitle" style="margin-top:22px;">อะไหล่แบบมี S/N (รายชิ้น)</h3>
     <div class="controls-row">
@@ -1269,14 +1455,16 @@ function renderPartsListView(viewKey, cfg) {
         <option value="used">เบิกออกไปแล้ว</option>
       </select>
     </div>
-    <div class="table-card">
+    ${mobile
+      ? `<div id="listCards" class="mcard-list"></div>`
+      : `<div class="table-card">
       <div class="table-scroll">
         <table>
           <thead><tr>${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>จัดการ</th>" : "<th>ประวัติ</th>"}</tr></thead>
           <tbody id="listTbody"></tbody>
         </table>
       </div>
-    </div>
+    </div>`}
     ${isAdmin ? `<div class="cache-note" style="margin-top:10px;">ต้องการเพิ่มอะไหล่ใหม่หรือเติมสต็อก? ไปที่เมนู "จัดการอะไหล่"</div>` : ""}
   `;
 
@@ -2709,7 +2897,24 @@ function renderUsersView() {
       <button class="btn-primary" id="createUserBtn" onclick="createUser()">เพิ่มผู้ใช้งาน</button>
     </div>
 
-    <div class="users-table-wrap">
+    ${isMobileViewport()
+      ? `<div class="mcard-list">
+          ${users.map((u) => `
+            <div class="mcard">
+              <div class="mcard-head">
+                <div><div class="mcard-title">${escapeHtml(u.Name)} <span class="role-chip">${escapeHtml(u.Role)}</span></div><div class="mcard-sub">${escapeHtml(u.Username)}</div></div>
+                <span class="mcard-pill ${isActiveUser(u) ? "stock" : "used"}">${isActiveUser(u) ? "ใช้งานอยู่" : "ปิดใช้งาน"}</span>
+              </div>
+              <div class="mcard-row"><div class="mcard-label">เข้าใช้งานล่าสุด</div><div class="mcard-val">${formatDateTh(u.LastLoginAt)}</div></div>
+              <div class="mcard-actions">
+                <button class="btn-sm ${isActiveUser(u) ? "btn-reject" : "btn-approve"}" onclick="toggleUserActive('${escapeAttr(u.UserID)}', ${!isActiveUser(u)}, this)">
+                  ${isActiveUser(u) ? "ปิดใช้งาน" : "เปิดใช้งาน"}
+                </button>
+                <button class="btn-sm btn-secondary" onclick="resetUserPassword('${escapeAttr(u.UserID)}', '${escapeAttr(u.Name)}')">รีเซ็ตรหัสผ่าน</button>
+              </div>
+            </div>`).join("")}
+        </div>`
+      : `<div class="users-table-wrap">
       <table class="users-table">
         <thead><tr><th>ชื่อ</th><th>Username</th><th>สิทธิ์</th><th>สถานะ</th><th>เข้าใช้งานล่าสุด</th><th></th></tr></thead>
         <tbody>
@@ -2729,7 +2934,7 @@ function renderUsersView() {
             </tr>`).join("")}
         </tbody>
       </table>
-    </div>
+    </div>`}
   `;
 }
 
