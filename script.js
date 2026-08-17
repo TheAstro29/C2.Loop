@@ -415,6 +415,8 @@ function updatePendingBadge() {
   }
   // Phase 10: ถ้าหน้าแรกแบบตารางไอคอนกำลังแสดงอยู่ ให้อัปเดตตัวเลข/badge ให้ตรงกับข้อมูลล่าสุดด้วย
   if (state.mobileHomeVisible) renderMobileHome();
+  // อัปเดต badge รออนุมัติที่แถบเมนูด้านล่าง (แสดงอยู่ทุกหน้าจอมือถือ ไม่ใช่แค่หน้าแรก)
+  syncMobileTabbar();
 }
 
 // ============================================================
@@ -424,16 +426,18 @@ function isMobileViewport() {
   return window.innerWidth <= 760;
 }
 
-/** แสดง/ซ่อนหน้าแรกให้ตรงกับสถานะ mobileHomeVisible เสมอ (เรียกซ้ำได้ปลอดภัย เช่น ตอน resize จอ) */
+/** แสดง/ซ่อนหน้าแรกให้ตรงกับสถานะ mobileHomeVisible เสมอ (เรียกซ้ำได้ปลอดภัย เช่น ตอน resize จอ) — อัปเดตแถบเมนูด้านล่างพร้อมกันเสมอ */
 function syncMobileHomeVisibility() {
   const el = document.getElementById("mobileHomeScreen");
-  if (!el) return;
-  if (state.mobileHomeVisible && isMobileViewport()) {
-    renderMobileHome();
-    el.classList.add("visible");
-  } else {
-    el.classList.remove("visible");
+  if (el) {
+    if (state.mobileHomeVisible && isMobileViewport()) {
+      renderMobileHome();
+      el.classList.add("visible");
+    } else {
+      el.classList.remove("visible");
+    }
   }
+  syncMobileTabbar();
 }
 
 function showMobileHome() {
@@ -559,12 +563,6 @@ function renderMobileHome() {
             </div>`).join("")}
         </div>` : ""}
     </div>
-    <div class="mh-tabbar">
-      <div class="mh-tab-item active"><i class="fas fa-th-large"></i><span>เมนู</span></div>
-      <div class="mh-tab-item" onclick="switchView('issue'); hideMobileHome();"><i class="fas fa-dolly"></i><span>เบิกของ</span></div>
-      ${isAdmin ? `<div class="mh-tab-item" onclick="switchView('approvals'); hideMobileHome();"><i class="fas fa-check-circle"></i><span>อนุมัติ</span>${pending > 0 ? `<span class="mh-tab-badge">${pending}</span>` : ""}</div>` : ""}
-      <div class="mh-tab-item" onclick="switchView('history'); hideMobileHome();"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-    </div>
   `;
 
   const searchInput = document.getElementById("mhSearchInput");
@@ -572,6 +570,38 @@ function renderMobileHome() {
     searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") mobileHomeSearch(searchInput.value.trim());
     });
+  }
+}
+
+// ============================================================
+// แถบเมนูด้านล่างแบบถาวรสำหรับมือถือ — แสดงทุกหน้าจอ (ไม่ใช่แค่หน้าแรกแบบตารางไอคอนอีกต่อไป)
+// แทนที่แถบเมนูไอคอนด้านบนแบบเดิม (ซึ่งต้องเลื่อนซ้าย-ขวาและซ้ำซ้อนกับปุ่มเหล่านี้)
+// ============================================================
+function renderMobileTabbar() {
+  const wrap = document.getElementById("mobileTabbar");
+  if (!wrap || !state.user) return;
+  const isAdmin = state.user.role === "Admin";
+  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
+  const onHome = state.mobileHomeVisible;
+  const active = (key) => (!onHome && state.currentView === key ? "active" : "");
+
+  wrap.innerHTML = `
+    <div class="mh-tab-item ${onHome ? "active" : ""}" onclick="showMobileHome()"><i class="fas fa-th-large"></i><span>เมนูหลัก</span></div>
+    <div class="mh-tab-item ${active("issue")}" onclick="switchView('issue'); hideMobileHome();"><i class="fas fa-dolly"></i><span>เบิกของ</span></div>
+    ${isAdmin ? `<div class="mh-tab-item ${active("approvals")}" onclick="switchView('approvals'); hideMobileHome();"><i class="fas fa-check-circle"></i><span>อนุมัติ</span>${pending > 0 ? `<span class="mh-tab-badge">${pending}</span>` : ""}</div>` : ""}
+    <div class="mh-tab-item ${active("history")}" onclick="switchView('history'); hideMobileHome();"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+  `;
+}
+
+/** แสดง/ซ่อนแถบเมนูด้านล่างให้ตรงกับขนาดจอเสมอ (มือถือเท่านั้น) เรียกคู่กับ syncMobileHomeVisibility เสมอ */
+function syncMobileTabbar() {
+  const wrap = document.getElementById("mobileTabbar");
+  if (!wrap) return;
+  if (isMobileViewport() && state.user) {
+    renderMobileTabbar();
+    wrap.style.display = "flex";
+  } else {
+    wrap.style.display = "none";
   }
 }
 
@@ -744,6 +774,7 @@ function switchView(view) {
     el.classList.toggle("active", el.dataset.view === view);
   });
   renderCurrentView();
+  syncMobileTabbar();
 }
 
 function renderCurrentView() {

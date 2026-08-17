@@ -109,7 +109,6 @@
 
     <div class="main">
       <div class="main-header">
-        <button class="mobile-back-btn no-print" id="mobileBackBtn" onclick="showMobileHome()"><i class="fas fa-chevron-left"></i> เมนู</button>
         <h2 id="viewTitle">Dashboard</h2>
         <div class="cache-note" id="cacheNote"></div>
       </div>
@@ -119,6 +118,9 @@
 
   <!-- Phase 10: หน้าแรกแบบตารางไอคอนสำหรับมือถือ (ทับเนื้อหาปกติ แสดงเฉพาะจอมือถือ) -->
   <div id="mobileHomeScreen" class="no-print"></div>
+
+  <!-- แถบเมนูด้านล่างแบบถาวรสำหรับมือถือ (แสดงทุกหน้า ไม่ใช่แค่หน้าแรก) -->
+  <div id="mobileTabbar" class="mh-tabbar no-print" aria-hidden="true"></div>
 
   <!-- ใบเบิก/รายงานสำหรับสั่งพิมพ์ — ปกติซ่อนอยู่ แสดงเฉพาะตอนสั่งพิมพ์ผ่าน printSlip() -->
   <div id="printSlipRoot"></div>

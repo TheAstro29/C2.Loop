@@ -330,21 +330,6 @@ tbody tr:hover { background: #dbe9e0; }
 /* ---------- Mobile ---------- */
 .mobile-top-bar { display: none; }
 @media (max-width: 900px) {
-  #app-shell.visible { flex-direction: column; }
-  .sidebar {
-    width: 100%; flex-direction: row; align-items: center; padding: 10px 12px; gap: 6px;
-    overflow-x: auto; -webkit-overflow-scrolling: touch;
-    /* ล็อคแถบเมนูด้านบนให้ติดหน้าจอเสมอตอนเลื่อนหน้าจอมือถือ ไม่ต้องเลื่อนกลับขึ้นไปด้านบนเพื่อสลับเมนู */
-    position: sticky; top: 0; z-index: 60; box-shadow: 0 2px 10px rgba(0,0,0,.18);
-  }
-  .sidebar .brand-block { display: none; }
-  .nav-item {
-    flex-shrink: 0; flex-direction: column; gap: 3px; padding: 6px 10px; font-size: 11px; text-align: center;
-  }
-  .nav-item span { display: block; white-space: nowrap; }
-  .sidebar-footer { margin-top: 0; margin-left: auto; flex-shrink: 0; border: none; padding: 0; display: flex; align-items: center; gap: 10px; }
-  .user-chip, .sync-status { display: none; }
-  .btn-logout { width: auto; padding: 8px 12px; flex-shrink: 0; font-size: 12px; white-space: nowrap; }
   .main { padding: 18px 16px; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
@@ -354,6 +339,13 @@ tbody tr:hover { background: #dbe9e0; }
   .report-doc { padding: 18px; }
   .report-header { flex-direction: column; align-items: flex-start; }
   .report-header-date { text-align: left; }
+}
+/* จอมือถือจริง (ตรงกับเกณฑ์ isMobileViewport() ฝั่ง JS) — ซ่อนเมนูด้านข้างทั้งหมด ใช้แถบเมนูด้านล่างแบบถาวรแทน
+   (เดิมแปลงเป็นแถบไอคอนแนวนอนด้านบน แต่ซ้ำซ้อนกับแถบเมนูด้านล่างและต้องเลื่อนซ้าย-ขวา จึงตัดออก) */
+@media (max-width: 760px) {
+  #app-shell.visible { flex-direction: column; }
+  .sidebar { display: none; }
+  .main { padding-bottom: 90px; } /* กันเนื้อหาถูกแถบเมนูด้านล่างบัง */
 }
 
 /* ---------- Phase 3: offline banner ---------- */
@@ -537,12 +529,6 @@ tbody tr:hover { background: #dbe9e0; }
 .signature-box { text-align: center; width: 45%; }
 .signature-line { border-top: 1px solid #333; margin-top: 50px; padding-top: 6px; font-size: 13px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
 
-/* ---------- Phase 10: ปุ่ม "กลับเมนู" บนมือถือ (แสดงเฉพาะจอมือถือผ่าน media query ด้านล่าง) ---------- */
-.mobile-back-btn {
-  display: none; align-items: center; gap: 6px; background: none; border: none; color: var(--green);
-  font-size: 13px; font-weight: 700; cursor: pointer; padding: 6px 0; margin-right: 4px;
-}
-
 /* ---------- Phase 10: ประวัติอะไหล่ (timeline) ---------- */
 .history-timeline { display: flex; flex-direction: column; gap: 4px; }
 .history-entry { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
@@ -657,16 +643,17 @@ tbody tr:hover { background: #dbe9e0; }
 }
 
 @media (max-width: 760px) {
-  .mobile-back-btn { display: flex; }
   /* การ์ดอนุมัติ/ประวัติ (ที่เป็นการ์ดอยู่แล้ว) — ขยายปุ่มให้กดง่ายขึ้นบนจอสัมผัส */
   .txn-actions { flex-wrap: wrap; }
   .txn-actions .btn-sm { flex: 1; min-width: 100px; padding: 10px 8px; font-size: 12.5px; }
   .txn-card-head { align-items: center; }
   .status-badge { font-size: 10.5px; }
 }
-/* กันไว้อีกชั้น — ไม่ให้หน้าแรกแบบตารางไอคอนโผล่บนจอกว้างแม้ JS จะยังไม่ทัน sync ตอน resize */
+/* กันไว้อีกชั้น — ไม่ให้หน้าแรกแบบตารางไอคอน/แถบเมนูด้านล่างโผล่บนจอกว้างแม้ JS จะยังไม่ทัน sync ตอน resize */
+#mobileTabbar { display: none; }
 @media (min-width: 761px) {
   #mobileHomeScreen.visible { display: none !important; }
+  #mobileTabbar { display: none !important; }
 }
 
 @media print {
