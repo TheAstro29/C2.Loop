@@ -848,6 +848,85 @@ const DASHBOARD_CATEGORY_META = {
   panolyzerParts: { icon: "fa-cogs", color: "#EC6BAA" },
 };
 
+// เกณฑ์ "ของใกล้หมด" บน Dashboard มือถือ — ใช้ค่าคงที่เดียวกันทุกหมวด (ปรับตัวเลขนี้ได้ถ้าต้องการ threshold ต่างจากนี้)
+const LOW_STOCK_THRESHOLD = 5;
+
+/** นับจำนวนธุรกรรมที่ "เบิกแล้ว/คืนแล้ว" (นับเป็นการเบิกจริง) ในเดือนปัจจุบันเทียบกับเดือนก่อนหน้า */
+function computeMonthlyIssuedComparison() {
+  const now = new Date();
+  const curKey = `${now.getFullYear()}-${now.getMonth()}`;
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey = `${prevDate.getFullYear()}-${prevDate.getMonth()}`;
+  let current = 0;
+  let previous = 0;
+  (state.data.issuanceLog || []).forEach((txn) => {
+    if (txn.RequestStatus !== "Issued" && txn.RequestStatus !== "Returned") return;
+    const d = new Date(txn.Timestamp);
+    if (isNaN(d.getTime())) return;
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (key === curKey) current++;
+    else if (key === prevKey) previous++;
+  });
+  return { current, previous };
+}
+
+/** รวมเหตุการณ์เบิก/อนุมัติ/ปฏิเสธ/คืนของ ล่าสุด เรียงตามเวลาล่าสุดก่อน ใช้แสดงเป็น "กิจกรรมล่าสุด" บน Dashboard มือถือ */
+function computeRecentActivity(limit) {
+  const events = [];
+  (state.data.issuanceLog || []).forEach((txn) => {
+    const items = getItemsForTransaction(txn.TransactionID);
+    const firstItem = items[0];
+    const itemLabel = firstItem
+      ? `${escapeHtml(firstItem.AssetType)} ${escapeHtml(firstItem.SerialNo)}${items.length > 1 ? ` +${items.length - 1} อื่นๆ` : ""}`
+      : "อุปกรณ์";
+    if (txn.Timestamp) {
+      events.push({
+        type: "issue", time: txn.Timestamp,
+        title: `ขอเบิก ${itemLabel}`, sub: `${escapeHtml(txn.CustomerName || "")} · โดย ${escapeHtml(txn.IssuedBy || "")}`,
+      });
+    }
+    if (txn.ApprovedAt) {
+      const rejected = txn.RequestStatus === "Rejected";
+      events.push({
+        type: rejected ? "reject" : "approve", time: txn.ApprovedAt,
+        title: rejected ? `ปฏิเสธคำขอ ${escapeHtml(txn.TransactionID)}` : `อนุมัติคำขอ ${escapeHtml(txn.TransactionID)}`,
+        sub: `โดย ${escapeHtml(txn.ApprovedBy || "")}`,
+      });
+    }
+    if (txn.ReturnedAt) {
+      events.push({
+        type: "return", time: txn.ReturnedAt,
+        title: `คืนของ ${itemLabel}`, sub: `${escapeHtml(txn.CustomerName || "")}`,
+      });
+    }
+  });
+  events.sort((a, b) => new Date(b.time) - new Date(a.time));
+  return events.slice(0, limit);
+}
+
+const ACTIVITY_TYPE_META = {
+  issue: { icon: "fa-arrow-up-from-bracket", cls: "issue" },
+  approve: { icon: "fa-check", cls: "approve" },
+  reject: { icon: "fa-times", cls: "reject" },
+  return: { icon: "fa-rotate-left", cls: "return" },
+};
+
+/** ข้อความเวลาแบบสั้น ("N นาทีที่แล้ว", "เมื่อวาน" ฯลฯ) สำหรับกิจกรรมล่าสุดบน Dashboard มือถือ */
+function formatRelativeTimeTh(isoStr) {
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return "-";
+  const now = new Date();
+  const diffMin = Math.round((now - d) / 60000);
+  if (diffMin < 1) return "เมื่อสักครู่";
+  if (diffMin < 60) return `${diffMin} นาทีที่แล้ว`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} ชม.ที่แล้ว`;
+  const diffDay = Math.round(diffHr / 24);
+  if (diffDay === 1) return "เมื่อวาน";
+  if (diffDay < 7) return `${diffDay} วันที่แล้ว`;
+  return formatDateTh(isoStr);
+}
+
 function renderDashboard() {
   const content = document.getElementById("viewContent");
   const summaries = Object.values(VIEW_CONFIG).map((cfg) => ({
@@ -979,6 +1058,22 @@ function renderDashboardMobile(content, summaries) {
     return `<div class="dash-legend-item"><span class="dash-legend-dot" style="background:${seg.color}"></span>${escapeHtml(s.cfg.title.replace(" (มี S/N)", ""))} ${seg.pct}%</div>`;
   }).join("");
 
+  // ของใกล้หมด — เฉพาะหมวดที่เคยมีของจริง (total > 0) แต่ตอนนี้เหลือน้อยกว่าหรือเท่ากับเกณฑ์ที่ตั้งไว้
+  const lowStockCats = summaries.filter(({ summary }) => summary.total > 0 && summary.stock <= LOW_STOCK_THRESHOLD);
+  const lowStockNames = lowStockCats.map((s) => s.cfg.title.replace(" (มี S/N)", ""));
+  const lowStockText = lowStockCats.length === 1
+    ? `${escapeHtml(lowStockNames[0])} เหลือในคลังแค่ ${lowStockCats[0].summary.stock} ชิ้น`
+    : `${escapeHtml(lowStockNames.join(", "))} ใกล้หมด`;
+
+  const monthly = computeMonthlyIssuedComparison();
+  const monthlyDiff = monthly.current - monthly.previous;
+  const monthlyPct = monthly.previous > 0 ? Math.round((monthlyDiff / monthly.previous) * 100) : (monthly.current > 0 ? 100 : 0);
+  const monthlyCompareHtml = monthly.previous === 0 && monthly.current === 0
+    ? `<span class="dash-m-compare">เดือนก่อนไม่มีข้อมูล</span>`
+    : `<span class="dash-m-compare ${monthlyDiff >= 0 ? "up" : "down"}">${monthlyDiff >= 0 ? "▲" : "▼"} ${Math.abs(monthlyPct)}% จากเดือนก่อน (${monthly.previous})</span>`;
+
+  const recentActivity = computeRecentActivity(5);
+
   content.innerHTML = `
     <div class="dash-mobile-header">
       <div class="dash-mobile-title">ภาพรวมคลังอุปกรณ์</div>
@@ -990,24 +1085,54 @@ function renderDashboardMobile(content, summaries) {
     <div id="dashboardReportArea">
       <div class="dash-donut-wrap">${donutSvg}</div>
       ${segments.length ? `<div class="dash-legend-row">${legendHtml}</div>` : ""}
+
+      <button class="dash-cta-btn no-print" onclick="switchView('issue')"><i class="fas fa-dolly"></i> เบิกอุปกรณ์</button>
+
       ${isAdmin && pending > 0 ? `
         <div class="dash-pending-alert" onclick="switchView('approvals')">
           <div class="dash-pending-icon"><i class="fas fa-clock"></i></div>
           <div class="dash-pending-text"><b>มีคำขอรออนุมัติ ${pending} รายการ</b><span>แตะเพื่อตรวจสอบและอนุมัติทันที</span></div>
           <i class="fas fa-chevron-right"></i>
         </div>` : ""}
+
+      ${lowStockCats.length ? `
+        <div class="dash-lowstock-alert">
+          <div class="dash-lowstock-icon"><i class="fas fa-triangle-exclamation"></i></div>
+          <div class="dash-pending-text"><b>${lowStockText}</b><span>ใกล้หมด — ควรเตรียมสั่งเพิ่ม</span></div>
+        </div>` : ""}
+
+      <div class="dash-monthly-stat">
+        <div><div class="dash-m-label">เดือนนี้เบิกไปแล้ว</div><div class="dash-m-value">${monthly.current} รายการ</div></div>
+        ${monthlyCompareHtml}
+      </div>
+
       <div class="section-subtitle" style="margin-top:18px;">แยกตามประเภทอุปกรณ์</div>
       <div class="dash-cat-grid">
         ${summaries.map(({ cfg, summary }) => {
           const meta = DASHBOARD_CATEGORY_META[cfg.key] || { icon: "fa-box", color: "#3F654D" };
+          const isLow = summary.total > 0 && summary.stock <= LOW_STOCK_THRESHOLD;
           return `
           <div class="dash-cat-tile" onclick="switchView('${escapeAttr(cfg.key)}')">
             <div class="dash-cat-icon" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div>
             <div class="dash-cat-name">${escapeHtml(cfg.title.replace(" (มี S/N)", ""))}</div>
-            <div class="dash-cat-count">${summary.stock} ในคลัง</div>
+            <div class="dash-cat-count${isLow ? " low" : ""}">${summary.stock} ในคลัง</div>
           </div>`;
         }).join("")}
       </div>
+
+      ${recentActivity.length ? `
+        <div class="section-subtitle" style="margin-top:18px;">กิจกรรมล่าสุด</div>
+        <div class="dash-activity-list">
+          ${recentActivity.map((ev) => {
+            const meta = ACTIVITY_TYPE_META[ev.type] || { icon: "fa-circle", cls: "issue" };
+            return `
+            <div class="dash-activity-item">
+              <div class="dash-activity-icon ${meta.cls}"><i class="fas ${meta.icon}"></i></div>
+              <div class="dash-activity-text"><b>${ev.title}</b><span>${ev.sub}</span></div>
+              <div class="dash-activity-time">${formatRelativeTimeTh(ev.time)}</div>
+            </div>`;
+          }).join("")}
+        </div>` : ""}
     </div>
   `;
 }
@@ -2362,6 +2487,11 @@ function renderBasket() {
     return;
   }
 
+  if (isMobileViewport()) {
+    renderBasketMobile(area);
+    return;
+  }
+
   const linkableTargets = getLinkableTargets();
 
   area.innerHTML = `
@@ -2458,6 +2588,133 @@ function renderBasket() {
       </tbody>
     </table>
     <div class="cache-note" style="margin-top:8px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
+    <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
+  `;
+}
+
+/** เวอร์ชันมือถือของตะกร้าเบิก — แต่ละชิ้นเป็นการ์ดแยก วางฟิลด์ซ้อนแนวตั้งเต็มความกว้างจอ แทนตารางแนวนอนที่ต้องเลื่อนซ้าย-ขวา (ลอจิกการเลือก Gateway/SimCard/เชื่อมต่อเหมือนกับเวอร์ชันคอมพิวเตอร์ทุกประการ ต่างแค่การจัดวาง) */
+function renderBasketMobile(area) {
+  const linkableTargets = getLinkableTargets();
+
+  const cardsHtml = issuanceForm.basket.map((item, idx) => {
+    // Phase 8: อะไหล่แบบนับจำนวน (ไม่มี S/N)
+    if (item.quantity !== undefined) {
+      return `
+        <div class="basket-card">
+          <div class="basket-card-head">
+            <div>
+              <div class="basket-card-title">${escapeHtml(item.partName)}</div>
+              <div class="basket-card-serial">แบบนับจำนวน (ไม่มี S/N)</div>
+            </div>
+            <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
+          </div>
+          <div class="basket-field">
+            <label>จำนวนที่จะเบิก</label>
+            <input type="number" min="1" value="${escapeAttr(String(item.quantity))}" onchange="updateBasketQuantity(${idx}, this.value)">
+          </div>
+        </div>`;
+    }
+
+    const cfg = VIEW_CONFIG[item.assetKey];
+    const fields = []; // { label, html, req }
+
+    // Phase 6: MoisturLyzer และ Gateway ทุกรุ่นต้องมี SimCard คู่กันเสมอ — เลือกจาก dropdown ของ SimCard ว่างในสต๊อก
+    let simFieldHtml = null;
+    if (item.assetType === "MoisturLyzer" || item.assetType === "Gateway") {
+      const availableSim = getAvailableSimCards(idx);
+      const simCfg = VIEW_CONFIG.simcard;
+      if (!availableSim.length && !item.linkedSimSerial) {
+        simFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก</span>`;
+      } else {
+        simFieldHtml = `<select class="${item.linkedSimSerial ? "" : "req-empty"}" onchange="updateLinkedSim(${idx}, this.value)">
+          <option value="">-- เลือก SimCard --</option>
+          ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+        </select>`;
+      }
+    }
+
+    if (item.assetType === "MoisturLyzer") {
+      // เลือก Gateway EPG-001B ว่างในสต๊อกคู่กัน (บังคับ)
+      const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_MOISTURLYZER, idx);
+      const gwCfg = VIEW_CONFIG.gateway;
+      let gwFieldHtml;
+      if (!availableGw.length && !item.linkedGatewaySerial) {
+        gwFieldHtml = `<span class="warn-text">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
+      } else {
+        gwFieldHtml = `<select class="${item.linkedGatewaySerial ? "" : "req-empty"}" onchange="updateLinkedGateway(${idx}, this.value)">
+          <option value="">-- เลือก Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} --</option>
+          ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
+        </select>`;
+      }
+      fields.push({ label: `Gateway (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) คู่กัน`, html: gwFieldHtml, req: true });
+      fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
+    } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER) {
+      // Panolyzer ไม่ได้ถูกเก็บเป็นอุปกรณ์ในระบบ จึงไม่มีสต๊อกให้เลือก — ต้องกรอก S/N เอง (เหมือนเดิมทั้งบนคอมพิวเตอร์และมือถือ)
+      fields.push({
+        label: "S/N เครื่อง Panolyzer",
+        html: `<input type="text" class="${item.connectSerial ? "" : "req-empty"}" placeholder="กรอก S/N เครื่อง Panolyzer"
+          value="${escapeAttr(item.connectSerial)}" oninput="updateBasketConnectSerial(${idx}, this.value)">`,
+        req: true,
+      });
+      fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
+    } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER) {
+      // Gateway EPG-001B ที่เพิ่มโดยตรง — เลือกเครื่อง MoisturLyzer จาก dropdown (บังคับ)
+      let targetFieldHtml;
+      if (!linkableTargets.length) {
+        targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
+      } else {
+        targetFieldHtml = `<select class="${item.connectSerial ? "" : "req-empty"}" onchange="updateBasketConnectSerial(${idx}, this.value)">
+          <option value="">-- เลือกเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} --</option>
+          ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+        </select>`;
+      }
+      fields.push({ label: `เชื่อมต่อกับเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)}`, html: targetFieldHtml, req: true });
+      fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
+    } else if (cfg.connectOptions) {
+      // SimCard หรือ Gateway ที่ยังไม่ระบุรุ่น — dropdown ตัวเลือกเดิม
+      fields.push({
+        label: "เชื่อมต่อกับ / ใส่ใน",
+        html: `<select onchange="updateBasketConnectTo(${idx}, this.value)">
+          ${cfg.connectOptions.map((o) => `<option value="${escapeAttr(o)}" ${o === item.connectTo ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+        </select>`,
+        req: false,
+      });
+      if (item.connectTo === LINKABLE_TARGET_ASSET_TYPE) {
+        let targetFieldHtml;
+        if (!linkableTargets.length) {
+          targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
+        } else {
+          targetFieldHtml = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+            <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
+            ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+          </select>`;
+        }
+        fields.push({ label: "เครื่องที่เชื่อมต่อ (เจาะจง)", html: targetFieldHtml, req: false });
+      }
+    }
+
+    const fieldsHtml = fields.map((f) => `
+      <div class="basket-field">
+        <label class="${f.req ? "req" : ""}">${f.label}</label>
+        ${f.html}
+      </div>`).join("");
+
+    return `
+      <div class="basket-card">
+        <div class="basket-card-head">
+          <div>
+            <div class="basket-card-title">${escapeHtml(cfg.title)}</div>
+            <div class="basket-card-serial">S/N ${escapeHtml(item.serialNo)}</div>
+          </div>
+          <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
+        </div>
+        ${fieldsHtml}
+      </div>`;
+  }).join("");
+
+  area.innerHTML = `
+    <div class="basket-cards">${cardsHtml}</div>
+    <div class="cache-note" style="margin-top:10px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
     <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
   `;
 }
