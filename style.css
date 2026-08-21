@@ -345,7 +345,7 @@ tbody tr:hover { background: #dbe9e0; }
 
 /* ---------- Mobile ---------- */
 .mobile-top-bar { display: none; }
-@media (max-width: 900px) {
+@media screen and (max-width: 900px) {
   .main { padding: 18px 16px; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
@@ -355,6 +355,12 @@ tbody tr:hover { background: #dbe9e0; }
   .report-doc { padding: 18px; }
   .report-header { flex-direction: column; align-items: flex-start; }
   .report-header-date { text-align: left; }
+  .formal-header { flex-direction: column; }
+  .formal-company-name { font-size: 17px; }
+  .formal-toprow { flex-direction: column; }
+  .formal-docinfo { width: 100%; }
+  .signature-row-3 { flex-direction: column; gap: 30px; }
+  .signature-row-3 .signature-box { width: 100%; }
 }
 /* จอมือถือจริง (ตรงกับเกณฑ์ isMobileViewport() ฝั่ง JS) — ซ่อนเมนูด้านข้างทั้งหมด ใช้แถบเมนูด้านล่างแบบถาวรแทน
    (เดิมแปลงเป็นแถบไอคอนแนวนอนด้านบน แต่ซ้ำซ้อนกับแถบเมนูด้านล่างและต้องเลื่อนซ้าย-ขวา จึงตัดออก) */
@@ -538,7 +544,13 @@ tbody tr:hover { background: #dbe9e0; }
   padding: 28px 32px; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif;
 }
 .report-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.report-logo-col { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .report-logo { height: 44px; width: auto; object-fit: contain; }
+.report-app-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  background: var(--green); color: #fff; font-size: 10px; font-weight: 700;
+  letter-spacing: .6px; line-height: 1.4;
+}
 .report-header-text { flex: 1; min-width: 180px; }
 .report-doc-title { font-size: 21px; font-weight: 700; color: var(--green); line-height: 1.25; }
 .report-doc-sub { font-size: 12px; color: var(--gray); letter-spacing: .3px; margin-top: 2px; }
@@ -582,13 +594,60 @@ tbody tr:hover { background: #dbe9e0; }
   font-size: 13px; background: var(--green-light); color: var(--text); padding: 10px 14px;
   border-radius: 8px; margin-bottom: 18px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
 }
-.slip-table { width: 100%; border-collapse: collapse; margin-bottom: 40px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
-.slip-table th, .slip-table td { border: 1px solid var(--border); padding: 9px 12px; font-size: 13px; text-align: left; }
+.slip-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.slip-table th, .slip-table td { border: 1px solid var(--border); padding: 11px 14px; font-size: 14px; text-align: left; }
 .slip-table th { background: var(--green); color: #fff; font-weight: 600; }
 .slip-table tr:nth-child(even) { background: var(--green-light); }
+.slip-col-no { width: 10%; }
+.slip-col-type { width: 40%; }
+.slip-col-serial { width: 50%; }
+.slip-table td:first-child, .slip-table th:first-child { text-align: center; }
+.slip-table td:last-child { font-weight: 600; letter-spacing: .3px; }
+.slip-table-summary {
+  text-align: right; font-size: 12px; color: var(--gray); margin-bottom: 34px;
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
 .signature-row { display: flex; justify-content: space-between; margin-top: 50px; gap: 20px; }
-.signature-box { text-align: center; width: 45%; }
+.signature-row-3 { display: flex; justify-content: space-between; margin-top: 46px; gap: 18px; }
+.signature-box { text-align: center; width: 45%; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.signature-row-3 .signature-box { width: 32%; }
 .signature-line { border-top: 1px solid #333; margin-top: 50px; padding-top: 6px; font-size: 13px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.signature-row-3 .signature-line { height: 42px; margin-top: 0; border-top: none; }
+.signature-role { border-top: 1px solid #333; padding-top: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
+.signature-name { font-size: 12px; color: var(--gray); min-height: 15px; margin-top: 2px; }
+.signature-date { font-size: 11px; color: var(--gray); margin-top: 10px; }
+
+/* ---------- ใบเบิกอุปกรณ์ — เอกสารทางการ (ปรับตามรูปแบบเอกสารบัญชีมาตรฐาน) ---------- */
+.formal-doc { position: relative; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.formal-page-tag {
+  position: absolute; top: 0; right: 0; background: var(--green); color: #fff;
+  font-size: 10px; font-weight: 700; letter-spacing: .6px; padding: 3px 9px; border-radius: 4px;
+}
+.formal-header { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 6px; }
+.formal-logo { height: 48px; width: auto; object-fit: contain; }
+.formal-company { text-align: center; }
+.formal-company-name { font-size: 20px; font-weight: 700; color: var(--green); line-height: 1.3; }
+.formal-company-sub { font-size: 11px; color: var(--gray); letter-spacing: .3px; }
+.formal-company-addr { font-size: 11px; color: var(--gray); margin-top: 2px; }
+.formal-doctitle {
+  text-align: center; font-size: 18px; font-weight: 700; color: var(--text);
+  margin: 10px 0 18px; padding-bottom: 10px; border-bottom: 2px solid var(--green);
+}
+.formal-doctitle-en { display: block; font-size: 11px; font-weight: 400; color: var(--gray); margin-top: 2px; }
+.formal-toprow { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; }
+.formal-toprow-left { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
+.formal-field { display: flex; gap: 8px; font-size: 13px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.formal-field-label { color: var(--gray); min-width: 90px; }
+.formal-field-value { color: var(--text); font-weight: 600; }
+.formal-docinfo { border-collapse: collapse; font-size: 12px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.formal-docinfo th, .formal-docinfo td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; }
+.formal-docinfo th { background: var(--green-light); color: var(--text); font-weight: 600; white-space: nowrap; }
+.formal-docinfo td { color: var(--text); font-weight: 600; }
+.formal-remark-box {
+  font-size: 13px; color: var(--text); padding: 10px 14px; min-height: 20px;
+  border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
 
 /* ---------- Phase 10: ประวัติอะไหล่ (timeline) ---------- */
 .history-timeline { display: flex; flex-direction: column; gap: 4px; }
@@ -718,6 +777,11 @@ tbody tr:hover { background: #dbe9e0; }
 }
 
 @media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
   body.print-slip-active > *:not(#printSlipRoot) { display: none !important; }
   body.print-slip-active #printSlipRoot { display: block !important; }
   body.print-slip-active .report-doc { box-shadow: none; }
@@ -727,4 +791,7 @@ tbody tr:hover { background: #dbe9e0; }
   body.print-dashboard-active #offlineBanner { display: none !important; }
   body.print-dashboard-active .main { padding: 0; }
   body.print-dashboard-active .report-doc { box-shadow: none; }
+
+  .signature-row-3 { flex-direction: row !important; }
+  .signature-row-3 .signature-box { width: 32% !important; }
 }

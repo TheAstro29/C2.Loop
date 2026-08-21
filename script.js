@@ -1227,7 +1227,10 @@ function renderDashboardMobile(content, summaries) {
 function reportHeaderHtml(titleTh, titleEn, dateLabel, dateValue) {
   return `
     <div class="report-header">
-      <img src="assets/c2tech-logo.png" class="report-logo" alt="C2TECH">
+      <div class="report-logo-col">
+        <img src="assets/c2tech-logo.png" class="report-logo" alt="C2TECH">
+        <div class="report-app-tag">C2-LOOP</div>
+      </div>
       <div class="report-header-text">
         <div class="report-doc-title">${escapeHtml(titleTh)}</div>
         <div class="report-doc-sub">${escapeHtml(titleEn)}</div>
@@ -1410,33 +1413,61 @@ function printSlip(transactionId) {
   const items = getItemsForTransaction(transactionId);
   const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว" };
 
-  const infoRows = [
-    ["วันที่เบิก", formatDateTh(txn.Timestamp)],
-    ["สถานะ", statusLabel[txn.RequestStatus] || txn.RequestStatus],
-    ["ลูกค้า", txn.CustomerName],
-    ["สถานที่ติดตั้ง", txn.SiteLocation || "-"],
-    ["ผู้เบิก", txn.IssuedBy],
-  ];
-  if (txn.ApprovedBy) infoRows.push(["ผู้อนุมัติ", txn.ApprovedBy]);
-
   const html = `
-    <div class="print-slip report-doc">
-      ${reportHeaderHtml("ใบเบิกอุปกรณ์", "Equipment Issuance Form", "เลขที่เอกสาร", txn.TransactionID)}
-      <div class="slip-info-grid">
-        ${infoRows.map(([label, value]) => `<div class="slip-info-item"><span class="slip-info-label">${escapeHtml(label)}</span><span class="slip-info-value">${escapeHtml(value)}</span></div>`).join("")}
+    <div class="print-slip report-doc formal-doc">
+      <div class="formal-page-tag">C2-LOOP</div>
+      <div class="formal-header">
+        <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
+        <div class="formal-company">
+          <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
+          <div class="formal-company-sub">C2 Tech Company Limited</div>
+          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999, 064-654-5636</div>
+        </div>
       </div>
-      ${txn.Details ? `<div class="slip-note"><strong>หมายเหตุ:</strong> ${escapeHtml(txn.Details)}</div>` : ""}
+      <div class="formal-doctitle">ใบเบิกอุปกรณ์ <span class="formal-doctitle-en">Equipment Issuance Form</span></div>
+
+      <div class="formal-toprow">
+        <div class="formal-toprow-left">
+          <div class="formal-field"><span class="formal-field-label">ลูกค้า</span><span class="formal-field-value">${escapeHtml(txn.CustomerName)}</span></div>
+          <div class="formal-field"><span class="formal-field-label">สถานที่ติดตั้ง</span><span class="formal-field-value">${escapeHtml(txn.SiteLocation || "-")}</span></div>
+        </div>
+        <table class="formal-docinfo">
+          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
+          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
+          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</td></tr>
+        </table>
+      </div>
+
       <table class="slip-table">
-        <thead><tr><th>#</th><th>ประเภทอุปกรณ์</th><th>Serial</th><th>เชื่อมต่อกับ / ใส่ใน</th></tr></thead>
+        <colgroup><col class="slip-col-no"><col class="slip-col-type"><col class="slip-col-serial"></colgroup>
+        <thead><tr><th>#</th><th>ประเภทอุปกรณ์</th><th>Serial</th></tr></thead>
         <tbody>
-          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(i.AssetType)}</td><td>${escapeHtml(i.SerialNo)}</td><td>${escapeHtml(i.ConnectTo || "-")}${i.ConnectSerial ? " (เครื่อง " + escapeHtml(i.ConnectSerial) + ")" : ""}</td></tr>`).join("")}
+          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(i.AssetType)}</td><td>${escapeHtml(i.SerialNo)}</td></tr>`).join("")}
         </tbody>
       </table>
-      <div class="signature-row">
-        <div class="signature-box"><div class="signature-line">ผู้เบิก / ผู้ส่งมอบ</div></div>
-        <div class="signature-box"><div class="signature-line">ผู้รับของ (ลูกค้า)</div></div>
+      <div class="slip-table-summary">รวมทั้งหมด ${items.length} รายการ</div>
+
+      <div class="formal-remark-box"><strong>หมายเหตุ:</strong> ${txn.Details ? escapeHtml(txn.Details) : ""}</div>
+
+      <div class="signature-row-3">
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ผู้เบิก / ผู้ส่งมอบ</div>
+          <div class="signature-name">${escapeHtml(txn.IssuedBy || "")}</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ผู้อนุมัติ (Approved by)</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ผู้รับของ (ลูกค้า)</div>
+          <div class="signature-name">&nbsp;</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
       </div>
-      ${reportFooterHtml()}
     </div>
   `;
 
@@ -2681,19 +2712,19 @@ function renderBasket() {
           let serialCell = `<span class="cache-note">-</span>`;
           let simCell = `<span class="cache-note">-</span>`;
 
-          // Phase 6 (ปรับ): SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer โดยตรง (ตัวเครื่อง MoisturLyzer
-          // เองใส่ซิมไม่ได้) — จึงแสดง/บังคับ SimCard เฉพาะแถว Gateway จริง หรือแถว MoisturLyzer ที่เลือก
-          // Gateway คู่กันไว้เท่านั้น (เพราะ Gateway ตัวนั้นต้องมีซิม) ถ้า MoisturLyzer ไม่ได้เบิก Gateway คู่ไปด้วย
-          // ก็ไม่ต้องมี SimCard เลย
-          const needsSimCard = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
-          if (needsSimCard) {
+          // Phase 7 (ปรับ): SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer โดยตรง (ตัวเครื่อง MoisturLyzer
+          // เองใส่ซิมไม่ได้) — จึงแสดงตัวเลือก SimCard เฉพาะแถว Gateway จริง หรือแถว MoisturLyzer ที่เลือก
+          // Gateway คู่กันไว้เท่านั้น แต่ "ไม่บังคับ" อีกต่อไป (เผื่อกรณีลูกค้ายืม Gateway ไปทดลองเฉยๆ โดยยังไม่ต้อง
+          // เปิดใช้งานซิม) ถ้า MoisturLyzer ไม่ได้เบิก Gateway คู่ไปด้วยก็ไม่ต้องมี SimCard เลย
+          const canPickSimCard = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
+          if (canPickSimCard) {
             const availableSim = getAvailableSimCards(idx);
             const simCfg = VIEW_CONFIG.simcard;
             if (!availableSim.length && !item.linkedSimSerial) {
-              simCell = `<span class="cache-note req-warn">ไม่มี SimCard ว่างในสต๊อก</span>`;
+              simCell = `<span class="cache-note">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
             } else {
-              simCell = `<select class="${item.linkedSimSerial ? "" : "req-empty"}" onchange="updateLinkedSim(${idx}, this.value)">
-                <option value="">-- เลือก SimCard *--</option>
+              simCell = `<select onchange="updateLinkedSim(${idx}, this.value)">
+                <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
                 ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
               </select>`;
             }
@@ -2792,18 +2823,19 @@ function renderBasketMobile(area) {
     const cfg = VIEW_CONFIG[item.assetKey];
     const fields = []; // { label, html, req }
 
-    // Phase 6 (ปรับ): SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer โดยตรง (ตัวเครื่อง MoisturLyzer เอง
-    // ใส่ซิมไม่ได้) — แสดง/บังคับ SimCard เฉพาะแถว Gateway จริง หรือแถว MoisturLyzer ที่เลือก Gateway คู่กันไว้
+    // Phase 7 (ปรับ): SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer โดยตรง (ตัวเครื่อง MoisturLyzer เอง
+    // ใส่ซิมไม่ได้) — แสดงตัวเลือก SimCard เฉพาะแถว Gateway จริง หรือแถว MoisturLyzer ที่เลือก Gateway คู่กันไว้
+    // แต่ไม่บังคับอีกต่อไป (เผื่อกรณีลูกค้ายืม Gateway ไปทดลองเฉยๆ โดยยังไม่ต้องเปิดใช้งานซิม)
     let simFieldHtml = null;
-    const needsSimCardMobile = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
-    if (needsSimCardMobile) {
+    const canPickSimCardMobile = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
+    if (canPickSimCardMobile) {
       const availableSim = getAvailableSimCards(idx);
       const simCfg = VIEW_CONFIG.simcard;
       if (!availableSim.length && !item.linkedSimSerial) {
-        simFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก</span>`;
+        simFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
       } else {
-        simFieldHtml = `<select class="${item.linkedSimSerial ? "" : "req-empty"}" onchange="updateLinkedSim(${idx}, this.value)">
-          <option value="">-- เลือก SimCard --</option>
+        simFieldHtml = `<select onchange="updateLinkedSim(${idx}, this.value)">
+          <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
           ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
         </select>`;
       }
@@ -2824,7 +2856,7 @@ function renderBasketMobile(area) {
       }
       fields.push({ label: `Gateway (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) คู่กัน (ไม่บังคับ)`, html: gwFieldHtml, req: false });
       if (item.linkedGatewaySerial) {
-        fields.push({ label: "SimCard คู่กัน (Gateway ต้องมีซิม)", html: simFieldHtml, req: true });
+        fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
       }
     } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER) {
       // Panolyzer ไม่ได้ถูกเก็บเป็นอุปกรณ์ในระบบ จึงไม่มีสต๊อกให้เลือก — กรอก S/N เองได้ถ้าทราบ แต่ไม่บังคับ
@@ -2835,7 +2867,7 @@ function renderBasketMobile(area) {
           value="${escapeAttr(item.connectSerial)}" oninput="updateBasketConnectSerial(${idx}, this.value)">`,
         req: false,
       });
-      fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
+      fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
     } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER) {
       // Gateway EPG-001B ที่เพิ่มโดยตรง — ล็อคไว้แค่ว่ารุ่นนี้ใช้กับ MoisturLyzer เท่านั้น (กันเบิกผิดรุ่น)
       // แต่ไม่บังคับให้เลือกเครื่องเจาะจง เผื่อนำ Gateway+SimCard ไปทดลองกับเครื่องอื่นนอกระบบ
@@ -2849,7 +2881,7 @@ function renderBasketMobile(area) {
         </select>`;
       }
       fields.push({ label: `เชื่อมต่อกับเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} (ไม่บังคับ)`, html: targetFieldHtml, req: false });
-      fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
+      fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
     } else if (cfg.connectOptions) {
       // SimCard หรือ Gateway ที่ยังไม่ระบุรุ่น — dropdown ตัวเลือกเดิม
       fields.push({
@@ -2901,21 +2933,11 @@ function renderBasketMobile(area) {
 
 /** Phase 6: สรุปสิ่งที่ยังขาดในตะกร้า (ถ้ามี) ให้เห็นชัดก่อนกดส่งคำขอ */
 function renderBasketRequirementNotice() {
-  const missing = [];
-  issuanceForm.basket.forEach((item) => {
-    // หมายเหตุ: การเลือก Gateway คู่กันตอนเบิก MoisturLyzer ไม่บังคับอีกต่อไป (เผื่อลูกค้ายืม MoisturLyzer
-    // ไปทดลองใช้เอง โดยไม่ต้องเบิก Gateway คู่ไปด้วย) — และ SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer
-    // โดยตรง (ตัวเครื่อง MoisturLyzer เองใส่ซิมไม่ได้) จึงบังคับ SimCard เฉพาะตอนที่มี Gateway จริงๆ เท่านั้น
-    // การกรอก S/N เครื่อง Panolyzer หรือเลือกเครื่อง MoisturLyzer ที่จะติดตั้งด้วย ไม่บังคับอีกต่อไป
-    // (เผื่อกรณีนำ Gateway+SimCard ไปทดลอง/ติดตั้งกับเครื่องที่ยังไม่ได้ขึ้นทะเบียนในระบบ) — ยังคงล็อครุ่น
-    // Gateway ที่ใช้ได้กับอุปกรณ์แต่ละประเภทไว้เหมือนเดิมผ่าน GATEWAY_MODEL_PANOLYZER / GATEWAY_MODEL_MOISTURLYZER
-    const needsSimCardCheck = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
-    if (needsSimCardCheck && !item.linkedSimSerial) {
-      missing.push(`${item.assetType} ${item.serialNo}: ยังไม่ได้เลือก SimCard คู่กัน`);
-    }
-  });
-  if (!missing.length) return "";
-  return `<div class="form-msg error" style="margin-top:10px;">ยังกรอกข้อมูลไม่ครบ:<br>${missing.map((m) => escapeHtml(m)).join("<br>")}</div>`;
+  // หมายเหตุ (Phase 7): ตอนนี้ไม่มีเงื่อนไข "ต้องกรอกให้ครบ" เหลืออยู่แล้วในตะกร้า — MoisturLyzer/Gateway/
+  // SimCard ทั้งสามอย่างเลือกได้อิสระจากกันทั้งหมด (ไม่บังคับคู่กันไม่ว่ากรณีใด) เพราะลูกค้าอาจยืมไปทดลองใช้
+  // โดยใส่หรือไม่ใส่ Gateway/SimCard ก็ได้ ยังคงล็อคไว้แค่รุ่น Gateway ที่ใช้ได้กับอุปกรณ์แต่ละประเภทเท่านั้น
+  // (ผ่าน GATEWAY_MODEL_PANOLYZER / GATEWAY_MODEL_MOISTURLYZER) ฟังก์ชันนี้คงไว้เผื่ออนาคตมีเงื่อนไขบังคับเพิ่ม
+  return "";
 }
 
 async function submitIssuanceRequest() {
@@ -2933,23 +2955,8 @@ async function submitIssuanceRequest() {
     return;
   }
 
-  // ---- Phase 6: ตรวจสอบเงื่อนไขบังคับ Gateway/SimCard ก่อนส่ง (ฝั่งเซิร์ฟเวอร์จะตรวจซ้ำอีกครั้งเสมอ) ----
-  const validationErrors = [];
-  issuanceForm.basket.forEach((item) => {
-    // หมายเหตุ: ไม่บังคับเลือก Gateway คู่กันตอนเบิก MoisturLyzer อีกต่อไป (เผื่อลูกค้ายืมไปทดลองใช้เอง) และ
-    // SimCard ผูกกับ Gateway เท่านั้น (ตัวเครื่อง MoisturLyzer ใส่ซิมไม่ได้) จึงบังคับเฉพาะตอนมี Gateway จริง —
-    // ไม่บังคับกรอก S/N Panolyzer หรือเลือกเครื่อง MoisturLyzer ที่จะติดตั้งด้วยอีกต่อไป (ดูคำอธิบายใน
-    // renderBasketRequirementNotice ด้านบน) — รุ่น Gateway ที่ใช้ได้กับอุปกรณ์แต่ละประเภทยังคงถูกล็อคไว้เหมือนเดิม
-    const needsSimCardValidation = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
-    if (needsSimCardValidation && !item.linkedSimSerial) {
-      validationErrors.push(`${item.assetType} ${item.serialNo}: กรุณาเลือก SimCard ที่จะเบิกคู่กัน`);
-    }
-  });
-  if (validationErrors.length) {
-    msg.className = "form-msg error";
-    msg.textContent = validationErrors.join(" / ");
-    return;
-  }
+  // ---- Phase 7: ไม่มีเงื่อนไขบังคับ Gateway/SimCard เหลืออยู่แล้ว (เลือกได้อิสระจากกันทั้งหมด) ----
+  // ยังคงล็อคไว้แค่รุ่น Gateway ที่ใช้ได้กับอุปกรณ์แต่ละประเภท (ตรวจตอน addToBasket และฝั่งเซิร์ฟเวอร์เสมอ)
 
   // ---- Phase 6: MoisturLyzer/Gateway แต่ละชิ้นที่เลือก Gateway/SimCard คู่กันไว้ ให้เพิ่มเป็นรายการจริงในคำขอด้วย ----
   const items = [];
