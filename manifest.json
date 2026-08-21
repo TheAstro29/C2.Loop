@@ -1,0 +1,25 @@
+{
+  "name": "C2 LOOP — ระบบคลังอุปกรณ์ C2TECH",
+  "short_name": "C2 LOOP",
+  "description": "ระบบคลังอุปกรณ์และการเบิก-คืนอุปกรณ์ C2TECH",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3F654D",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

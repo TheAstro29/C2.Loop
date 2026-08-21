@@ -256,24 +256,34 @@ function init() {
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("online", onConnectivityChange);
   window.addEventListener("offline", onConnectivityChange);
+  setupInstallPrompt();
 
   const savedToken = localStorage.getItem(LS_TOKEN);
   const savedUser = localStorage.getItem(LS_USER);
   const savedCache = localStorage.getItem(LS_CACHE);
   state.offlineQueue = loadOfflineQueue();
 
-  setTimeout(() => document.getElementById("app-loader").classList.add("hidden"), 350);
   updateOfflineBanner();
+
+  // ปรับปรุง: เดิมหน้าจอ loading จะหายไปหลังจาก 350ms เสมอ ไม่ว่าข้อมูลจะโหลดเสร็จจริงหรือยัง —
+  // ถ้าเครื่อง/เบราว์เซอร์นี้ยังไม่เคยมี cache มาก่อน (เช่น login ครั้งแรก หรือเพิ่งเคลียร์ข้อมูล) จะเห็น
+  // ตาราง/หน้าจอว่างเปล่าโผล่มาแวบหนึ่งก่อนข้อมูลจริงมาถึง ตอนนี้ถ้าไม่มี cache จะรอให้ดึงข้อมูลจบก่อนค่อยซ่อน
+  // (มีเพดานเวลาสูงสุดกันไว้ เผื่อเน็ตมีปัญหา จะได้ไม่ค้างที่หน้า loading ตลอดไป)
+  const hideLoader = () => document.getElementById("app-loader").classList.add("hidden");
+  const withTimeoutCap = (promise, ms) =>
+    Promise.race([Promise.resolve(promise), new Promise((resolve) => setTimeout(resolve, ms))]);
 
   if (savedToken && savedUser) {
     state.token = savedToken;
     state.user = JSON.parse(savedUser);
 
+    let hasCache = false;
     if (savedCache) {
       try {
         const cache = JSON.parse(savedCache);
         state.data = cache.data;
         state.cachedAt = cache.cachedAt;
+        hasCache = true;
       } catch (e) { /* ignore corrupt cache */ }
     }
     if (!state.data.users) state.data.users = [];
@@ -281,15 +291,89 @@ function init() {
     showApp();
     // แสดงข้อมูลจาก cache ทันที (ถ้ามี) แล้วค่อยรีเฟรชเบื้องหลัง
     renderCurrentView();
-    if (navigator.onLine) {
-      drainOfflineQueue().then(() => refreshInBackground());
-    } else {
-      refreshInBackground();
-    }
+    const initialLoad = navigator.onLine
+      ? drainOfflineQueue().then(() => refreshInBackground())
+      : refreshInBackground();
     startPolling();
+
+    if (hasCache) {
+      // มี cache อยู่แล้ว ข้อมูลพร้อมแสดงทันที — ปิดหน้า loading แบบมีดีเลย์สั้นๆ พอให้เห็น animation ไม่กระพริบ
+      setTimeout(hideLoader, 350);
+    } else {
+      // ยังไม่มี cache เลย ต้องรอให้ดึงข้อมูลจบก่อนถึงจะซ่อนหน้า loading (สูงสุด 8 วินาที กันเน็ตมีปัญหาแล้วค้าง)
+      withTimeoutCap(initialLoad, 8000).then(hideLoader);
+    }
   } else {
     showLogin();
+    setTimeout(hideLoader, 350);
   }
+}
+
+// ============================================================
+// PWA: ติดตั้งแอปลงหน้าจอโฮม (Add to Home Screen)
+// ============================================================
+let deferredInstallPrompt = null;
+
+function isIos() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS ใหม่ๆ ปลอมตัวเป็น Mac
+}
+
+function isStandaloneDisplay() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function setupInstallPrompt() {
+  const btn = document.getElementById("installAppBtn");
+  const btnText = document.getElementById("installAppBtnText");
+  if (!btn) return;
+
+  // ถ้าเปิดแอปในโหมด standalone อยู่แล้ว (ติดตั้งไปแล้ว) ไม่ต้องโชว์ปุ่ม
+  if (isStandaloneDisplay()) return;
+
+  if (isIos()) {
+    // iOS Safari ไม่รองรับ beforeinstallprompt เลย ต้องแนะนำขั้นตอนด้วยมือ (Share → Add to Home Screen)
+    btn.style.display = "";
+    btnText.textContent = "วิธีติดตั้งลงหน้าจอ (iPhone/iPad)";
+    return;
+  }
+
+  // Android/Chrome/Edge ฯลฯ: รอ event นี้ก่อนถึงจะโชว์ปุ่ม (เบราว์เซอร์เป็นคนตัดสินใจว่าติดตั้งได้เมื่อไหร่)
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    btn.style.display = "";
+    btnText.textContent = "ติดตั้งแอปลงมือถือ";
+  });
+
+  window.addEventListener("appinstalled", () => {
+    btn.style.display = "none";
+    deferredInstallPrompt = null;
+  });
+}
+
+async function handleInstallClick() {
+  if (isIos()) {
+    await showAlert(
+      "วิธีติดตั้ง C2 LOOP ลงหน้าจอโฮม (iPhone/iPad):\n\n1. แตะปุ่ม \"แชร์\" (ไอคอนสี่เหลี่ยมมีลูกศรชี้ขึ้น) แถบด้านล่างของ Safari\n2. เลื่อนหาแล้วแตะ \"เพิ่มไปที่หน้าจอโฮม\" (Add to Home Screen)\n3. แตะ \"เพิ่ม\" ที่มุมขวาบน",
+      "info"
+    );
+    return;
+  }
+  if (!deferredInstallPrompt) {
+    await showAlert("เบราว์เซอร์นี้ยังไม่พร้อมให้ติดตั้งในขณะนี้ ลองรีเฟรชหน้าใหม่แล้วลองอีกครั้ง หรือใช้เมนู \"เพิ่มไปยังหน้าจอโฮม\" ของเบราว์เซอร์เอง", "info");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById("installAppBtn").style.display = "none";
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* ไม่ critical — แค่ทำให้ติดตั้งเป็น PWA ได้ ถ้าลงทะเบียนไม่สำเร็จก็แค่ไม่มีปุ่มติดตั้ง แอปยังใช้งานปกติ */ });
+  });
 }
 
 function onConnectivityChange() {
@@ -1261,9 +1345,63 @@ function renderStockSnapshotChart(summaries) {
 // ============================================================
 // Phase 4: ระบบพิมพ์
 // ============================================================
+
+/**
+ * เช็คว่าหน้านี้ถูกฝัง (embed) อยู่ใน iframe ของหน้าอื่นหรือไม่ (เช่น ตอนแปะแอปนี้ไว้บน Google Sites)
+ * เหตุผลที่ต้องเช็ค: Google Sites ฝังหน้าเว็บผ่าน iframe ที่ sandbox ไม่ได้เปิดสิทธิ์ allow-modals ให้
+ * ทำให้ window.print()/alert()/confirm() ที่เรียกตรงๆ ข้างในหน้านี้ใช้งานไม่ได้เลย (เงียบๆ ไม่มี error)
+ * ทางแก้คือเปิดหน้าต่างใหม่ (window.open) แล้วสั่งพิมพ์จากหน้าต่างนั้นแทน เพราะหน้าต่างที่เปิดใหม่นี้
+ * จะไม่ได้อยู่ภายใต้ sandbox ของ iframe เดิมแล้ว
+ */
+function isInIframe() {
+  try {
+    return window.self !== window.top;
+  } catch (e) {
+    // เข้าถึง window.top ไม่ได้ (cross-origin) แปลว่าถูกฝังอยู่แน่นอน
+    return true;
+  }
+}
+
 function printDashboard() {
+  if (isInIframe()) {
+    printDashboardViaPopup();
+    return;
+  }
   document.body.classList.add("print-dashboard-active");
   window.print();
+}
+
+/**
+ * ทางเลือกสำรองสำหรับตอนแอปถูกฝังใน iframe (เช่น Google Sites): ใช้ html2canvas ถ่ายภาพ
+ * พื้นที่ Dashboard (รวมกราฟ Chart.js ที่เป็น canvas สดๆ) เป็นรูปเดียว แล้วเปิดหน้าต่างใหม่
+ * ใส่รูปนั้นเต็มหน้าแล้วสั่งพิมพ์จากหน้าต่างนั้น — ไม่ต้องสร้างกราฟใหม่ในหน้าต่าง popup ให้ซับซ้อน
+ */
+async function printDashboardViaPopup() {
+  if (typeof html2canvas === "undefined") {
+    await showAlert("ไม่สามารถโหลดไลบรารีสำหรับสร้างรูปเพื่อพิมพ์ได้ กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่", "error");
+    return;
+  }
+  const popup = window.open("", "_blank");
+  if (!popup) {
+    await showAlert("เบราว์เซอร์บล็อกการเปิดหน้าต่างใหม่ กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้แล้วลองอีกครั้ง", "error");
+    return;
+  }
+  popup.document.write('<!DOCTYPE html><html><head><title>C2 LOOP — พิมพ์ Dashboard</title><style>body{margin:0;padding:16px;text-align:center;background:#fff;}img{max-width:100%;}</style></head><body><p>กำลังเตรียมข้อมูลสำหรับพิมพ์...</p></body></html>');
+  popup.document.close();
+  try {
+    const area = document.getElementById("dashboardReportArea");
+    const canvas = await html2canvas(area, { backgroundColor: "#ffffff", scale: 2 });
+    const dataUrl = canvas.toDataURL("image/png");
+    popup.document.body.innerHTML = `<img src="${dataUrl}" alt="C2 LOOP Dashboard">`;
+    popup.document.title = "C2 LOOP — พิมพ์ Dashboard";
+    setTimeout(() => {
+      popup.focus();
+      popup.print();
+    }, 300);
+  } catch (err) {
+    popup.close();
+    await showAlert("สร้างรูปสำหรับพิมพ์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง", "error");
+  }
 }
 
 function printSlip(transactionId) {
@@ -1302,9 +1440,33 @@ function printSlip(transactionId) {
     </div>
   `;
 
+  if (isInIframe()) {
+    printSlipViaPopup(html);
+    return;
+  }
+
   document.getElementById("printSlipRoot").innerHTML = html;
   document.body.classList.add("print-slip-active");
   window.print();
+}
+
+/**
+ * ทางเลือกสำรองสำหรับตอนแอปถูกฝังใน iframe: เปิดหน้าต่างใหม่ ใส่ HTML ของใบเบิกที่สร้างไว้แล้ว
+ * พร้อมลิงก์ style.css เดิมของแอป (ให้หน้าตาใบเบิกเหมือนเดิมทุกอย่าง) แล้วสั่งพิมพ์จากหน้าต่างนั้น
+ */
+function printSlipViaPopup(html) {
+  const popup = window.open("", "_blank");
+  if (!popup) {
+    showAlert("เบราว์เซอร์บล็อกการเปิดหน้าต่างใหม่ กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้แล้วลองอีกครั้ง", "error");
+    return;
+  }
+  const styleHref = new URL("style.css", window.location.href).href;
+  popup.document.write(`<!DOCTYPE html><html><head><title>C2 LOOP — ใบเบิกอุปกรณ์</title><link rel="stylesheet" href="${styleHref}"></head><body class="print-slip-active"><div id="printSlipRoot">${html}</div></body></html>`);
+  popup.document.close();
+  setTimeout(() => {
+    popup.focus();
+    popup.print();
+  }, 300);
 }
 
 window.addEventListener("afterprint", () => {
@@ -2403,6 +2565,9 @@ function refreshBasketNotice() {
 /** Phase 6: อัปเดต Gateway (EPG-001B) ที่เลือกมาติดตั้งคู่กับ MoisturLyzer ที่ตะกร้าลำดับนี้ */
 function updateLinkedGateway(index, value) {
   issuanceForm.basket[index].linkedGatewaySerial = value;
+  // ถ้าเอา Gateway คู่กันออก (เลือกเป็นว่าง) ต้องเคลียร์ SimCard ที่เคยเลือกไว้ด้วย เพราะ SimCard
+  // ผูกอยู่กับ Gateway ตัวนั้น ไม่ใช่กับตัวเครื่อง MoisturLyzer เอง (ใส่ซิมไม่ได้)
+  if (!value) issuanceForm.basket[index].linkedSimSerial = "";
   renderBasket();
 }
 
@@ -2516,8 +2681,12 @@ function renderBasket() {
           let serialCell = `<span class="cache-note">-</span>`;
           let simCell = `<span class="cache-note">-</span>`;
 
-          // Phase 6: MoisturLyzer และ Gateway ทุกรุ่นต้องมี SimCard คู่กันเสมอ — เลือกได้ในแถวเดียวกันเลย
-          if (item.assetType === "MoisturLyzer" || item.assetType === "Gateway") {
+          // Phase 6 (ปรับ): SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer โดยตรง (ตัวเครื่อง MoisturLyzer
+          // เองใส่ซิมไม่ได้) — จึงแสดง/บังคับ SimCard เฉพาะแถว Gateway จริง หรือแถว MoisturLyzer ที่เลือก
+          // Gateway คู่กันไว้เท่านั้น (เพราะ Gateway ตัวนั้นต้องมีซิม) ถ้า MoisturLyzer ไม่ได้เบิก Gateway คู่ไปด้วย
+          // ก็ไม่ต้องมี SimCard เลย
+          const needsSimCard = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
+          if (needsSimCard) {
             const availableSim = getAvailableSimCards(idx);
             const simCfg = VIEW_CONFIG.simcard;
             if (!availableSim.length && !item.linkedSimSerial) {
@@ -2528,34 +2697,39 @@ function renderBasket() {
                 ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
               </select>`;
             }
+          } else if (item.assetType === "MoisturLyzer") {
+            simCell = `<span class="cache-note">ไม่ต้องใช้ (ไม่ได้เบิก Gateway คู่กัน)</span>`;
           }
 
           if (item.assetType === "MoisturLyzer") {
-            // Phase 6: เบิก MoisturLyzer ต้องเลือก Gateway รุ่น EPG-001B ที่จะติดตั้งคู่กันเสมอ (บังคับ)
-            connectCell = `<span class="req-label">ต้องเลือก Gateway (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) คู่กัน *</span>`;
+            // Phase 6 (ปรับ): เดิมบังคับต้องเลือก Gateway EPG-001B คู่กันเสมอ — ตอนนี้ไม่บังคับแล้ว
+            // เผื่อกรณีลูกค้ายืม MoisturLyzer ไปทดลองใช้เองโดยไม่ต้องเบิก Gateway คู่ไปด้วย
+            connectCell = `<span class="cache-note">Gateway (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) คู่กัน (ไม่บังคับ)</span>`;
             const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_MOISTURLYZER, idx);
             if (!availableGw.length && !item.linkedGatewaySerial) {
-              serialCell = `<span class="cache-note req-warn">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
+              serialCell = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
             } else {
               const gwCfg = VIEW_CONFIG.gateway;
-              serialCell = `<select class="${item.linkedGatewaySerial ? "" : "req-empty"}" onchange="updateLinkedGateway(${idx}, this.value)">
-                <option value="">-- เลือก Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} --</option>
+              serialCell = `<select onchange="updateLinkedGateway(${idx}, this.value)">
+                <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
                 ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
               </select>`;
             }
           } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER) {
-            // Gateway รุ่น EPG-001S — ใช้กับ Panolyzer ที่ไม่ได้ตามอยู่ในระบบนี้ ต้องกรอก S/N เป็นข้อความอิสระ (บังคับ)
-            connectCell = `<span class="req-label">Panolyzer (${escapeHtml(GATEWAY_MODEL_PANOLYZER)})</span>`;
-            serialCell = `<input type="text" class="${item.connectSerial ? "" : "req-empty"}" placeholder="กรอก S/N เครื่อง Panolyzer *"
+            // Gateway รุ่น EPG-001S — ใช้กับ Panolyzer เท่านั้น (ล็อครุ่นไว้กันเบิกผิด) แต่ไม่บังคับให้กรอก S/N
+            // เครื่องเจาะจง เผื่อกรณีนำไปทดลอง/ติดตั้งกับเครื่องที่ยังไม่ได้ขึ้นทะเบียนในระบบ
+            connectCell = `<span class="cache-note">Panolyzer (${escapeHtml(GATEWAY_MODEL_PANOLYZER)})</span>`;
+            serialCell = `<input type="text" placeholder="กรอก S/N เครื่อง Panolyzer (ไม่บังคับ)"
               value="${escapeAttr(item.connectSerial)}" oninput="updateBasketConnectSerial(${idx}, this.value)">`;
           } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER) {
-            // Gateway รุ่น EPG-001B ที่ถูกเพิ่มโดยตรง (ไม่ได้มาจากการเลือกคู่กับ MoisturLyzer) — ยังต้องเลือกเครื่องเจาะจง (บังคับ)
-            connectCell = `<span class="req-label">MoisturLyzer (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) *</span>`;
+            // Gateway รุ่น EPG-001B ที่ถูกเพิ่มโดยตรง — ล็อครุ่นไว้ว่าใช้กับ MoisturLyzer เท่านั้น (กันเบิกผิดรุ่น)
+            // แต่ไม่บังคับให้เลือกเครื่องเจาะจง เผื่อกรณีนำ Gateway+SimCard ไปทดลองกับเครื่องอื่นที่ไม่ได้อยู่ในระบบ
+            connectCell = `<span class="cache-note">MoisturLyzer (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)})</span>`;
             if (!linkableTargets.length) {
-              serialCell = `<span class="cache-note req-warn">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
+              serialCell = `<span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
             } else {
-              serialCell = `<select class="${item.connectSerial ? "" : "req-empty"}" onchange="updateBasketConnectSerial(${idx}, this.value)">
-                <option value="">-- เลือกเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} --</option>
+              serialCell = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+                <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
                 ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
               </select>`;
             }
@@ -2618,9 +2792,11 @@ function renderBasketMobile(area) {
     const cfg = VIEW_CONFIG[item.assetKey];
     const fields = []; // { label, html, req }
 
-    // Phase 6: MoisturLyzer และ Gateway ทุกรุ่นต้องมี SimCard คู่กันเสมอ — เลือกจาก dropdown ของ SimCard ว่างในสต๊อก
+    // Phase 6 (ปรับ): SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer โดยตรง (ตัวเครื่อง MoisturLyzer เอง
+    // ใส่ซิมไม่ได้) — แสดง/บังคับ SimCard เฉพาะแถว Gateway จริง หรือแถว MoisturLyzer ที่เลือก Gateway คู่กันไว้
     let simFieldHtml = null;
-    if (item.assetType === "MoisturLyzer" || item.assetType === "Gateway") {
+    const needsSimCardMobile = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
+    if (needsSimCardMobile) {
       const availableSim = getAvailableSimCards(idx);
       const simCfg = VIEW_CONFIG.simcard;
       if (!availableSim.length && !item.linkedSimSerial) {
@@ -2634,41 +2810,45 @@ function renderBasketMobile(area) {
     }
 
     if (item.assetType === "MoisturLyzer") {
-      // เลือก Gateway EPG-001B ว่างในสต๊อกคู่กัน (บังคับ)
+      // เลือก Gateway EPG-001B ว่างในสต๊อกคู่กัน (ไม่บังคับแล้ว — เผื่อลูกค้ายืม MoisturLyzer ไปทดลองใช้เอง)
       const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_MOISTURLYZER, idx);
       const gwCfg = VIEW_CONFIG.gateway;
       let gwFieldHtml;
       if (!availableGw.length && !item.linkedGatewaySerial) {
-        gwFieldHtml = `<span class="warn-text">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
+        gwFieldHtml = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
       } else {
-        gwFieldHtml = `<select class="${item.linkedGatewaySerial ? "" : "req-empty"}" onchange="updateLinkedGateway(${idx}, this.value)">
-          <option value="">-- เลือก Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} --</option>
+        gwFieldHtml = `<select onchange="updateLinkedGateway(${idx}, this.value)">
+          <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
           ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
         </select>`;
       }
-      fields.push({ label: `Gateway (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) คู่กัน`, html: gwFieldHtml, req: true });
-      fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
+      fields.push({ label: `Gateway (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)}) คู่กัน (ไม่บังคับ)`, html: gwFieldHtml, req: false });
+      if (item.linkedGatewaySerial) {
+        fields.push({ label: "SimCard คู่กัน (Gateway ต้องมีซิม)", html: simFieldHtml, req: true });
+      }
     } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER) {
-      // Panolyzer ไม่ได้ถูกเก็บเป็นอุปกรณ์ในระบบ จึงไม่มีสต๊อกให้เลือก — ต้องกรอก S/N เอง (เหมือนเดิมทั้งบนคอมพิวเตอร์และมือถือ)
+      // Panolyzer ไม่ได้ถูกเก็บเป็นอุปกรณ์ในระบบ จึงไม่มีสต๊อกให้เลือก — กรอก S/N เองได้ถ้าทราบ แต่ไม่บังคับ
+      // (ล็อคไว้แค่ว่า Gateway รุ่นนี้ใช้กับ Panolyzer เท่านั้น กันเบิกผิดรุ่น)
       fields.push({
         label: "S/N เครื่อง Panolyzer",
-        html: `<input type="text" class="${item.connectSerial ? "" : "req-empty"}" placeholder="กรอก S/N เครื่อง Panolyzer"
+        html: `<input type="text" placeholder="กรอก S/N เครื่อง Panolyzer (ไม่บังคับ)"
           value="${escapeAttr(item.connectSerial)}" oninput="updateBasketConnectSerial(${idx}, this.value)">`,
-        req: true,
+        req: false,
       });
       fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
     } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER) {
-      // Gateway EPG-001B ที่เพิ่มโดยตรง — เลือกเครื่อง MoisturLyzer จาก dropdown (บังคับ)
+      // Gateway EPG-001B ที่เพิ่มโดยตรง — ล็อคไว้แค่ว่ารุ่นนี้ใช้กับ MoisturLyzer เท่านั้น (กันเบิกผิดรุ่น)
+      // แต่ไม่บังคับให้เลือกเครื่องเจาะจง เผื่อนำ Gateway+SimCard ไปทดลองกับเครื่องอื่นนอกระบบ
       let targetFieldHtml;
       if (!linkableTargets.length) {
         targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
       } else {
-        targetFieldHtml = `<select class="${item.connectSerial ? "" : "req-empty"}" onchange="updateBasketConnectSerial(${idx}, this.value)">
-          <option value="">-- เลือกเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} --</option>
+        targetFieldHtml = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+          <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
           ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
         </select>`;
       }
-      fields.push({ label: `เชื่อมต่อกับเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)}`, html: targetFieldHtml, req: true });
+      fields.push({ label: `เชื่อมต่อกับเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} (ไม่บังคับ)`, html: targetFieldHtml, req: false });
       fields.push({ label: "SimCard คู่กัน", html: simFieldHtml, req: true });
     } else if (cfg.connectOptions) {
       // SimCard หรือ Gateway ที่ยังไม่ระบุรุ่น — dropdown ตัวเลือกเดิม
@@ -2723,16 +2903,14 @@ function renderBasketMobile(area) {
 function renderBasketRequirementNotice() {
   const missing = [];
   issuanceForm.basket.forEach((item) => {
-    if (item.assetType === "MoisturLyzer" && !item.linkedGatewaySerial) {
-      missing.push(`MoisturLyzer ${item.serialNo}: ยังไม่ได้เลือก Gateway ${GATEWAY_MODEL_MOISTURLYZER} คู่กัน`);
-    }
-    if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER && !String(item.connectSerial || "").trim()) {
-      missing.push(`Gateway ${item.serialNo}: ยังไม่ได้กรอก S/N เครื่อง Panolyzer`);
-    }
-    if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER && !item.connectSerial) {
-      missing.push(`Gateway ${item.serialNo}: ยังไม่ได้เลือกเครื่อง MoisturLyzer`);
-    }
-    if ((item.assetType === "MoisturLyzer" || item.assetType === "Gateway") && !item.linkedSimSerial) {
+    // หมายเหตุ: การเลือก Gateway คู่กันตอนเบิก MoisturLyzer ไม่บังคับอีกต่อไป (เผื่อลูกค้ายืม MoisturLyzer
+    // ไปทดลองใช้เอง โดยไม่ต้องเบิก Gateway คู่ไปด้วย) — และ SimCard ผูกกับ Gateway เท่านั้น ไม่ใช่ MoisturLyzer
+    // โดยตรง (ตัวเครื่อง MoisturLyzer เองใส่ซิมไม่ได้) จึงบังคับ SimCard เฉพาะตอนที่มี Gateway จริงๆ เท่านั้น
+    // การกรอก S/N เครื่อง Panolyzer หรือเลือกเครื่อง MoisturLyzer ที่จะติดตั้งด้วย ไม่บังคับอีกต่อไป
+    // (เผื่อกรณีนำ Gateway+SimCard ไปทดลอง/ติดตั้งกับเครื่องที่ยังไม่ได้ขึ้นทะเบียนในระบบ) — ยังคงล็อครุ่น
+    // Gateway ที่ใช้ได้กับอุปกรณ์แต่ละประเภทไว้เหมือนเดิมผ่าน GATEWAY_MODEL_PANOLYZER / GATEWAY_MODEL_MOISTURLYZER
+    const needsSimCardCheck = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
+    if (needsSimCardCheck && !item.linkedSimSerial) {
       missing.push(`${item.assetType} ${item.serialNo}: ยังไม่ได้เลือก SimCard คู่กัน`);
     }
   });
@@ -2758,16 +2936,12 @@ async function submitIssuanceRequest() {
   // ---- Phase 6: ตรวจสอบเงื่อนไขบังคับ Gateway/SimCard ก่อนส่ง (ฝั่งเซิร์ฟเวอร์จะตรวจซ้ำอีกครั้งเสมอ) ----
   const validationErrors = [];
   issuanceForm.basket.forEach((item) => {
-    if (item.assetType === "MoisturLyzer" && !item.linkedGatewaySerial) {
-      validationErrors.push(`MoisturLyzer ${item.serialNo}: กรุณาเลือก Gateway ${GATEWAY_MODEL_MOISTURLYZER} ที่จะติดตั้งคู่กัน`);
-    }
-    if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER && !String(item.connectSerial || "").trim()) {
-      validationErrors.push(`Gateway ${item.serialNo}: กรุณากรอก S/N เครื่อง Panolyzer`);
-    }
-    if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER && !item.connectSerial) {
-      validationErrors.push(`Gateway ${item.serialNo}: กรุณาเลือกเครื่อง MoisturLyzer ที่จะติดตั้ง`);
-    }
-    if ((item.assetType === "MoisturLyzer" || item.assetType === "Gateway") && !item.linkedSimSerial) {
+    // หมายเหตุ: ไม่บังคับเลือก Gateway คู่กันตอนเบิก MoisturLyzer อีกต่อไป (เผื่อลูกค้ายืมไปทดลองใช้เอง) และ
+    // SimCard ผูกกับ Gateway เท่านั้น (ตัวเครื่อง MoisturLyzer ใส่ซิมไม่ได้) จึงบังคับเฉพาะตอนมี Gateway จริง —
+    // ไม่บังคับกรอก S/N Panolyzer หรือเลือกเครื่อง MoisturLyzer ที่จะติดตั้งด้วยอีกต่อไป (ดูคำอธิบายใน
+    // renderBasketRequirementNotice ด้านบน) — รุ่น Gateway ที่ใช้ได้กับอุปกรณ์แต่ละประเภทยังคงถูกล็อคไว้เหมือนเดิม
+    const needsSimCardValidation = item.assetType === "Gateway" || (item.assetType === "MoisturLyzer" && !!item.linkedGatewaySerial);
+    if (needsSimCardValidation && !item.linkedSimSerial) {
       validationErrors.push(`${item.assetType} ${item.serialNo}: กรุณาเลือก SimCard ที่จะเบิกคู่กัน`);
     }
   });

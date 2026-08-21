@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#3F654D">
   <title>C2 LOOP — ระบบคลังอุปกรณ์ C2TECH</title>
   <link rel="icon" type="image/svg+xml" href="assets/c2loop-icon.svg">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="C2 LOOP">
+  <meta name="mobile-web-app-capable" content="yes">
   <link rel="preconnect" href="https://cdnjs.cloudflare.com">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -103,6 +109,11 @@
           <span class="sync-dot" id="syncDot"></span>
           <span id="syncLabel">กำลังซิงค์...</span>
         </div>
+        <!-- ปุ่มติดตั้งแอปลงหน้าจอมือถือ (Add to Home Screen) — ซ่อนไว้ก่อน ปุ่มจะโผล่มาเองด้วย JS
+             เมื่อเบราว์เซอร์รองรับ (Android/Chrome) หรือเปลี่ยนข้อความเป็นคำแนะนำเองสำหรับ iOS -->
+        <button class="btn-logout" id="installAppBtn" style="display:none; background:var(--green); margin-bottom:8px;" onclick="handleInstallClick()">
+          <i class="fas fa-mobile-screen-button"></i> <span id="installAppBtnText">ติดตั้งแอปลงมือถือ</span>
+        </button>
         <button class="btn-logout" onclick="logout()"><i class="fas fa-sign-out-alt"></i> ออกจากระบบ</button>
       </div>
     </div>
