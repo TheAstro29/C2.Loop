@@ -608,6 +608,7 @@ function renderMobileHome() {
           <span class="mh-role-chip">${escapeHtml(state.user.role)}</span>
         </div>
         <div class="mh-header-icons">
+          <button class="mh-icon-btn" onclick="openChangePasswordModal()" title="เปลี่ยนรหัสผ่าน"><i class="fas fa-key"></i></button>
           <button class="mh-icon-btn" onclick="logout()" title="ออกจากระบบ"><i class="fas fa-sign-out-alt"></i></button>
         </div>
       </div>
@@ -2144,9 +2145,10 @@ function openGenericFormModal(title, fields, onSave) {
         </select>
       </div>`;
     }
+    // Phase 12: รองรับ field แบบรหัสผ่าน (type: "password") — ซ่อนตัวอักษรที่พิมพ์ ใช้กับฟอร์มเปลี่ยนรหัสผ่านของตัวเอง
     return `<div class="form-field">
       <label>${escapeHtml(f.label)}</label>
-      <input type="text" id="gfm-field-${i}" value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
+      <input type="${f.type === "password" ? "password" : "text"}" id="gfm-field-${i}" autocomplete="${f.type === "password" ? "new-password" : "off"}" value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
     </div>`;
   }).join("");
   const msgEl = document.getElementById("genericFormModalMsg");
@@ -3568,6 +3570,8 @@ function userErrorMessage(code) {
     case "password_too_short": return "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร";
     case "missing_fields": return "กรอกข้อมูลไม่ครบ";
     case "cannot_disable_self": return "ไม่สามารถปิดใช้งานบัญชีของตัวเองได้";
+    case "invalid_current_password": return "รหัสผ่านปัจจุบันไม่ถูกต้อง";
+    case "password_mismatch": return "รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน";
     default: return "ดำเนินการไม่สำเร็จ กรุณาลองใหม่";
   }
 }
@@ -3615,6 +3619,50 @@ function showPasswordResultModal(userName, newPassword) {
 
 function closePasswordResultModal() {
   document.getElementById("passwordResultModal").style.display = "none";
+}
+
+/** Phase 12: ให้ผู้ใช้ทุกคน (ไม่ว่า Admin/Staff) เปลี่ยนรหัสผ่านของตัวเองได้ — ใช้ตอนได้รับรหัสผ่านเริ่มต้น/รหัสที่ Admin สุ่มให้ แล้วอยากตั้งรหัสใหม่เอง */
+function openChangePasswordModal() {
+  openGenericFormModal(
+    "เปลี่ยนรหัสผ่านของฉัน",
+    [
+      { label: "รหัสผ่านปัจจุบัน", type: "password" },
+      { label: "รหัสผ่านใหม่ (อย่างน้อย 6 ตัวอักษร)", type: "password" },
+      { label: "ยืนยันรหัสผ่านใหม่", type: "password" },
+    ],
+    async (values) => {
+      const [currentPassword, newPassword, confirmPassword] = values;
+      const msg = document.getElementById("genericFormModalMsg");
+      msg.className = "form-msg";
+      msg.textContent = "";
+
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        msg.className = "form-msg error"; msg.textContent = "กรุณากรอกข้อมูลให้ครบทุกช่อง";
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        msg.className = "form-msg error"; msg.textContent = userErrorMessage("password_mismatch");
+        return;
+      }
+      if (newPassword.length < 6) {
+        msg.className = "form-msg error"; msg.textContent = userErrorMessage("password_too_short");
+        return;
+      }
+
+      try {
+        const res = await apiPost({ action: "changePassword", token: state.token, currentPassword, newPassword });
+        if (!res.ok) {
+          if (res.error === "unauthorized") return handleUnauthorized();
+          msg.className = "form-msg error"; msg.textContent = userErrorMessage(res.error);
+          return;
+        }
+        closeGenericFormModal();
+        await showAlert("เปลี่ยนรหัสผ่านสำเร็จแล้ว ใช้รหัสผ่านใหม่ในการเข้าสู่ระบบครั้งถัดไป", "success");
+      } catch (err) {
+        msg.className = "form-msg error"; msg.textContent = "เกิดข้อผิดพลาด: " + err.message;
+      }
+    }
+  );
 }
 
 async function copyNewPassword() {
