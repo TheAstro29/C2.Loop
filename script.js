@@ -40,7 +40,7 @@ let state = {
 };
 
 // ตะกร้าเบิกที่กำลังกรอกอยู่ (อยู่ใน memory เท่านั้น ไม่ persist — เคลียร์เมื่อส่งสำเร็จ)
-let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [] };
+let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
 
 // Phase 5: เลขที่ธุรกรรมที่เลือกไว้สำหรับดำเนินการแบบกลุ่ม (bulk) ในหน้าอนุมัติ/ประวัติ — เคลียร์ทุกครั้งที่เปลี่ยนหน้า
 let bulkSelection = new Set();
@@ -460,7 +460,7 @@ function logout() {
     offlineQueue: loadOfflineQueue(), charts: {},
     mobileHomeVisible: true,
   };
-  issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [] };
+  issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
   document.getElementById("login-username").value = "";
   document.getElementById("login-password").value = "";
   showLogin();
@@ -1434,15 +1434,15 @@ function printSlip(transactionId) {
         <table class="formal-docinfo">
           <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
           <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
-          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</td></tr>
+          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}${txn.IssuanceType === "ยืม" ? ` <span class="status-badge status-loan" style="margin-left:6px;">ยืม</span>` : ""}</td></tr>
         </table>
       </div>
 
       <table class="slip-table">
-        <colgroup><col class="slip-col-no"><col class="slip-col-type"><col class="slip-col-serial"></colgroup>
-        <thead><tr><th>#</th><th>ประเภทอุปกรณ์</th><th>Serial</th></tr></thead>
+        <colgroup><col class="slip-col-no"><col class="slip-col-type"><col class="slip-col-serial"><col class="slip-col-qty"></colgroup>
+        <thead><tr><th>#</th><th>ประเภทอุปกรณ์</th><th>Serial</th><th>จำนวน</th></tr></thead>
         <tbody>
-          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(i.AssetType)}</td><td>${escapeHtml(i.SerialNo)}</td></tr>`).join("")}
+          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${formatItemLabel(i, { withQty: false })}</td><td>${escapeHtml(i.SerialNo)}</td><td>${escapeHtml(String(i.AssetType === "Other" ? (Number(i.Quantity) || 1) : 1))}</td></tr>`).join("")}
         </tbody>
       </table>
       <div class="slip-table-summary">รวมทั้งหมด ${items.length} รายการ</div>
@@ -2381,6 +2381,13 @@ function renderIssueView() {
           <textarea id="f-details">${escapeHtml(issuanceForm.details)}</textarea>
         </div>
       </div>
+      <div class="form-field">
+        <div class="loan-field">
+          <input type="checkbox" id="f-isLoan" ${issuanceForm.isLoan ? "checked" : ""}>
+          <label for="f-isLoan"><strong>ลูกค้ายืมไปทดลอง</strong> (ไม่ใช่การเบิกขาย/ติดตั้งถาวร)</label>
+        </div>
+        <div class="loan-hint">ติ๊กแล้วใบเบิกนี้จะขึ้นป้าย "ยืม" กำกับสถานะไว้ ให้แยกจากการเบิกปกติ</div>
+      </div>
     </div>
 
     <div class="form-card">
@@ -2392,6 +2399,7 @@ function renderIssueView() {
           <option value="simcard">SimCard</option>
           <option value="colorSorterParts">อะไหล่ Color Sorter</option>
           <option value="panolyzerParts">อะไหล่ Panolyzer</option>
+          <option value="other">อื่นๆ (พิมพ์เอง)</option>
         </select>
         <input type="text" id="f-itemSearch" placeholder="ค้นหา Serial / รุ่น...">
       </div>
@@ -2409,6 +2417,7 @@ function renderIssueView() {
   document.getElementById("f-customerName").addEventListener("input", (e) => { issuanceForm.customerName = e.target.value; });
   document.getElementById("f-siteLocation").addEventListener("input", (e) => { issuanceForm.siteLocation = e.target.value; });
   document.getElementById("f-details").addEventListener("input", (e) => { issuanceForm.details = e.target.value; });
+  document.getElementById("f-isLoan").addEventListener("change", (e) => { issuanceForm.isLoan = e.target.checked; });
   document.getElementById("f-assetType").addEventListener("change", renderPickerList);
   document.getElementById("f-itemSearch").addEventListener("input", renderPickerList);
   document.getElementById("submitIssuanceBtn").addEventListener("click", submitIssuanceRequest);
@@ -2430,9 +2439,42 @@ function getKnownCustomerNames() {
 
 function renderPickerList() {
   const assetKey = document.getElementById("f-assetType").value;
-  const cfg = VIEW_CONFIG[assetKey];
-  const search = document.getElementById("f-itemSearch").value;
+  const searchInput = document.getElementById("f-itemSearch");
   const listEl = document.getElementById("pickerList");
+
+  // Phase 11: ของนอกระบบ (พิมพ์ชื่อเอง) — ไม่มีสต๊อกให้เลือก แสดงฟอร์มพิมพ์เองแทนรายการสต๊อก
+  if (assetKey === "other") {
+    searchInput.disabled = true;
+    searchInput.value = "";
+    listEl.innerHTML = `
+      <div class="other-entry-form">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>ชื่ออุปกรณ์ (พิมพ์เอง) *</label>
+            <input type="text" id="f-otherItemName" placeholder="เช่น เคสทดลองแบบใหม่, สายไฟสำรอง">
+          </div>
+          <div class="form-field">
+            <label>Serial / หมายเลข (ถ้ามี)</label>
+            <input type="text" id="f-otherSerial" placeholder="ไม่บังคับ">
+          </div>
+        </div>
+        <div class="form-grid" style="grid-template-columns: 140px 1fr;">
+          <div class="form-field">
+            <label>จำนวน</label>
+            <input type="number" id="f-otherQty" min="1" value="1">
+          </div>
+          <div class="form-field" style="align-self:flex-end;">
+            <button class="btn-sm btn-add" style="margin-top:22px;" onclick="addOtherToBasket()">+ เพิ่มลงตะกร้า</button>
+          </div>
+        </div>
+        <div id="otherEntryMsg" class="cache-note" style="margin-top:8px;">ของประเภทนี้จะไม่ถูกตัดสต๊อกในระบบ — ใช้บันทึกไว้เป็นประวัติเท่านั้น</div>
+      </div>`;
+    return;
+  }
+  searchInput.disabled = false;
+
+  const cfg = VIEW_CONFIG[assetKey];
+  const search = searchInput.value;
 
   // Phase 8: หมวดอะไหล่ (Color Sorter/Panolyzer) แสดงทั้งชิ้นที่มี S/N และแบบนับจำนวนรวมในรายการเดียวกัน
   if (cfg.partCategory) {
@@ -2538,6 +2580,28 @@ function updateBasketQuantity(index, value) {
   const qty = Math.max(1, Math.floor(Number(value) || 1));
   issuanceForm.basket[index].quantity = qty;
   refreshBasketNotice();
+}
+
+/** Phase 11: เพิ่มของนอกระบบ (พิมพ์ชื่อเอง) ลงตะกร้า — ไม่มีสต๊อกจริง ไม่มี Gateway/SimCard/รุ่นเกี่ยวข้องใดๆ ทั้งสิ้น */
+function addOtherToBasket() {
+  const nameInput = document.getElementById("f-otherItemName");
+  const serialInput = document.getElementById("f-otherSerial");
+  const qtyInput = document.getElementById("f-otherQty");
+  const msgEl = document.getElementById("otherEntryMsg");
+  const itemName = nameInput.value.trim();
+  if (!itemName) {
+    msgEl.textContent = "กรุณากรอกชื่ออุปกรณ์ก่อน";
+    msgEl.style.color = "var(--danger)";
+    return;
+  }
+  const qty = Math.max(1, Math.floor(Number(qtyInput.value) || 1));
+  issuanceForm.basket.push({ assetType: "Other", itemName, serialNo: serialInput.value.trim() || "-", quantity: qty });
+  nameInput.value = "";
+  serialInput.value = "";
+  qtyInput.value = "1";
+  msgEl.textContent = "ของประเภทนี้จะไม่ถูกตัดสต๊อกในระบบ — ใช้บันทึกไว้เป็นประวัติเท่านั้น";
+  msgEl.style.color = "";
+  renderBasket();
 }
 
 function addToBasket(assetKey, serial) {
@@ -2695,6 +2759,19 @@ function renderBasket() {
       <thead><tr><th>ประเภท</th><th>Serial</th><th>เชื่อมต่อกับ / ใส่ใน</th><th>เครื่องที่เชื่อมต่อ (เจาะจง)</th><th>SimCard คู่กัน</th><th></th></tr></thead>
       <tbody>
         ${issuanceForm.basket.map((item, idx) => {
+          // Phase 12: ของนอกระบบ (พิมพ์ชื่อเอง) — ไม่มี cfg/รุ่น/การเชื่อมต่อใดๆ เกี่ยวข้อง แสดงชื่อ+serial+จำนวนที่พิมพ์มา
+          // (เช็คก่อน item.quantity !== undefined ด้านล่าง เพราะของนอกระบบก็มี quantity เหมือนกันแล้ว)
+          if (item.assetType === "Other") {
+            return `<tr>
+              <td>${escapeHtml(item.itemName)} <span class="cache-note">(นอกระบบ)</span></td>
+              <td>${escapeHtml(item.serialNo)}</td>
+              <td><input type="number" min="1" value="${escapeAttr(String(item.quantity != null ? item.quantity : 1))}" style="width:80px;" onchange="updateBasketQuantity(${idx}, this.value)"> ชิ้น</td>
+              <td><span class="cache-note">-</span></td>
+              <td><span class="cache-note">-</span></td>
+              <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
+            </tr>`;
+          }
+
           // Phase 8: อะไหล่แบบนับจำนวน (ไม่มี S/N) — แถวของตัวเองแยกจากอุปกรณ์อื่นทั้งหมด ไม่มีเรื่อง Gateway/SimCard คู่กัน
           if (item.quantity !== undefined) {
             return `<tr>
@@ -2802,6 +2879,24 @@ function renderBasketMobile(area) {
   const linkableTargets = getLinkableTargets();
 
   const cardsHtml = issuanceForm.basket.map((item, idx) => {
+    // Phase 12: ของนอกระบบ (พิมพ์ชื่อเอง) — เช็คก่อน item.quantity !== undefined ด้านล่าง เพราะตอนนี้มี quantity เหมือนกัน
+    if (item.assetType === "Other") {
+      return `
+        <div class="basket-card">
+          <div class="basket-card-head">
+            <div>
+              <div class="basket-card-title">${escapeHtml(item.itemName)}</div>
+              <div class="basket-card-serial">Serial: ${escapeHtml(item.serialNo)} (นอกระบบ)</div>
+            </div>
+            <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
+          </div>
+          <div class="basket-field">
+            <label>จำนวนที่จะเบิก</label>
+            <input type="number" min="1" value="${escapeAttr(String(item.quantity != null ? item.quantity : 1))}" onchange="updateBasketQuantity(${idx}, this.value)">
+          </div>
+        </div>`;
+    }
+
     // Phase 8: อะไหล่แบบนับจำนวน (ไม่มี S/N)
     if (item.quantity !== undefined) {
       return `
@@ -2961,6 +3056,11 @@ async function submitIssuanceRequest() {
   // ---- Phase 6: MoisturLyzer/Gateway แต่ละชิ้นที่เลือก Gateway/SimCard คู่กันไว้ ให้เพิ่มเป็นรายการจริงในคำขอด้วย ----
   const items = [];
   issuanceForm.basket.forEach((b) => {
+    // Phase 11: ของนอกระบบ (พิมพ์ชื่อเอง) — ไม่มีเรื่อง Gateway/SimCard/รุ่นใดๆ เกี่ยวข้อง ส่งแค่ชื่อ+serial ที่พิมพ์มา
+    if (b.assetType === "Other") {
+      items.push({ assetType: "Other", itemName: b.itemName, serialNo: b.serialNo, quantity: b.quantity || 1 });
+      return;
+    }
     // Phase 8: อะไหล่แบบนับจำนวน (ไม่มี S/N) — ส่ง quantity ไปด้วย ไม่มีเรื่อง Gateway/SimCard คู่กัน
     if (b.quantity !== undefined) {
       items.push({ assetType: b.assetType, serialNo: b.serialNo, quantity: b.quantity, connectTo: "", connectSerial: "" });
@@ -2982,6 +3082,7 @@ async function submitIssuanceRequest() {
     siteLocation: issuanceForm.siteLocation.trim(),
     details: issuanceForm.details.trim(),
     items: items,
+    isLoan: !!issuanceForm.isLoan,
   };
 
   // ---- ออฟไลน์: บันทึกลง Local cache แบบ Optimistic ทันที + เข้าคิวรอส่งเมื่อกลับมาออนไลน์ ----
@@ -2991,7 +3092,7 @@ async function submitIssuanceRequest() {
     state.offlineQueue.push({ label: `เบิก ${payload.customerName}`, body: { action: "requestIssuance", token: state.token, payload } });
     saveOfflineQueue();
     persistCache();
-    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [] };
+    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
     renderIssueView();
     const freshMsg = document.getElementById("issueMsg");
     freshMsg.className = "form-msg success";
@@ -3009,7 +3110,7 @@ async function submitIssuanceRequest() {
       throw new Error(issuanceErrorMessage(res.error) + conflictMsg);
     }
 
-    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [] };
+    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
     const successText = "ส่งคำขอเบิกสำเร็จ (เลขที่ธุรกรรม " + res.transactionId + ") — รอ Admin อนุมัติ";
     await refreshInBackground(true);
     renderIssueView(); // สร้างฟอร์มใหม่ (ว่างเปล่า) ก่อน แล้วค่อยแปะข้อความสำเร็จทับ #issueMsg ของฟอร์มใหม่
@@ -3031,11 +3132,13 @@ function applyOptimisticIssuance(tempTxnId, payload) {
     TransactionID: tempTxnId, Timestamp: new Date().toISOString(), CustomerName: payload.customerName,
     SiteLocation: payload.siteLocation, IssuedBy: state.user.name, Details: payload.details,
     RequestStatus: "PendingApproval", ApprovedBy: "", ApprovedAt: "", ReturnedAt: "", _pendingSync: true,
+    IssuanceType: payload.isLoan ? "ยืม" : "เบิก",
   });
   payload.items.forEach((item) => {
     state.data.issuanceItems.push({
       TransactionID: tempTxnId, AssetType: item.assetType, SerialNo: item.serialNo, ConnectTo: item.connectTo || "",
-      ConnectSerial: item.connectSerial || "", PreviousStatus: "Stock", NewLocation: payload.siteLocation, _pendingSync: true,
+      ConnectSerial: item.connectSerial || "", PreviousStatus: "Stock", NewLocation: payload.siteLocation,
+      ItemName: item.itemName || "", Quantity: item.quantity || 1, _pendingSync: true,
     });
   });
   updatePendingBadge();
@@ -3058,6 +3161,19 @@ function issuanceErrorMessage(code) {
 // ============================================================
 function getItemsForTransaction(transactionId) {
   return (state.data.issuanceItems || []).filter((i) => i.TransactionID === transactionId);
+}
+
+/** Phase 11: ป้ายชื่อประเภทอุปกรณ์สำหรับแสดงในประวัติ/ใบเบิก — ของนอกระบบ (Other) แสดงชื่อที่พิมพ์เองแทน AssetType พร้อมกำกับ "(นอกระบบ)" */
+/** แสดงชื่อประเภทอุปกรณ์ของรายการหนึ่ง — ถ้าเป็นของนอกระบบจะแสดงชื่อที่พิมพ์เองแทน AssetType
+ * ส่ง opts.withQty = false เมื่อมีคอลัมน์ "จำนวน" แยกต่างหากอยู่แล้ว (เช่นตารางในใบเบิก) เพื่อไม่ให้จำนวนซ้ำกัน */
+function formatItemLabel(item, opts) {
+  const withQty = !opts || opts.withQty !== false;
+  if (item.AssetType === "Other") {
+    const qty = Number(item.Quantity) || 1;
+    const qtyTag = withQty && qty > 1 ? ` <span class="cache-note">(จำนวน ${qty} ชิ้น)</span>` : "";
+    return escapeHtml(item.ItemName || "อื่นๆ") + ` <span class="cache-note">(นอกระบบ)</span>` + qtyTag;
+  }
+  return escapeHtml(item.AssetType);
 }
 
 /** สร้างข้อความ "(เชื่อมกับ Gateway — เครื่อง MZ-002)" สำหรับแสดงในประวัติ/ใบเบิก — รวม ConnectSerial ถ้ามีการระบุเครื่องเจาะจงไว้ */
@@ -3116,10 +3232,11 @@ function renderApprovalsView() {
             <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ผู้เบิก: ${escapeHtml(txn.IssuedBy)} · ${formatDateTh(txn.Timestamp)}</div>
           </div>
           <span class="status-badge status-PendingApproval">รออนุมัติ</span>
+          ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
         </div>
         ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
         <div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${escapeHtml(i.AssetType)} — ${escapeHtml(i.SerialNo)}${formatConnectInfo(i)}</div>`).join("")}
+          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)} — ${escapeHtml(i.SerialNo)}${formatConnectInfo(i)}</div>`).join("")}
         </div>
         ${txn._pendingSync
           ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์ก่อนจึงจะอนุมัติได้</div>`
@@ -3317,10 +3434,11 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
             ${txn._pendingSync ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์</div>` : ""}
           </div>
           <span class="status-badge status-${txn.RequestStatus}">${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</span>
+          ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
         </div>
         ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
         <div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${escapeHtml(i.AssetType)} — ${escapeHtml(i.SerialNo)}${formatConnectInfo(i)}</div>`).join("")}
+          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)} — ${escapeHtml(i.SerialNo)}${formatConnectInfo(i)}</div>`).join("")}
         </div>
         <div class="txn-actions">
           ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
