@@ -1880,10 +1880,12 @@ async function deletePartHandler(partId) {
 const PART_HISTORY_ACTION_LABELS = {
   Added: "เพิ่มอะไหล่ใหม่", Restocked: "เติมของเข้าสต็อก", Renamed: "แก้ไขชื่อ",
   Deleted: "ลบอะไหล่", Issued: "เบิกออก", Returned: "คืนของ",
+  StockAdded: "รับเข้าสต๊อก", // Phase 16: MoisturLyzer/Gateway/SimCard รับเข้าสต๊อกผ่านหน้า "จัดการ Stock/อะไหล่"
 };
 const PART_HISTORY_ACTION_ICONS = {
   Added: '<i class="fas fa-plus"></i>', Restocked: '<i class="fas fa-box"></i>', Renamed: '<i class="fas fa-pen"></i>',
   Deleted: '<i class="fas fa-trash"></i>', Issued: '<i class="fas fa-arrow-up"></i>', Returned: '<i class="fas fa-arrow-down"></i>',
+  StockAdded: '<i class="fas fa-dolly"></i>',
 };
 
 function closePartHistoryModal() {
@@ -1908,7 +1910,7 @@ function showPartsActivityFeed(category) {
     .slice()
     .sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp))
     .slice(0, 100);
-  document.getElementById("partHistoryModalTitle").textContent = category ? `ประวัติอะไหล่ล่าสุด — ${category}` : "ประวัติอะไหล่ล่าสุดทั้งหมด";
+  document.getElementById("partHistoryModalTitle").textContent = category ? `ประวัติ Stock ล่าสุด — ${category}` : "ประวัติ Stock ล่าสุดทั้งหมด";
   renderPartHistoryBody(logs, "ยังไม่มีประวัติอะไหล่");
   document.getElementById("partHistoryModal").style.display = "flex";
 }
@@ -1953,7 +1955,7 @@ function renderManagePartsView() {
     <div class="form-card">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
         <h3 style="margin:0;">จัดการ Stock/อะไหล่</h3>
-        <button class="btn-sm btn-secondary" onclick="showPartsActivityFeed()">ดูประวัติอะไหล่ล่าสุดทั้งหมด</button>
+        <button class="btn-sm btn-secondary" onclick="showPartsActivityFeed()">ดูประวัติ Stock ล่าสุด</button>
       </div>
       <div class="form-field" style="margin:14px 0;">
         <label>เลือกประเภทที่จะเพิ่มสต๊อก *</label>
