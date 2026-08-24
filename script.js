@@ -565,7 +565,7 @@ const MOBILE_HOME_TILES = [
 ];
 const MOBILE_HOME_ADMIN_TILES = [
   { key: "users", label: "จัดการผู้ใช้งาน", icon: "fa-users-cog", color: "mh-c9" },
-  { key: "manageparts", label: "จัดการอะไหล่", icon: "fa-toolbox", color: "mh-c5" },
+  { key: "manageparts", label: "จัดการ Stock/อะไหล่", icon: "fa-toolbox", color: "mh-c5" },
 ];
 
 /** สรุปยอดรวมสั้นๆ สำหรับแถบสถิติในหน้าแรก (รวมทุกประเภทอุปกรณ์เข้าด้วยกัน) */
@@ -885,7 +885,7 @@ function renderCurrentView() {
     titleEl.textContent = "จัดการผู้ใช้งาน";
     renderUsersView();
   } else if (state.currentView === "manageparts") {
-    titleEl.textContent = "จัดการอะไหล่";
+    titleEl.textContent = "จัดการ Stock/อะไหล่";
     renderManagePartsView();
   } else {
     const cfg = VIEW_CONFIG[state.currentView];
@@ -1469,7 +1469,7 @@ function printSlip(transactionId) {
         </div>
         <div class="signature-box">
           <div class="signature-line"></div>
-          <div class="signature-role">ผู้รับของ (ลูกค้า)</div>
+          <div class="signature-role">ผู้รับของ</div>
           <div class="signature-name">&nbsp;</div>
           <div class="signature-date">วันที่ ______/______/________</div>
         </div>
@@ -1568,6 +1568,7 @@ function renderListView(cfg) {
   const isAdmin = state.user.role === "Admin";
   const mobile = isMobileViewport();
 
+  // Phase 15: ปุ่ม "+ เพิ่มสต๊อก" ถูกย้ายไปรวมไว้ที่หน้า "จัดการ Stock/อะไหล่" หน้าเดียวแล้ว (ไม่มีปุ่มแยกในหน้านี้อีกต่อไป)
   content.innerHTML = `
     <div class="controls-row">
       <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)">
@@ -1820,7 +1821,7 @@ function renderPartsListView(viewKey, cfg) {
         </table>
       </div>
     </div>`}
-    ${isAdmin ? `<div class="cache-note" style="margin-top:10px;">ต้องการเพิ่มอะไหล่ใหม่หรือเติมสต็อก? ไปที่เมนู "จัดการอะไหล่"</div>` : ""}
+    ${isAdmin ? `<div class="cache-note" style="margin-top:10px;">ต้องการเพิ่มอะไหล่ใหม่หรือเติมสต็อก? ไปที่เมนู "จัดการ Stock/อะไหล่"</div>` : ""}
   `;
 
   document.getElementById("searchBox").addEventListener("input", () => renderRows(cfg, rows, isAdmin));
@@ -1932,31 +1933,69 @@ function renderPartHistoryBody(logs, emptyMessage) {
 // ============================================================
 // Phase 8: จัดการอะไหล่ (Admin เท่านั้น) — เพิ่มอะไหล่ใหม่ / เติมของที่มีอยู่แล้ว
 // ============================================================
+// Phase 15: เลือกประเภทที่จะเพิ่มสต๊อกจากตัวเลือกบนสุดของหน้า "จัดการ Stock/อะไหล่" — คำตอบของคำถาม
+// "ระบบจะรู้ได้อย่างไรว่าเป็นเครื่องอะไร" คือ Admin เป็นผู้เลือกเองตรงนี้เสมอ ระบบไม่เดาประเภทให้
+const MANAGE_STOCK_ASSET_TYPES = [
+  { value: "moisturlyzer", label: "MoisturLyzer" },
+  { value: "gateway", label: "Gateway" },
+  { value: "simcard", label: "SimCard" },
+  { value: "colorSorterParts", label: "อะไหล่ Color Sorter" },
+  { value: "panolyzerParts", label: "อะไหล่ Panolyzer" },
+];
+let mpAssetType = "moisturlyzer";
+
 let managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "" };
 
 function renderManagePartsView() {
   const content = document.getElementById("viewContent");
-  const f = managePartsForm;
 
   content.innerHTML = `
     <div class="form-card">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-        <h3 style="margin:0;">จัดการอะไหล่ Color Sorter / Panolyzer</h3>
+        <h3 style="margin:0;">จัดการ Stock/อะไหล่</h3>
         <button class="btn-sm btn-secondary" onclick="showPartsActivityFeed()">ดูประวัติอะไหล่ล่าสุดทั้งหมด</button>
       </div>
-      <div class="picker-row" style="margin:14px 0;">
-        <select id="mp-mode">
-          <option value="new" ${f.mode === "new" ? "selected" : ""}>+ เพิ่มอะไหล่ใหม่ (ชื่อที่ยังไม่เคยมีในระบบ)</option>
-          <option value="restock" ${f.mode === "restock" ? "selected" : ""}>เติมของอะไหล่ที่มีอยู่แล้ว</option>
+      <div class="form-field" style="margin:14px 0;">
+        <label>เลือกประเภทที่จะเพิ่มสต๊อก *</label>
+        <select id="mp-assetType">
+          ${MANAGE_STOCK_ASSET_TYPES.map((t) => `<option value="${t.value}" ${t.value === mpAssetType ? "selected" : ""}>${escapeHtml(t.label)}</option>`).join("")}
         </select>
       </div>
-      <div id="mp-formArea"></div>
-      <div id="mp-msg" class="form-msg"></div>
-      <button class="btn-primary" id="mp-submitBtn" style="margin-top:12px;">บันทึก</button>
+      <div id="mp-subArea"></div>
     </div>
   `;
 
-  document.getElementById("mp-mode").addEventListener("change", (e) => { f.mode = e.target.value; renderManagePartsFormArea(); });
+  document.getElementById("mp-assetType").addEventListener("change", (e) => { mpAssetType = e.target.value; renderMpSubArea(); });
+  renderMpSubArea();
+}
+
+/** สลับเนื้อหาส่วนล่างของหน้าตามประเภทที่เลือกไว้บนสุด — MoisturLyzer/Gateway/SimCard ใช้ฟอร์มเพิ่มสต๊อกแบบตะกร้าใหม่
+ * ส่วนอะไหล่ Color Sorter/Panolyzer ยังคงใช้ระบบ new/restock เดิมทุกประการ แค่ย้ายมาอยู่ใต้ตัวเลือกนี้เท่านั้น */
+function renderMpSubArea() {
+  const area = document.getElementById("mp-subArea");
+  if (mpAssetType === "colorSorterParts" || mpAssetType === "panolyzerParts") {
+    managePartsForm.category = mpAssetType === "colorSorterParts" ? "ColorSorter" : "Panolyzer";
+    renderPartsSubUI(area);
+  } else {
+    renderAddStockInlineUI(area, mpAssetType);
+  }
+}
+
+function renderPartsSubUI(area) {
+  const f = managePartsForm;
+  area.innerHTML = `
+    <div class="picker-row" style="margin-bottom:14px;">
+      <select id="mp-mode">
+        <option value="new" ${f.mode === "new" ? "selected" : ""}>+ เพิ่มอะไหล่ใหม่ (ชื่อที่ยังไม่เคยมีในระบบ)</option>
+        <option value="restock" ${f.mode === "restock" ? "selected" : ""}>เติมของอะไหล่ที่มีอยู่แล้ว</option>
+      </select>
+    </div>
+    <div id="mp-formArea"></div>
+    <div id="mp-msg" class="form-msg"></div>
+    <button class="btn-primary" id="mp-submitBtn" style="margin-top:12px;">บันทึก</button>
+  `;
+
+  document.getElementById("mp-mode").addEventListener("change", (e) => { f.mode = e.target.value; f.serials = [""]; renderManagePartsFormArea(); });
   document.getElementById("mp-submitBtn").addEventListener("click", submitManagePartsForm);
   renderManagePartsFormArea();
 }
@@ -1973,13 +2012,6 @@ function renderManagePartsFormArea() {
           <input type="text" id="mp-partName" value="${escapeAttr(f.partName)}" placeholder="เช่น สายพาน Color Sorter">
         </div>
         <div class="form-field">
-          <label>หมวดหมู่ *</label>
-          <select id="mp-category">
-            <option value="ColorSorter" ${f.category === "ColorSorter" ? "selected" : ""}>อะไหล่ Color Sorter</option>
-            <option value="Panolyzer" ${f.category === "Panolyzer" ? "selected" : ""}>อะไหล่ Panolyzer</option>
-          </select>
-        </div>
-        <div class="form-field">
           <label>มี S/N (Serial Number) เฉพาะชิ้นหรือไม่? *</label>
           <select id="mp-hasSerial">
             <option value="no" ${f.hasSerial === "no" ? "selected" : ""}>ไม่มี — นับจำนวนรวม</option>
@@ -1990,8 +2022,7 @@ function renderManagePartsFormArea() {
       <div id="mp-qtyOrSerialArea"></div>
     `;
     document.getElementById("mp-partName").addEventListener("input", (e) => { f.partName = e.target.value; });
-    document.getElementById("mp-category").addEventListener("change", (e) => { f.category = e.target.value; });
-    document.getElementById("mp-hasSerial").addEventListener("change", (e) => { f.hasSerial = e.target.value; renderQtyOrSerialArea(); });
+    document.getElementById("mp-hasSerial").addEventListener("change", (e) => { f.hasSerial = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
     renderQtyOrSerialArea();
   } else {
     const allParts = [...getQtyPartsForCategory("ColorSorter"), ...getSerialPartsForCategory("ColorSorter"),
@@ -2012,7 +2043,7 @@ function renderManagePartsFormArea() {
       </div>
       <div id="mp-qtyOrSerialArea"></div>
     `;
-    document.getElementById("mp-restockPartId").addEventListener("change", (e) => { f.restockPartId = e.target.value; renderQtyOrSerialArea(); });
+    document.getElementById("mp-restockPartId").addEventListener("change", (e) => { f.restockPartId = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
     renderQtyOrSerialArea();
   }
 }
@@ -2024,6 +2055,17 @@ function currentManagePartsHasSerial() {
   return part ? String(part.HasSerial).toLowerCase() === "yes" : false;
 }
 
+/** หมวดอะไหล่ปัจจุบัน (ใช้หา key ของ state.data ที่เก็บ S/N รายชิ้นจริง สำหรับเช็คซ้ำฝั่ง client ตอนเพิ่มลงตะกร้า) */
+function currentManagePartsCategory() {
+  const f = managePartsForm;
+  if (f.mode === "new") return f.category;
+  const part = (state.data.partsCatalog || []).find((p) => p.PartID === f.restockPartId);
+  return part ? part.Category : f.category;
+}
+
+/** Phase 15: ใช้ระบบ "ตะกร้า" แบบเดียวกับหน้าเพิ่มสต๊อก MoisturLyzer/Gateway — กรอก S/N ทีละชิ้นแล้วกด Enter/+ เพิ่ม
+ * รองรับรับของเข้าคลังทีเดียวหลายชิ้น (บางครั้ง 1-2 ชิ้น บางครั้ง 10-20 ชิ้น) แทนแบบเดิมที่ต้องกดเพิ่มแถวอินพุตว่างทีละแถว
+ * managePartsForm.serials ยังเป็นโครงสร้างเดิม (array ของ string) — submitManagePartsForm() ด้านล่างไม่ต้องแก้อะไรเลย */
 function renderQtyOrSerialArea() {
   const area = document.getElementById("mp-qtyOrSerialArea");
   if (!area) return;
@@ -2033,20 +2075,26 @@ function renderQtyOrSerialArea() {
   if (hasSerial) {
     area.innerHTML = `
       <div class="form-field">
-        <label>เลข S/N ของแต่ละชิ้น (กรอกทีละชิ้น) *</label>
-        <div id="mp-serialRows">
-          ${f.serials.map((s, i) => `
-            <div class="picker-row" style="margin-bottom:6px;">
-              <input type="text" class="mp-serial-input" data-idx="${i}" value="${escapeAttr(s)}" placeholder="เช่น SNS-001">
-              ${f.serials.length > 1 ? `<button type="button" class="btn-sm btn-remove" onclick="removeSerialRow(${i})">ลบแถว</button>` : ""}
-            </div>`).join("")}
+        <label>S/N ของแต่ละชิ้น *</label>
+        <div class="picker-row" style="margin-top:2px;">
+          <input type="text" id="mp-serialInput" placeholder="กรอก S/N แล้วกด Enter หรือ + เพิ่ม เช่น SNS-001">
+          <button type="button" class="btn-sm btn-add" id="mp-addSerialBtn">+ เพิ่ม</button>
         </div>
-        <button type="button" class="btn-sm btn-secondary" onclick="addSerialRow()">+ เพิ่มอีกแถว</button>
+        <div class="table-card" style="margin-top:8px;">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>#</th><th>S/N</th><th></th></tr></thead>
+              <tbody id="mp-serialBasketBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="cache-note" id="mp-serialCountNote" style="margin-top:6px;"></div>
       </div>
     `;
-    area.querySelectorAll(".mp-serial-input").forEach((el) => {
-      el.addEventListener("input", (e) => { f.serials[Number(e.target.dataset.idx)] = e.target.value; });
-    });
+    const serialInput = document.getElementById("mp-serialInput");
+    serialInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addManagePartsSerial(); } });
+    document.getElementById("mp-addSerialBtn").addEventListener("click", addManagePartsSerial);
+    renderManagePartsSerialBasket();
   } else {
     area.innerHTML = `
       <div class="form-field">
@@ -2058,15 +2106,52 @@ function renderQtyOrSerialArea() {
   }
 }
 
-function addSerialRow() {
-  managePartsForm.serials.push("");
-  renderQtyOrSerialArea();
+/** เพิ่ม S/N จากช่องกรอกลงตะกร้า — เช็คซ้ำทั้งกับที่มีอยู่แล้วในระบบ (cache ฝั่ง client ของหมวดอะไหล่นั้นๆ) และซ้ำกันเอง
+ * ในตะกร้าก่อนเพิ่ม (ตอบไว) ผลชี้ขาดจริงยังเช็คซ้ำอีกทีที่เซิร์ฟเวอร์เสมอ (handleAddPart/handleRestockPart) */
+function addManagePartsSerial() {
+  const input = document.getElementById("mp-serialInput");
+  const msg = document.getElementById("mp-msg");
+  const serial = input.value.trim();
+  msg.className = "form-msg";
+  msg.textContent = "";
+  if (!serial) return;
+
+  const f = managePartsForm;
+  const dupInBasket = f.serials.some((s) => s.trim().toLowerCase() === serial.toLowerCase());
+  if (dupInBasket) {
+    msg.className = "form-msg error";
+    msg.textContent = `"${serial}" ถูกเพิ่มไว้ในตะกร้าแล้ว`;
+    return;
+  }
+  const dataKey = currentManagePartsCategory() === "Panolyzer" ? "panolyzerParts" : "colorSorterParts";
+  const dupInSystem = (state.data[dataKey] || []).some((r) => String(r.SerialNo || "").trim().toLowerCase() === serial.toLowerCase());
+  if (dupInSystem) {
+    msg.className = "form-msg error";
+    msg.textContent = `S/N "${serial}" นี้มีอยู่ในระบบแล้ว กรุณาตรวจสอบอีกครั้ง`;
+    return;
+  }
+
+  // ค่าเริ่มต้นของฟอร์มคือ serials: [""] (แถวว่าง 1 แถว) — ตัดค่าว่างทิ้งก่อนเพิ่มจริงชิ้นแรก
+  f.serials = f.serials.filter((s) => s.trim());
+  f.serials.push(serial);
+  input.value = "";
+  renderManagePartsSerialBasket();
+  input.focus();
 }
 
-function removeSerialRow(idx) {
+function removeManagePartsSerial(idx) {
   managePartsForm.serials.splice(idx, 1);
-  if (!managePartsForm.serials.length) managePartsForm.serials = [""];
-  renderQtyOrSerialArea();
+  renderManagePartsSerialBasket();
+}
+
+function renderManagePartsSerialBasket() {
+  const tbody = document.getElementById("mp-serialBasketBody");
+  if (!tbody) return;
+  const serials = managePartsForm.serials.filter((s) => s.trim());
+  tbody.innerHTML = serials.length
+    ? serials.map((s, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(s)}</td><td class="no-wrap"><button type="button" class="btn-sm btn-remove" onclick="removeManagePartsSerial(${i})">ลบ</button></td></tr>`).join("")
+    : `<tr><td colspan="3" class="cache-note" style="text-align:center; padding:12px;">ยังไม่มีรายการ — กรอก S/N แล้วกด "+ เพิ่ม"</td></tr>`;
+  document.getElementById("mp-serialCountNote").textContent = `รวมทั้งหมด ${serials.length} ชิ้น`;
 }
 
 async function submitManagePartsForm() {
@@ -2109,7 +2194,7 @@ async function submitManagePartsForm() {
     }
 
     await refreshInBackground(true);
-    managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "" };
+    managePartsForm = { mode: "new", partName: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "" };
     renderManagePartsView();
     const freshMsg = document.getElementById("mp-msg");
     freshMsg.className = "form-msg success";
@@ -2204,6 +2289,241 @@ function openEditAsset(assetKey, serial) {
   });
 }
 
+/** Phase 15: เพิ่มสต๊อก MoisturLyzer/Gateway/SimCard ใหม่เข้าคลังทันที (Admin เท่านั้น) — แบบ "ตะกร้า" ฝังอยู่ในหน้า
+ * "จัดการ Stock/อะไหล่" โดยตรง (ไม่ใช้โมดัลเหมือนเดิมอีกต่อไป เพราะย้ายมารวมกับหน้าเต็มหน้าแล้ว) เพราะบางครั้งรับของ
+ * จริงเข้าคลังแค่ 1-2 ชิ้น แต่บางครั้งรับมาทีเดียว 10-20 ชิ้น กรอกฟิลด์ที่ใช้ร่วมกันทั้งล็อต (Products_Name/Model/
+ * MFD/Lot_No. ของ MoisturLyzer, Model ของ Gateway, SimCard ไม่มีฟิลด์ร่วมเลย) แค่ครั้งเดียว แล้วเพิ่มทีละชิ้นลงตะกร้า
+ * ได้เรื่อยๆ ก่อนกดบันทึกทั้งหมดพร้อมกัน (all-or-nothing — ถ้ามีชิ้นไหนซ้ำ เซิร์ฟเวอร์จะไม่บันทึกอะไรเลยสักแถว)
+ * itemFields = ฟิลด์ที่ต่างกันต่อชิ้น (MoisturLyzer/Gateway มี 1 ฟิลด์ เช่น Product ID / S/N Gateway; SimCard มี 2
+ * ฟิลด์คือ S/N ซิม + Mobile No. กรอกคู่กันเสมอเพราะทราบเบอร์ตั้งแต่รับซิมมาแล้ว — ไม่มีฟิลด์ Activate_date ในฟอร์มนี้
+ * เลยตามที่ตั้งใจ ปล่อยว่างไว้จนกว่า AIS จะ Activate แล้วค่อยแก้ไขทีหลัง) */
+const ADDSTOCK_ITEM_FIELD_DEFS = {
+  moisturlyzer: [{ field: "Product ID", label: "Product ID" }],
+  gateway: [{ field: "S/N Gateway", label: "S/N Gateway" }],
+  simcard: [{ field: "S/N", label: "S/N ซิม" }, { field: "Mobile No.", label: "เบอร์โทร" }],
+};
+
+let addStockForm = { assetKey: null, cfg: null, commonFields: [], common: {}, itemFields: [], items: [] };
+
+function renderAddStockInlineUI(area, assetKey) {
+  const cfg = VIEW_CONFIG[assetKey];
+  let commonFields;
+
+  if (assetKey === "moisturlyzer") {
+    commonFields = [
+      { key: "Products_Name", label: "ชื่อสินค้า *", value: "MoisturLyzer" },
+      { key: "Model", label: "รุ่น (Model) *", value: "" },
+      { key: "MFD", label: "MFD (วันที่ผลิต) — ใช้ค่าเดียวกันทั้งตะกร้า", value: "" },
+      { key: "Lot_No.", label: "Lot No. — ใช้ค่าเดียวกันทั้งตะกร้า", value: "" },
+    ];
+  } else if (assetKey === "gateway") {
+    commonFields = [
+      {
+        key: "Model", label: "รุ่น (Model) * — ใช้รุ่นเดียวกันทั้งตะกร้า", type: "select", value: GATEWAY_MODEL_MOISTURLYZER,
+        options: [
+          { value: GATEWAY_MODEL_MOISTURLYZER, label: "EPG-001B — ใช้กับ MoisturLyzer (เลือกจากสต็อกได้ตอนเบิก)" },
+          { value: GATEWAY_MODEL_PANOLYZER, label: "EPG-001S — ใช้กับ Panolyzer (นับสต็อกไว้เฉยๆ)" },
+        ],
+      },
+    ];
+  } else if (assetKey === "simcard") {
+    commonFields = []; // SimCard ไม่มีฟิลด์ร่วม (ไม่มีแนวคิด Model/MFD เหมือน MoisturLyzer/Gateway)
+  } else {
+    return; // ไม่รองรับประเภทอื่น (อะไหล่ใช้ renderPartsSubUI แทน)
+  }
+
+  const itemFields = ADDSTOCK_ITEM_FIELD_DEFS[assetKey];
+  addStockForm = {
+    assetKey, cfg, commonFields, itemFields,
+    common: Object.fromEntries(commonFields.map((f) => [f.key, f.value])),
+    items: [],
+  };
+
+  const commonFieldsHtml = commonFields.map((f, i) => {
+    if (f.type === "select") {
+      return `<div class="form-field">
+        <label>${escapeHtml(f.label)}</label>
+        <select id="as-common-${i}">
+          ${f.options.map((o) => `<option value="${escapeAttr(o.value)}" ${o.value === addStockForm.common[f.key] ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
+        </select>
+      </div>`;
+    }
+    return `<div class="form-field">
+      <label>${escapeHtml(f.label)}</label>
+      <input type="text" id="as-common-${i}" value="${escapeAttr(addStockForm.common[f.key] || "")}">
+    </div>`;
+  }).join("");
+
+  const itemInputsHtml = itemFields.map((f, i) => `
+    <div class="form-field">
+      <label>${escapeHtml(f.label)} *</label>
+      <input type="text" id="as-item-${i}" placeholder="กรอก${escapeHtml(f.label)}">
+    </div>
+  `).join("");
+
+  area.innerHTML = `
+    ${commonFields.length ? `<div class="form-grid full">${commonFieldsHtml}</div>` : ""}
+    <div class="picker-row" style="margin-top:2px; align-items:flex-end;">
+      ${itemInputsHtml}
+      <button type="button" class="btn-sm btn-add" id="as-addBtn">+ เพิ่ม</button>
+    </div>
+    <div class="table-card" style="margin-top:10px;">
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>#</th>${itemFields.map((f) => `<th>${escapeHtml(f.label)}</th>`).join("")}<th></th></tr></thead>
+          <tbody id="as-basketBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cache-note" id="as-countNote" style="margin-top:8px;"></div>
+    <div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">
+      ${escapeHtml(cfg.title)}ทุกชิ้นที่เพิ่มจะเข้าสถานะ "Stock" ทันที — พร้อมให้เลือกเบิกได้เลยโดยไม่ต้องรออนุมัติ
+    </div>
+    ${assetKey === "gateway" ? `<div class="form-msg" id="as-gatewayWarn" style="display:none; background:#FFF4E5; color:#8a5300; margin-top:8px;">
+      รุ่น EPG-001S ยังไม่ถูกดึงมาใช้ในขั้นตอนเบิก Panolyzer (ระบบเบิกยังใช้การกรอก S/N อิสระเหมือนเดิม) — เพิ่มไว้ก่อนเพื่อการนับสต็อกเท่านั้น
+    </div>` : ""}
+    ${assetKey === "simcard" ? `<div class="form-msg" style="display:block; background:#FFF4E5; color:#8a5300; margin-top:8px;">
+      หมายเหตุ: ไม่ต้องกรอกวันที่เปิดใช้บริการ (Activate_date) ที่นี่ — ซิมจะเข้าสถานะ "Stock" แต่ยังเบิกไม่ได้จนกว่าจะแก้ไขวันที่ Activate ทีหลัง (หลัง AIS เปิดใช้งานจริง)
+    </div>` : ""}
+    <div id="as-msg" class="form-msg"></div>
+    <button class="btn-primary" id="as-submitBtn" style="margin-top:12px;">บันทึกเข้าสต๊อก</button>
+  `;
+
+  commonFields.forEach((f, i) => {
+    const el = document.getElementById(`as-common-${i}`);
+    el.addEventListener(f.type === "select" ? "change" : "input", (e) => {
+      addStockForm.common[f.key] = e.target.value;
+      if (assetKey === "gateway" && f.key === "Model") syncGatewayAddStockWarn();
+    });
+  });
+
+  itemFields.forEach((f, i) => {
+    document.getElementById(`as-item-${i}`).addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addItemToAddStockBasket(); }
+    });
+  });
+  document.getElementById("as-addBtn").addEventListener("click", addItemToAddStockBasket);
+  document.getElementById("as-submitBtn").addEventListener("click", submitAddStockBasket);
+
+  if (assetKey === "gateway") syncGatewayAddStockWarn();
+  renderAddStockBasketOnly();
+}
+
+function syncGatewayAddStockWarn() {
+  const warn = document.getElementById("as-gatewayWarn");
+  if (warn) warn.style.display = addStockForm.common.Model === GATEWAY_MODEL_PANOLYZER ? "block" : "none";
+}
+
+/** เพิ่ม 1 ชิ้นจากช่องกรอก (1 หรือ 2 ฟิลด์แล้วแต่ประเภท) ลงตะกร้า — เช็คซ้ำทั้งกับของที่มีอยู่แล้วในระบบ (cache ฝั่ง
+ * client) และซ้ำกันเองในตะกร้า ก่อนเพิ่ม (ตอบไวไม่ต้องรอเซิร์ฟเวอร์) เช็คแยกอิสระต่อฟิลด์ (SimCard: S/N กับ Mobile No.
+ * คนละชุด) ผลชี้ขาดจริงยังเช็คซ้ำอีกทีตอนกดบันทึกที่เซิร์ฟเวอร์เสมอ */
+function addItemToAddStockBasket() {
+  const { itemFields, items, assetKey } = addStockForm;
+  const msg = document.getElementById("as-msg");
+  msg.className = "form-msg";
+  msg.textContent = "";
+
+  const values = itemFields.map((f, i) => document.getElementById(`as-item-${i}`).value.trim());
+  if (values.every((v) => !v)) return; // ยังไม่ได้กรอกอะไรเลยสักฟิลด์ — เงียบๆ ไม่ต้องขึ้น error
+  if (values.some((v) => !v)) {
+    msg.className = "form-msg error";
+    msg.textContent = `กรุณากรอก ${itemFields.map((f) => f.label).join(" และ ")} ให้ครบทุกช่อง`;
+    return;
+  }
+
+  const candidate = {};
+  itemFields.forEach((f, i) => { candidate[f.field] = values[i]; });
+
+  for (const f of itemFields) {
+    const dupInBasket = items.some((it) => it[f.field].toLowerCase() === candidate[f.field].toLowerCase());
+    if (dupInBasket) {
+      msg.className = "form-msg error";
+      msg.textContent = `"${candidate[f.field]}" (${f.label}) ถูกเพิ่มไว้ในตะกร้าแล้ว`;
+      return;
+    }
+  }
+  const existingRows = state.data[assetKey] || [];
+  for (const f of itemFields) {
+    const dupInSystem = existingRows.some((r) => String(r[f.field] || "").trim().toLowerCase() === candidate[f.field].toLowerCase());
+    if (dupInSystem) {
+      msg.className = "form-msg error";
+      msg.textContent = `"${candidate[f.field]}" (${f.label}) มีอยู่ในระบบแล้ว กรุณาตรวจสอบอีกครั้ง`;
+      return;
+    }
+  }
+
+  items.push(candidate);
+  itemFields.forEach((f, i) => { document.getElementById(`as-item-${i}`).value = ""; });
+  renderAddStockBasketOnly();
+  document.getElementById("as-item-0").focus();
+}
+
+function removeAddStockItem(index) {
+  addStockForm.items.splice(index, 1);
+  renderAddStockBasketOnly();
+}
+
+/** รีเรนเดอร์เฉพาะตารางตะกร้า + ตัวนับจำนวน + ข้อความปุ่มบันทึก (ไม่แตะฟิลด์ร่วมด้านบน กันเสียโฟกัสตอนพิมพ์) */
+function renderAddStockBasketOnly() {
+  const { items, itemFields } = addStockForm;
+  const tbody = document.getElementById("as-basketBody");
+  const colCount = itemFields.length + 2;
+  tbody.innerHTML = items.length
+    ? items.map((it, i) => `<tr><td>${i + 1}</td>${itemFields.map((f) => `<td>${escapeHtml(it[f.field])}</td>`).join("")}<td class="no-wrap"><button type="button" class="btn-sm btn-remove" onclick="removeAddStockItem(${i})">ลบ</button></td></tr>`).join("")
+    : `<tr><td colspan="${colCount}" class="cache-note" style="text-align:center; padding:14px;">ยังไม่มีรายการ — กรอก${itemFields.map((f) => f.label).join("/")}แล้วกด "+ เพิ่ม"</td></tr>`;
+  document.getElementById("as-countNote").textContent = `รวมทั้งหมด ${items.length} ชิ้น`;
+  document.getElementById("as-submitBtn").textContent = items.length ? `บันทึกเข้าสต๊อกทั้งหมด (${items.length} ชิ้น)` : "บันทึกเข้าสต๊อก";
+}
+
+async function submitAddStockBasket() {
+  const msg = document.getElementById("as-msg");
+  const saveBtn = document.getElementById("as-submitBtn");
+  msg.className = "form-msg";
+  msg.textContent = "";
+  const { cfg, commonFields, common, items } = addStockForm;
+
+  const missingCommon = commonFields.some((f) => f.label.indexOf("*") !== -1 && !String(common[f.key] || "").trim());
+  if (missingCommon) {
+    msg.className = "form-msg error";
+    msg.textContent = "กรุณากรอกข้อมูลในช่องที่มี * ให้ครบ";
+    return;
+  }
+  if (!items.length) {
+    msg.className = "form-msg error";
+    msg.textContent = "กรุณาเพิ่มรายการอย่างน้อย 1 รายการลงตะกร้าก่อน";
+    return;
+  }
+
+  const originalText = saveBtn.textContent;
+  saveBtn.disabled = true;
+  saveBtn.textContent = "กำลังบันทึก...";
+  try {
+    const res = await apiPost({ action: "addStock", token: state.token, assetType: cfg.assetType, common, items });
+    if (!res.ok) {
+      if (res.error === "unauthorized") return handleUnauthorized();
+      const conflictMsg = res.conflicts ? " (" + res.conflicts.join(", ") + ")" : "";
+      msg.className = "form-msg error";
+      msg.textContent = assetErrorMessage(res.error) + conflictMsg;
+      return;
+    }
+    await refreshInBackground(true);
+    renderManagePartsView();
+    const freshMsg = document.getElementById("as-msg");
+    if (freshMsg) {
+      freshMsg.className = "form-msg success";
+      freshMsg.textContent = "บันทึกสำเร็จ";
+    }
+  } catch (err) {
+    msg.className = "form-msg error";
+    msg.textContent = err.message || "เกิดข้อผิดพลาด กรุณาลองใหม่";
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = originalText;
+    }
+  }
+}
+
 async function deleteAsset(assetKey, serial) {
   const cfg = VIEW_CONFIG[assetKey];
   const confirmed = await showConfirm(`ยืนยันลบ ${cfg.title} — ${serial}? การลบไม่สามารถย้อนกลับได้`, { type: "warning", okText: "ลบเลย", danger: true });
@@ -2227,6 +2547,11 @@ function assetErrorMessage(code) {
     case "asset_in_use": return "ไม่สามารถลบได้ — อุปกรณ์นี้กำลังอยู่ระหว่างรออนุมัติ/เบิกใช้งานอยู่ กรุณาคืนของหรือปฏิเสธคำขอที่เกี่ยวข้องก่อน";
     case "duplicate_serial": return "Serial นี้ซ้ำกับอุปกรณ์อื่นที่มีอยู่แล้วในระบบ";
     case "not_found": return "ไม่พบอุปกรณ์นี้ในระบบ (อาจถูกลบไปแล้ว)";
+    case "forbidden": return "การดำเนินการนี้สำหรับ Admin เท่านั้น";
+    case "missing_fields": return "กรอกข้อมูลไม่ครบ";
+    case "invalid_asset_type": return "ประเภทอุปกรณ์นี้ไม่รองรับการเพิ่มสต๊อกด้วยฟอร์มนี้";
+    case "invalid_model": return "กรุณาเลือกรุ่น (Model) ให้ถูกต้อง";
+    case "item_conflict": return "มีรายการที่ซ้ำในตะกร้า กรุณาตรวจสอบ";
     default: return "ดำเนินการไม่สำเร็จ กรุณาลองใหม่";
   }
 }
