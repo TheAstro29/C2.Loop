@@ -1484,7 +1484,34 @@ function printSlip(transactionId) {
 
   document.getElementById("printSlipRoot").innerHTML = html;
   document.body.classList.add("print-slip-active");
-  window.print();
+  printAfterImagesLoad(document.getElementById("printSlipRoot"));
+}
+
+/**
+ * Phase 17: แก้ปัญหาโลโก้หายตอนสั่งพิมพ์ครั้งแรก — สาเหตุคือ <img> ของโลโก้เพิ่งถูกใส่เข้า DOM ผ่าน
+ * innerHTML ก่อนหน้านี้เพียงเสี้ยววินาที แล้วเรียก window.print() ทันที โดยที่รูปยังโหลดไม่เสร็จ (โดยเฉพาะ
+ * ครั้งแรกที่เปิดแอปที่เบราว์เซอร์ยังไม่เคย cache รูปนี้ไว้) พอถึงจังหวะที่เบราว์เซอร์ capture หน้าไปพิมพ์
+ * รูปเลยยังไม่มา — ครั้งต่อๆ ไปรูปถูก cache ไว้แล้วเลยโหลดทันจนดูเหมือนไม่มีปัญหา ทางแก้คือรอให้ <img>
+ * ทุกตัวในใบเบิก โหลดเสร็จ (หรือ error ก็ไม่เป็นไร ไม่ให้ค้าง) ก่อนค่อยเรียก window.print() จริง
+ */
+function printAfterImagesLoad(container) {
+  const imgs = Array.from(container.querySelectorAll("img"));
+  let printed = false;
+  const doPrint = () => {
+    if (printed) return;
+    printed = true;
+    window.print();
+  };
+  const pending = imgs.filter((img) => !img.complete);
+  if (!pending.length) { doPrint(); return; }
+  let remaining = pending.length;
+  pending.forEach((img) => {
+    const markDone = () => { remaining -= 1; if (remaining <= 0) doPrint(); };
+    img.addEventListener("load", markDone, { once: true });
+    img.addEventListener("error", markDone, { once: true });
+  });
+  // กันเหนียว — เผื่อโหลดรูปไม่สำเร็จ/ช้าผิดปกติ ไม่ให้ผู้ใช้กดพิมพ์ไม่ได้เลย
+  setTimeout(doPrint, 1500);
 }
 
 /**
@@ -1502,7 +1529,20 @@ function printSlipViaPopup(html) {
   popup.document.close();
   setTimeout(() => {
     popup.focus();
-    popup.print();
+    // Phase 17: รอให้โลโก้ในหน้าต่าง popup โหลดเสร็จก่อนสั่งพิมพ์ กันปัญหาเดียวกับ printSlip() หลัก
+    // (รูปยังโหลดไม่เสร็จตอน capture พิมพ์ครั้งแรกที่ยังไม่มี cache)
+    const imgs = Array.from(popup.document.querySelectorAll("img"));
+    let printed = false;
+    const doPrint = () => { if (printed) return; printed = true; popup.print(); };
+    const pending = imgs.filter((img) => !img.complete);
+    if (!pending.length) { doPrint(); return; }
+    let remaining = pending.length;
+    pending.forEach((img) => {
+      const markDone = () => { remaining -= 1; if (remaining <= 0) doPrint(); };
+      img.addEventListener("load", markDone, { once: true });
+      img.addEventListener("error", markDone, { once: true });
+    });
+    setTimeout(doPrint, 1500);
   }, 300);
 }
 
