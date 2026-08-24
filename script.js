@@ -152,6 +152,11 @@ const PART_CATEGORY_BY_VIEW = {
   colorSorterParts: "ColorSorter",
   panolyzerParts: "Panolyzer",
 };
+// ป้ายกำกับ "เป็นอะไหล่ของอุปกรณ์อะไร" สำหรับแสดงคู่กับชื่ออะไหล่ในประวัติ/ใบเบิก (ดูฟังก์ชัน formatItemLabel)
+const PART_QTY_DEVICE_LABEL = {
+  ColorSorterPartQty: "Color Sorter",
+  PanolyzerPartQty: "Panolyzer",
+};
 
 // ประเภทอุปกรณ์ที่สามารถเลือก Serial เจาะจงมาผูก (เชื่อมโยง/sync) ตอนเบิก Gateway/SimCard ได้ — ต้องตรงกับ
 // LINKABLE_TARGET_ASSET_TYPE ฝั่ง Code.gs (Phase 5)
@@ -1443,7 +1448,7 @@ function printSlip(transactionId) {
         <colgroup><col class="slip-col-no"><col class="slip-col-type"><col class="slip-col-serial"><col class="slip-col-qty"></colgroup>
         <thead><tr><th>#</th><th>ประเภทอุปกรณ์</th><th>Serial</th><th>จำนวน</th></tr></thead>
         <tbody>
-          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${formatItemLabel(i, { withQty: false })}</td><td>${escapeHtml(i.SerialNo)}</td><td>${escapeHtml(String(i.AssetType === "Other" ? (Number(i.Quantity) || 1) : 1))}</td></tr>`).join("")}
+          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${formatItemLabel(i, { withQty: false })}</td><td>${formatItemSerialLabel(i)}</td><td>${escapeHtml(String(i.AssetType === "Other" || PART_QTY_DEVICE_LABEL[i.AssetType] ? (Number(i.Quantity) || 1) : 1))}</td></tr>`).join("")}
         </tbody>
       </table>
       <div class="slip-table-summary">รวมทั้งหมด ${items.length} รายการ</div>
@@ -3175,7 +3180,22 @@ function formatItemLabel(item, opts) {
     const qtyTag = withQty && qty > 1 ? ` <span class="cache-note">(จำนวน ${qty} ชิ้น)</span>` : "";
     return escapeHtml(item.ItemName || "อื่นๆ") + ` <span class="cache-note">(นอกระบบ)</span>` + qtyTag;
   }
+  // Phase 8: อะไหล่แบบนับจำนวน (ไม่มี S/N) — SerialNo ในรายการนี้คือ PartID ภายในระบบ ไม่ใช่ชื่อที่อ่านรู้เรื่อง
+  // จึงต้องใช้ ItemName (ชื่ออะไหล่จริงที่บันทึกไว้ตอนเบิก) พร้อมกำกับว่าเป็นอะไหล่ของอุปกรณ์ชนิดใด
+  const deviceLabel = PART_QTY_DEVICE_LABEL[item.AssetType];
+  if (deviceLabel) {
+    const qty = Number(item.Quantity) || 1;
+    const qtyTag = withQty && qty > 1 ? ` <span class="cache-note">(จำนวน ${qty} ชิ้น)</span>` : "";
+    return escapeHtml(item.ItemName || "อะไหล่") + ` <span class="cache-note">(อะไหล่ ${deviceLabel})</span>` + qtyTag;
+  }
   return escapeHtml(item.AssetType);
+}
+
+/** ข้อความแทน "Serial" สำหรับแสดงในประวัติ/ใบเบิก — อะไหล่แบบนับจำนวนไม่มี S/N จริง (SerialNo คือ PartID ภายใน
+ * ไม่ควรโชว์ให้ผู้อ่านเห็น) จึงแสดงเป็นจำนวนที่เบิกแทน ส่วนประเภทอื่นยังคงแสดง Serial จริงตามปกติ */
+function formatItemSerialLabel(item) {
+  if (PART_QTY_DEVICE_LABEL[item.AssetType]) return "-";
+  return escapeHtml(item.SerialNo);
 }
 
 /** สร้างข้อความ "(เชื่อมกับ Gateway — เครื่อง MZ-002)" สำหรับแสดงในประวัติ/ใบเบิก — รวม ConnectSerial ถ้ามีการระบุเครื่องเจาะจงไว้ */
@@ -3238,7 +3258,7 @@ function renderApprovalsView() {
         </div>
         ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
         <div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)} — ${escapeHtml(i.SerialNo)}${formatConnectInfo(i)}</div>`).join("")}
+          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}</div>`).join("")}
         </div>
         ${txn._pendingSync
           ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์ก่อนจึงจะอนุมัติได้</div>`
@@ -3440,7 +3460,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
         </div>
         ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
         <div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)} — ${escapeHtml(i.SerialNo)}${formatConnectInfo(i)}</div>`).join("")}
+          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}</div>`).join("")}
         </div>
         <div class="txn-actions">
           ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
