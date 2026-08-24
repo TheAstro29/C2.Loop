@@ -17,7 +17,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  <!-- เก็บ Chart.js ไว้ในโปรเจกต์เอง (vendor/) แทนการโหลดจาก CDN ภายนอก เพราะ path เดิมบน cdnjs คืน 404
+       (ทำให้กราฟ Dashboard 2 อันไม่ขึ้นเลย) — ไม่ต้องพึ่งอินเทอร์เน็ต/CDN อีกต่อไปสำหรับไลบรารีนี้ -->
+  <script src="vendor/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
