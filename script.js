@@ -170,6 +170,17 @@ const GATEWAY_MODEL_FIELD = "Model";
 const GATEWAY_MODEL_PANOLYZER = "EPG-001S";
 const GATEWAY_MODEL_MOISTURLYZER = "EPG-001B";
 
+/** ทำความสะอาดค่า Model ของ Gateway ก่อนเทียบกับ EPG-001S/EPG-001B — ต้อง sync ตรรกะเดียวกันกับ
+ * normalizeGatewayModel_() ฝั่ง Code.gs เป๊ะ กันเคสค่าในชีต "หน้าตาถูก" แต่มีอักขระที่มองไม่เห็นปนอยู่
+ * (ขีดกลางคนละแบบ/NBSP/zero-width space) ทำให้ trim()+toUpperCase() เฉยๆ ไม่พอจะจับได้ */
+function normalizeGatewayModel(raw) {
+  return String(raw || "")
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-") // ขีดกลาง/ขีดยาว/เครื่องหมายลบทุกแบบ -> "-" ปกติ
+    .replace(/[\u00a0\u200b\u200c\u200d\ufeff]/g, " ") // NBSP/zero-width space -> ช่องว่างปกติ (ให้ trim() เก็บงานต่อได้)
+    .trim()
+    .toUpperCase();
+}
+
 // ============================================================
 // Phase 7: โมดัลยืนยัน/แจ้งเตือน C2TECH (แทน native confirm()/alert())
 // ใช้ Promise แทน blocking dialog — รองรับ Mobile (bottom sheet) + Desktop (card กลางจอ)
@@ -3110,7 +3121,7 @@ function addToBasket(assetKey, serial) {
 
   if (cfg.assetType === "Gateway") {
     const row = (state.data.gateway || []).find((r) => String(r[cfg.serialField]) === String(serial));
-    item.model = String((row && row[GATEWAY_MODEL_FIELD]) || "").trim().toUpperCase();
+    item.model = normalizeGatewayModel(row && row[GATEWAY_MODEL_FIELD]);
     if (item.model === GATEWAY_MODEL_MOISTURLYZER) {
       item.connectTo = "MoisturLyzer"; // รุ่นนี้ใช้กับ MoisturLyzer เท่านั้น
     }
