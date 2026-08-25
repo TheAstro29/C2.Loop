@@ -493,6 +493,9 @@ function showApp() {
   // Phase 10: มือถือ (จอแคบ) เจอหน้าแรกแบบตารางไอคอนก่อนเสมอหลัง login ใหม่ทุกครั้ง
   state.mobileHomeVisible = true;
   syncMobileHomeVisibility();
+
+  // Phase 18: ตั้งจุดฐาน (root) ของประวัติเบราว์เซอร์ไว้ที่หน้าแรกหลัง login — กด back จากจุดนี้ = ออกจากแอปตามปกติ
+  try { history.replaceState({ __c2nav: true, view: state.currentView, home: state.mobileHomeVisible }, ""); } catch (e) {}
 }
 
 function updatePendingBadge() {
@@ -532,11 +535,13 @@ function syncMobileHomeVisibility() {
 function showMobileHome() {
   state.mobileHomeVisible = true;
   syncMobileHomeVisibility();
+  _navPushCurrentState();
 }
 
 function hideMobileHome() {
   state.mobileHomeVisible = false;
   syncMobileHomeVisibility();
+  _navPushCurrentState();
 }
 
 let _lastIsMobileViewport = isMobileViewport();
@@ -865,7 +870,48 @@ function switchView(view) {
   });
   renderCurrentView();
   syncMobileTabbar();
+  _navPushCurrentState();
 }
+
+// ============================================================
+// Phase 18: เชื่อมปุ่ม Back ของระบบ (มือถือ/เบราว์เซอร์) เข้ากับการเปลี่ยนหน้าในแอป
+// หลักการ: ทุกครั้งที่เปลี่ยนหน้า (switchView) หรือสลับหน้าแรกแบบตารางไอคอนบนมือถือ (mobileHomeVisible)
+// ให้บันทึกสถานะนั้นไว้ใน browser history ด้วย (pushState) ไม่ใช่แค่เปลี่ยน DOM เฉยๆ เหมือนเดิม
+// แล้วดักฟัง popstate (ตอนกด back) เพื่อสั่งกลับไปหน้าที่บันทึกไว้ แทนที่จะปล่อยให้เบราว์เซอร์ปิดแอปไปเลย
+// หมายเหตุ: รอบนี้ครอบคลุมเฉพาะการสลับ "หน้าหลัก" (เมนูซ้าย/หน้าแรกมือถือ) ยังไม่รวม modal ย่อยๆ
+// (เช่น หน้าต่างยืนยัน/ฟอร์มแก้ไข/ประวัติอะไหล่) — ถ้าต้องการให้ back ปิด modal ทีละชั้นด้วย แจ้งเพิ่มได้
+// ============================================================
+let _navRestoring = false; // true ระหว่างกำลัง apply state จาก popstate (กันไม่ให้ pushState ซ้ำวนลูป)
+let _navPushScheduled = false; // กันการ pushState ซ้ำหลายครั้งเวลามีการเรียก switchView()+hideMobileHome() ติดกันในคลิกเดียว
+
+function _navPushCurrentState() {
+  if (_navRestoring || !state.user || _navPushScheduled) return;
+  _navPushScheduled = true;
+  // เลื่อนไป push ใน microtask ถัดไป เพื่อรวมการเรียกซ้อนกันหลายครั้งในคลิกเดียว (เช่น switchView() ตามด้วย hideMobileHome())
+  // ให้เหลือ pushState แค่ครั้งเดียวโดยอ้างอิงสถานะสุดท้ายจริงๆ ไม่งั้นกด back 1 ครั้งจะไม่ขยับเพราะติดสถานะกลางทาง
+  Promise.resolve().then(() => {
+    _navPushScheduled = false;
+    if (_navRestoring || !state.user) return;
+    try {
+      history.pushState({ __c2nav: true, view: state.currentView, home: state.mobileHomeVisible }, "");
+    } catch (e) {}
+  });
+}
+
+window.addEventListener("popstate", (e) => {
+  const s = e.state;
+  if (!s || !s.__c2nav || !state.user) return; // ก่อน login/ไม่รู้จัก state นี้ ปล่อยให้เบราว์เซอร์ทำงานปกติ (เช่น ออกจากแอป)
+  _navRestoring = true;
+  state.currentView = s.view || "dashboard";
+  state.mobileHomeVisible = !!s.home;
+  document.querySelectorAll(".nav-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.view === state.currentView);
+  });
+  renderCurrentView();
+  syncMobileHomeVisibility();
+  syncMobileTabbar();
+  _navRestoring = false;
+});
 
 function renderCurrentView() {
   const titleEl = document.getElementById("viewTitle");
@@ -940,6 +986,47 @@ const DASHBOARD_CATEGORY_META = {
 
 // เกณฑ์ "ของใกล้หมด" บน Dashboard มือถือ — ใช้ค่าคงที่เดียวกันทุกหมวด (ปรับตัวเลขนี้ได้ถ้าต้องการ threshold ต่างจากนี้)
 const LOW_STOCK_THRESHOLD = 5;
+
+// Phase 17: รวมอะไหล่ทุกชื่อ (ทั้งแบบมี S/N และแบบนับจำนวน) ของหมวดหนึ่ง เป็นรายการเดียว เรียงจากเหลือน้อยสุดก่อน
+// ใช้แทนตัวเลขรวมก้อนเดียวเดิมบน Dashboard (ซึ่งปนทุกชื่อเข้าด้วยกันและไม่รวมอะไหล่แบบนับจำนวนเลย)
+function computePartsBreakdown(viewKey) {
+  const cfg = VIEW_CONFIG[viewKey];
+  const category = PART_CATEGORY_BY_VIEW[viewKey];
+
+  // อะไหล่แบบนับจำนวน (ไม่มี S/N) — เอายอดคงเหลือจาก PartsCatalog ตรงๆ
+  const qtyItems = getQtyPartsForCategory(category).map((p) => ({
+    name: p.PartName, type: "qty", stock: Number(p.QuantityInStock) || 0, used: null,
+  }));
+
+  // อะไหล่แบบมี S/N — รวมรายชิ้นจาก state.data[cfg.key] เป็นยอดต่อชื่ออะไหล่ (คงเหลือ/เบิกแล้ว)
+  const grouped = {};
+  (state.data[cfg.key] || []).forEach((r) => {
+    const name = r.PartName;
+    if (!name) return;
+    if (!grouped[name]) grouped[name] = { name, type: "serial", stock: 0, used: 0 };
+    if (isStockRow(r, cfg.stockField, cfg.stockRequiresField)) grouped[name].stock++;
+    else grouped[name].used++;
+  });
+  const serialItems = Object.values(grouped);
+
+  return [...qtyItems, ...serialItems].sort((a, b) => a.stock - b.stock);
+}
+
+/** สร้าง HTML ของรายการอะไหล่ทุกชื่อในหมวดหนึ่ง สำหรับใส่ในการ์ด Dashboard (แทนตัวเลขรวมก้อนเดียว) */
+function partsBreakdownListHtml(items) {
+  if (!items.length) return `<div class="parts-empty-note">ยังไม่มีอะไหล่ในหมวดนี้</div>`;
+  return `<div class="parts-list">${items.map((p) => `
+    <div class="part-row">
+      <div class="part-name">
+        <span class="part-name-text">${escapeHtml(p.name)}</span>
+        <span class="part-type-tag">${p.type === "serial" ? "มี S/N" : "นับจำนวน"}</span>
+      </div>
+      <div class="part-stock">
+        <span class="part-stock-num ${p.stock <= LOW_STOCK_THRESHOLD ? "low" : ""}">${p.stock}</span>
+        <div class="part-stock-sub">${p.type === "serial" ? "คงเหลือ · เบิกแล้ว " + p.used : "คงเหลือ"}</div>
+      </div>
+    </div>`).join("")}</div>`;
+}
 
 /** นับจำนวนธุรกรรมที่ "เบิกแล้ว/คืนแล้ว" (นับเป็นการเบิกจริง) ในเดือนปัจจุบันเทียบกับเดือนก่อนหน้า */
 function computeMonthlyIssuedComparison() {
@@ -1026,15 +1113,44 @@ function renderDashboard() {
 
   if (isMobileViewport()) { renderDashboardMobile(content, summaries); return; }
 
+  // Phase 17: รวมของใกล้หมด/หมดจากทุกหมวดอะไหล่ (ชื่อละหลายชิ้น) มาเตือนไว้บนสุด เพราะซ่อนอยู่ในรายการ scroll ของแต่ละการ์ด
+  const allPartsLow = Object.keys(PART_CATEGORY_BY_VIEW)
+    .flatMap((viewKey) => computePartsBreakdown(viewKey))
+    .filter((p) => p.stock <= LOW_STOCK_THRESHOLD)
+    .sort((a, b) => a.stock - b.stock);
+  const lowStockBannerHtml = allPartsLow.length
+    ? `<div class="lowstock-strip no-print">
+        <div class="lowstock-dot"></div>
+        <div class="lowstock-text">
+          <b>ของใกล้หมด (≤ ${LOW_STOCK_THRESHOLD} ชิ้น)</b><br>
+          ${allPartsLow.map((p) => `<span class="lowstock-chip">${escapeHtml(p.name)} <b>${p.stock}</b> ชิ้น</span>`).join("")}
+        </div>
+      </div>`
+    : "";
+
   let html = `
     <div class="dashboard-actions no-print">
       <button class="btn-secondary" onclick="printDashboard()"><i class="fas fa-print"></i> พิมพ์รายงาน</button>
       <button class="btn-secondary" onclick="generateReportImage(this)"><i class="fas fa-camera"></i> สร้างรูปรายงาน (สำหรับส่ง LINE)</button>
     </div>
+    ${lowStockBannerHtml}
     <div id="dashboardReportArea" class="report-doc">
       ${reportHeaderHtml("รายงานสรุปคลังอุปกรณ์", "Equipment Inventory Summary Report", "วันที่ออกรายงาน", formatDateTh(new Date().toISOString()))}
       <div class="kpi-grid">`;
   summaries.forEach(({ cfg, summary }) => {
+    // Phase 17: หมวดอะไหล่ (Color Sorter / Panolyzer) — แสดงรายชื่ออะไหล่ทุกชื่อในการ์ด แทนตัวเลขรวมก้อนเดียว
+    if (PART_CATEGORY_BY_VIEW[cfg.key]) {
+      const items = computePartsBreakdown(cfg.key);
+      html += `
+      <div class="kpi-card">
+        <div class="kpi-card-title with-count">
+          <span>${escapeHtml(cfg.title.replace(" (มี S/N)", ""))}</span>
+          <span class="parts-count-pill">${items.length} รายชื่อ</span>
+        </div>
+        ${partsBreakdownListHtml(items)}
+      </div>`;
+      return;
+    }
     if (cfg.stockRequiresField) {
       // Phase 9: SimCard (หรืออุปกรณ์อื่นที่ต้องรอ Activate) — แยกยอดให้ชัดว่า Activate แล้วเหลือ/ใช้ไปกี่ชิ้น
       // และยังไม่ได้ Activate (รอ AIS) อีกกี่ชิ้น แทนที่จะรวมกับ "เบิกออกไปแล้ว" แบบเดิมจนสับสน
