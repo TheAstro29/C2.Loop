@@ -748,7 +748,20 @@ async function apiPost(body) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(body),
     });
-    return await resp.json();
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch (parseErr) {
+      // เซิร์ฟเวอร์ตอบกลับมาไม่ใช่ JSON — ปกติเกิดจาก Apps Script คืนหน้า HTML แทน (ขอสิทธิ์เพิ่ม/URL ผิด/deploy
+      // เก่าไม่ตรงกับโค้ดล่าสุด) log ข้อความจริงไว้ใน console เพื่อเอาไปดูรายละเอียดได้ ไม่ใช่แค่โยน error ดิบๆ ให้ผู้ใช้เห็น
+      console.error("[apiPost] เซิร์ฟเวอร์ตอบกลับไม่ใช่ JSON — เนื้อหาที่ได้รับจริง:", text.slice(0, 1000));
+      const looksLikeAuthPage = /authoriz|permission|accounts\.google\.com|sign in/i.test(text);
+      throw new Error(
+        looksLikeAuthPage
+          ? "เซิร์ฟเวอร์ขอสิทธิ์เพิ่ม (น่าจะเป็น Google Drive) — เปิด Apps Script Editor แล้วรันฟังก์ชัน authorizeDriveAccess_ONETIME 1 ครั้งเพื่ออนุญาตสิทธิ์ก่อน"
+          : `เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง (HTTP ${resp.status}) — เปิด Apps Script Editor เมนู Executions ดู log ล่าสุดเพื่อหาสาเหตุที่แท้จริง`
+      );
+    }
   } finally {
     hideGlobalLoading();
   }
@@ -2083,7 +2096,7 @@ function openChangePartPhotoModal(partId, partName, currentPhotoUrl) {
         ${currentPhotoUrl ? `<img src="${escapeAttr(currentPhotoUrl)}" class="photo-preview">` : `<div class="photo-upload-icon">📷</div>`}
         <div class="photo-upload-lab">${currentPhotoUrl ? "แตะเพื่อเปลี่ยนรูป" : "แตะเพื่อถ่ายรูป หรือเลือกรูปจากอัลบั้ม"}</div>
       </div>
-      <input type="file" accept="image/*" capture="environment" id="cpp-photoInput" style="display:none;">
+      <input type="file" accept="image/*" id="cpp-photoInput" style="display:none;">
     </label>
   `;
   document.getElementById("cpp-photoInput").addEventListener("change", (e) => onChangePartPhotoSelected(e.target));
@@ -2343,7 +2356,7 @@ function renderManagePartsFormArea() {
             <div class="photo-upload-icon">📷</div>
             <div class="photo-upload-lab">แตะเพื่อถ่ายรูป หรือเลือกรูปจากอัลบั้ม</div>
           </div>
-          <input type="file" accept="image/*" capture="environment" id="mp-photoInput" style="display:none;">
+          <input type="file" accept="image/*" id="mp-photoInput" style="display:none;">
         </label>
       </div>
     `;
