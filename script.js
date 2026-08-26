@@ -2128,16 +2128,13 @@ function openChangePartPhotoModal(partId, partName, currentPhotoUrl) {
 function onChangePartPhotoSelected(input) {
   if (!input.files || !input.files[0]) return;
   const file = input.files[0];
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = reader.result;
+  compressImageFileToDataUrl(file, 1000, 0.75, (dataUrl, mimeType) => {
     const commaIdx = dataUrl.indexOf(",");
-    changePartPhotoState.mimeType = file.type || "image/jpeg";
+    changePartPhotoState.mimeType = mimeType;
     changePartPhotoState.base64 = dataUrl.slice(commaIdx + 1);
     const inner = document.getElementById("cpp-photoUploadInner");
     if (inner) inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">แตะเพื่อเปลี่ยนรูป</div>`;
-  };
-  reader.readAsDataURL(file);
+  });
 }
 
 function partErrorMessage(code) {
@@ -2238,6 +2235,30 @@ const MANAGE_STOCK_ASSET_TYPES = [
   { value: "panolyzerParts", label: "อะไหล่ Panolyzer" },
 ];
 let mpAssetType = "moisturlyzer";
+
+/** ย่อรูปให้เล็กลงก่อนแปลงเป็น base64 ส่งขึ้นเซิร์ฟเวอร์ (รูปถ่ายจากกล้องมือถือมักมีขนาดหลาย MB ซึ่งใหญ่เกินจำเป็น
+ * สำหรับแค่ดูรูปย่อในระบบ และอาจทำให้ request ใหญ่เกินไปจนอัปโหลดไม่สำเร็จ) ย่อด้านที่ยาวสุดให้ไม่เกิน maxDim px
+ * แล้วบีบอัดเป็น JPEG คุณภาพ quality — callback(dataUrl, mimeType) */
+function compressImageFileToDataUrl(file, maxDim, quality, callback) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width >= height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      callback(canvas.toDataURL("image/jpeg", quality), "image/jpeg");
+    };
+    img.onerror = () => callback(reader.result, file.type || "image/jpeg"); // ย่อไม่ได้ (ไฟล์แปลก) — ส่งของเดิมไปตรงๆ แทน
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
 
 let managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
 
@@ -2360,18 +2381,15 @@ function onManagePartsPhotoSelected(input) {
   if (!input.files || !input.files[0]) return;
   const file = input.files[0];
   const f = managePartsForm;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = reader.result; // "data:image/jpeg;base64,...."
+  compressImageFileToDataUrl(file, 1000, 0.75, (dataUrl, mimeType) => {
     const commaIdx = dataUrl.indexOf(",");
-    f.photoMimeType = file.type || "image/jpeg";
+    f.photoMimeType = mimeType;
     f.photoBase64 = dataUrl.slice(commaIdx + 1);
     const inner = document.getElementById("mp-photoUploadInner");
     if (inner) {
       inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">แตะเพื่อเปลี่ยนรูป</div>`;
     }
-  };
-  reader.readAsDataURL(file);
+  });
 }
 
 function currentManagePartsHasSerial() {
