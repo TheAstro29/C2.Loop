@@ -1780,11 +1780,19 @@ function renderRows(cfg, rows, isAdmin) {
   }
 }
 
+/** หารูปอะไหล่ (PhotoUrl) จาก PartsCatalog ด้วย PartID — ใช้กับแถวอะไหล่แบบมี S/N ที่แสดงในตาราง/การ์ดรวม
+ * (ตัว row เองไม่มี PhotoUrl ติดมาด้วย เพราะอยู่คนละชีตกัน ต้อง join กับ state.data.partsCatalog เอา) */
+function getPartPhotoUrlByPartId(partId) {
+  const part = (state.data.partsCatalog || []).find((p) => p.PartID === partId);
+  return part ? part.PhotoUrl : "";
+}
+
 function renderRowsAsTable(cfg, filtered, isAdmin) {
   const tbody = document.getElementById("listTbody");
   if (!tbody) return;
   const hasExtraCol = isAdmin || cfg.partCategory;
-  const colspan = cfg.columns.length + (hasExtraCol ? 1 : 0);
+  const hasThumbCol = !!cfg.partCategory;
+  const colspan = cfg.columns.length + (hasExtraCol ? 1 : 0) + (hasThumbCol ? 1 : 0);
 
   if (!filtered.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${colspan}">ไม่พบข้อมูล</td></tr>`;
@@ -1792,6 +1800,14 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
   }
 
   tbody.innerHTML = filtered.map((row) => {
+    const thumbCell = hasThumbCol
+      ? (() => {
+          const photoUrl = getPartPhotoUrlByPartId(row.PartID);
+          return photoUrl
+            ? `<td><img src="${escapeAttr(photoUrl)}" class="table-thumb" alt=""></td>`
+            : `<td><span class="table-thumb-empty">📦</span></td>`;
+        })()
+      : "";
     const cells = cfg.columns.map((c) => {
       if (c.computed) {
         const serial = String(row[cfg.serialField] || "");
@@ -1811,14 +1827,18 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
     const historyBtn = cfg.partCategory
       ? `<button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
       : "";
+    const photoBtn = cfg.partCategory
+      ? `<button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', '${escapeAttr(getPartPhotoUrlByPartId(row.PartID) || "")}')">เพิ่ม/เปลี่ยนรูป</button>`
+      : "";
     const actionsCell = isAdmin
       ? `<td class="no-wrap">
            <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
            <button class="btn-sm btn-remove" onclick="deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
            ${historyBtn}
+           ${photoBtn}
          </td>`
       : (cfg.partCategory ? `<td class="no-wrap">${historyBtn}</td>` : "");
-    return `<tr>${cells}${actionsCell}</tr>`;
+    return `<tr>${thumbCell}${cells}${actionsCell}</tr>`;
   }).join("");
 }
 
@@ -1852,13 +1872,36 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     const historyBtn = cfg.partCategory
       ? `<button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
       : "";
+    const photoUrl = cfg.partCategory ? getPartPhotoUrlByPartId(row.PartID) : "";
+    const photoBtn = cfg.partCategory
+      ? `<button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', '${escapeAttr(photoUrl || "")}')">เพิ่ม/เปลี่ยนรูป</button>`
+      : "";
     const actionsHtml = isAdmin
       ? `<div class="mcard-actions">
            <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
            <button class="btn-sm btn-remove" onclick="deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
            ${historyBtn}
+           ${photoBtn}
          </div>`
       : (cfg.partCategory ? `<div class="mcard-actions">${historyBtn}</div>` : "");
+
+    if (cfg.partCategory) {
+      const photoHtml = photoUrl
+        ? `<div class="mcard-photo"><img src="${escapeAttr(photoUrl)}" alt=""></div>`
+        : `<div class="mcard-photo">📦</div>`;
+      return `
+        <div class="mcard mcard-with-photo">
+          ${photoHtml}
+          <div class="mcard-body">
+            <div class="mcard-head">
+              <div class="mcard-title">${escapeHtml(serial || "-")}</div>
+              <span class="mcard-pill ${stock ? "stock" : "used"}">${stock ? "อยู่ในคลัง" : "เบิกออกแล้ว"}</span>
+            </div>
+            ${bodyRows}
+            ${actionsHtml}
+          </div>
+        </div>`;
+    }
 
     return `
       <div class="mcard">
@@ -1927,39 +1970,50 @@ function renderPartsListView(viewKey, cfg) {
           const actionsHtml = isAdmin
             ? `<div class="mcard-actions">
                  <button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button>
+                 <button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}', '${escapeAttr(p.PhotoUrl || "")}')">เพิ่ม/เปลี่ยนรูป</button>
                  <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
                  <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
                </div>`
             : `<div class="mcard-actions"><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></div>`;
+          const photoHtml = p.PhotoUrl
+            ? `<div class="mcard-photo"><img src="${escapeAttr(p.PhotoUrl)}" alt=""></div>`
+            : `<div class="mcard-photo">📦</div>`;
           return `
-          <div class="mcard">
-            <div class="mcard-head">
-              <div class="mcard-title">${escapeHtml(p.PartName)}</div>
-              <span class="mcard-pill stock">${escapeHtml(String(p.QuantityInStock))} ในสต็อก</span>
+          <div class="mcard mcard-with-photo">
+            ${photoHtml}
+            <div class="mcard-body">
+              <div class="mcard-head">
+                <div class="mcard-title">${escapeHtml(p.PartName)}</div>
+                <span class="mcard-pill stock">${escapeHtml(String(p.QuantityInStock))} ในสต็อก</span>
+              </div>
+              <div class="mcard-row"><div class="mcard-label">กำลังเบิกอยู่</div><div class="mcard-val">${issued}</div></div>
+              <div class="mcard-row"><div class="mcard-label">รออนุมัติ</div><div class="mcard-val">${pending}</div></div>
+              ${actionsHtml}
             </div>
-            <div class="mcard-row"><div class="mcard-label">กำลังเบิกอยู่</div><div class="mcard-val">${issued}</div></div>
-            <div class="mcard-row"><div class="mcard-label">รออนุมัติ</div><div class="mcard-val">${pending}</div></div>
-            ${actionsHtml}
           </div>`;
         }).join("") : `<div class="mcard-empty">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</div>`}
       </div>`
     : `<div class="table-card">
       <div class="table-scroll">
         <table>
-          <thead><tr><th>ชื่ออะไหล่</th><th>คงเหลือในสต็อก</th><th>กำลังเบิกอยู่</th><th>รออนุมัติ</th><th>ประวัติ</th>${isAdmin ? "<th>จัดการ</th>" : ""}</tr></thead>
+          <thead><tr><th></th><th>ชื่ออะไหล่</th><th>คงเหลือในสต็อก</th><th>กำลังเบิกอยู่</th><th>รออนุมัติ</th><th>ประวัติ</th>${isAdmin ? "<th>จัดการ</th>" : ""}</tr></thead>
           <tbody>
             ${qtyParts.length ? qtyParts.map((p) => {
               const issued = computePartIssuedQty(p.PartID, qtyAssetType);
               const pending = computePartPendingQty(p.PartID, qtyAssetType);
+              const thumbCell = p.PhotoUrl
+                ? `<td><img src="${escapeAttr(p.PhotoUrl)}" class="table-thumb" alt=""></td>`
+                : `<td><span class="table-thumb-empty">📦</span></td>`;
               const historyCell = `<td><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></td>`;
               const actionsCell = isAdmin
                 ? `<td class="no-wrap">
+                     <button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}', '${escapeAttr(p.PhotoUrl || "")}')">เพิ่ม/เปลี่ยนรูป</button>
                      <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
                      <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
                    </td>`
                 : "";
-              return `<tr><td>${escapeHtml(p.PartName)}</td><td><span class="badge-stock">${escapeHtml(String(p.QuantityInStock))}</span></td><td>${issued}</td><td>${pending}</td>${historyCell}${actionsCell}</tr>`;
-            }).join("") : `<tr class="empty-row"><td colspan="${qtyColspan}">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</td></tr>`}
+              return `<tr>${thumbCell}<td>${escapeHtml(p.PartName)}</td><td><span class="badge-stock">${escapeHtml(String(p.QuantityInStock))}</span></td><td>${issued}</td><td>${pending}</td>${historyCell}${actionsCell}</tr>`;
+            }).join("") : `<tr class="empty-row"><td colspan="${qtyColspan + 1}">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1983,7 +2037,7 @@ function renderPartsListView(viewKey, cfg) {
       : `<div class="table-card">
       <div class="table-scroll">
         <table>
-          <thead><tr>${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>จัดการ</th>" : "<th>ประวัติ</th>"}</tr></thead>
+          <thead><tr>${cfg.partCategory ? "<th></th>" : ""}${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>จัดการ</th>" : "<th>ประวัติ</th>"}</tr></thead>
           <tbody id="listTbody"></tbody>
         </table>
       </div>
@@ -2013,6 +2067,77 @@ async function renamePartPrompt(partId, currentName) {
       msg.textContent = err.message;
     }
   });
+}
+
+/** เพิ่ม/เปลี่ยนรูปให้อะไหล่ที่มีอยู่แล้วในระบบ (Admin เท่านั้น) — ใช้โมดัลเดียวกับฟอร์มแก้ไขข้อมูลทั่วไป (genericFormModal)
+ * แต่เขียน body เองแทนการใช้ openGenericFormModal() เพราะต้องการช่องแนบไฟล์รูปแทนช่องข้อความล้วนๆ */
+let changePartPhotoState = { partId: null, base64: "", mimeType: "" };
+
+function openChangePartPhotoModal(partId, partName, currentPhotoUrl) {
+  changePartPhotoState = { partId, base64: "", mimeType: "" };
+  document.getElementById("genericFormModalTitle").textContent = `เพิ่ม/เปลี่ยนรูป — ${partName}`;
+  const body = document.getElementById("genericFormModalBody");
+  body.innerHTML = `
+    <label class="photo-upload" id="cpp-photoUploadBox">
+      <div id="cpp-photoUploadInner">
+        ${currentPhotoUrl ? `<img src="${escapeAttr(currentPhotoUrl)}" class="photo-preview">` : `<div class="photo-upload-icon">📷</div>`}
+        <div class="photo-upload-lab">${currentPhotoUrl ? "แตะเพื่อเปลี่ยนรูป" : "แตะเพื่อถ่ายรูป หรือเลือกรูปจากอัลบั้ม"}</div>
+      </div>
+      <input type="file" accept="image/*" capture="environment" id="cpp-photoInput" style="display:none;">
+    </label>
+  `;
+  document.getElementById("cpp-photoInput").addEventListener("change", (e) => onChangePartPhotoSelected(e.target));
+
+  const msgEl = document.getElementById("genericFormModalMsg");
+  msgEl.className = "form-msg";
+  msgEl.textContent = "";
+
+  const saveBtn = document.getElementById("genericFormSaveBtn");
+  const originalText = saveBtn.textContent;
+  saveBtn.onclick = async () => {
+    if (!changePartPhotoState.base64) {
+      msgEl.className = "form-msg error";
+      msgEl.textContent = "กรุณาเลือกรูปก่อนบันทึก";
+      return;
+    }
+    saveBtn.disabled = true; saveBtn.textContent = "กำลังบันทึก...";
+    try {
+      const res = await apiPost({
+        action: "updatePartPhoto", token: state.token, partId: changePartPhotoState.partId,
+        photoBase64: changePartPhotoState.base64, photoMimeType: changePartPhotoState.mimeType,
+      });
+      if (!res.ok) {
+        if (res.error === "unauthorized") return handleUnauthorized();
+        throw new Error(res.error === "upload_failed"
+          ? "อัปโหลดรูปไม่สำเร็จ — ตรวจสอบว่าตั้งค่าโฟลเดอร์ Drive สำหรับเก็บรูปไว้แล้วหรือยัง"
+          : "บันทึกไม่สำเร็จ กรุณาลองใหม่");
+      }
+      await refreshInBackground(true);
+      closeGenericFormModal();
+      renderCurrentView();
+    } catch (err) {
+      msgEl.className = "form-msg error";
+      msgEl.textContent = err.message;
+    } finally {
+      saveBtn.disabled = false; saveBtn.textContent = originalText;
+    }
+  };
+  document.getElementById("genericFormModal").style.display = "flex";
+}
+
+function onChangePartPhotoSelected(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    const commaIdx = dataUrl.indexOf(",");
+    changePartPhotoState.mimeType = file.type || "image/jpeg";
+    changePartPhotoState.base64 = dataUrl.slice(commaIdx + 1);
+    const inner = document.getElementById("cpp-photoUploadInner");
+    if (inner) inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">แตะเพื่อเปลี่ยนรูป</div>`;
+  };
+  reader.readAsDataURL(file);
 }
 
 function partErrorMessage(code) {
@@ -2048,11 +2173,12 @@ const PART_HISTORY_ACTION_LABELS = {
   Added: "เพิ่มอะไหล่ใหม่", Restocked: "เติมของเข้าสต็อก", Renamed: "แก้ไขชื่อ",
   Deleted: "ลบอะไหล่", Issued: "เบิกออก", Returned: "คืนของ",
   StockAdded: "รับเข้าสต๊อก", // Phase 16: MoisturLyzer/Gateway/SimCard รับเข้าสต๊อกผ่านหน้า "จัดการ Stock/อะไหล่"
+  PhotoUpdated: "เพิ่ม/เปลี่ยนรูป",
 };
 const PART_HISTORY_ACTION_ICONS = {
   Added: '<i class="fas fa-plus"></i>', Restocked: '<i class="fas fa-box"></i>', Renamed: '<i class="fas fa-pen"></i>',
   Deleted: '<i class="fas fa-trash"></i>', Issued: '<i class="fas fa-arrow-up"></i>', Returned: '<i class="fas fa-arrow-down"></i>',
-  StockAdded: '<i class="fas fa-dolly"></i>',
+  StockAdded: '<i class="fas fa-dolly"></i>', PhotoUpdated: '<i class="fas fa-camera"></i>',
 };
 
 function closePartHistoryModal() {
@@ -2113,7 +2239,7 @@ const MANAGE_STOCK_ASSET_TYPES = [
 ];
 let mpAssetType = "moisturlyzer";
 
-let managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "" };
+let managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
 
 function renderManagePartsView() {
   const content = document.getElementById("viewContent");
@@ -2164,7 +2290,7 @@ function renderPartsSubUI(area) {
     <button class="btn-primary" id="mp-submitBtn" style="margin-top:12px;">บันทึก</button>
   `;
 
-  document.getElementById("mp-mode").addEventListener("change", (e) => { f.mode = e.target.value; f.serials = [""]; renderManagePartsFormArea(); });
+  document.getElementById("mp-mode").addEventListener("change", (e) => { f.mode = e.target.value; f.serials = [""]; f.photoBase64 = ""; f.photoMimeType = ""; renderManagePartsFormArea(); });
   document.getElementById("mp-submitBtn").addEventListener("click", submitManagePartsForm);
   renderManagePartsFormArea();
 }
@@ -2189,9 +2315,20 @@ function renderManagePartsFormArea() {
         </div>
       </div>
       <div id="mp-qtyOrSerialArea"></div>
+      <div class="form-field" style="margin-top:4px;">
+        <label>รูปอะไหล่ (ไม่บังคับ) — ช่วยให้จำได้จากรูปร่างแม้จำชื่อไม่ได้</label>
+        <label class="photo-upload" id="mp-photoUploadBox">
+          <div id="mp-photoUploadInner">
+            <div class="photo-upload-icon">📷</div>
+            <div class="photo-upload-lab">แตะเพื่อถ่ายรูป หรือเลือกรูปจากอัลบั้ม</div>
+          </div>
+          <input type="file" accept="image/*" capture="environment" id="mp-photoInput" style="display:none;">
+        </label>
+      </div>
     `;
     document.getElementById("mp-partName").addEventListener("input", (e) => { f.partName = e.target.value; });
     document.getElementById("mp-hasSerial").addEventListener("change", (e) => { f.hasSerial = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
+    document.getElementById("mp-photoInput").addEventListener("change", (e) => onManagePartsPhotoSelected(e.target));
     renderQtyOrSerialArea();
   } else {
     const allParts = [...getQtyPartsForCategory("ColorSorter"), ...getSerialPartsForCategory("ColorSorter"),
@@ -2215,6 +2352,26 @@ function renderManagePartsFormArea() {
     document.getElementById("mp-restockPartId").addEventListener("change", (e) => { f.restockPartId = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
     renderQtyOrSerialArea();
   }
+}
+
+/** อ่านไฟล์รูปที่เลือก (ถ่ายจากกล้อง/เลือกจากอัลบั้ม) แปลงเป็น base64 เก็บไว้ใน managePartsForm เพื่อส่งไปกับ
+ * action "addPart" ตอนกดบันทึก — แสดงตัวอย่างรูปทันทีในเครื่อง (ยังไม่อัปโหลดจริงจนกว่าจะกดบันทึกฟอร์ม) */
+function onManagePartsPhotoSelected(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  const f = managePartsForm;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result; // "data:image/jpeg;base64,...."
+    const commaIdx = dataUrl.indexOf(",");
+    f.photoMimeType = file.type || "image/jpeg";
+    f.photoBase64 = dataUrl.slice(commaIdx + 1);
+    const inner = document.getElementById("mp-photoUploadInner");
+    if (inner) {
+      inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">แตะเพื่อเปลี่ยนรูป</div>`;
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 function currentManagePartsHasSerial() {
@@ -2343,7 +2500,10 @@ async function submitManagePartsForm() {
       btn.disabled = true; btn.textContent = "กำลังบันทึก...";
       res = await apiPost({
         action: "addPart", token: state.token,
-        payload: { partName: f.partName.trim(), category: f.category, hasSerial, quantity: Number(f.quantity) || 0, serials: cleanSerials },
+        payload: {
+          partName: f.partName.trim(), category: f.category, hasSerial, quantity: Number(f.quantity) || 0, serials: cleanSerials,
+          photoBase64: f.photoBase64 || "", photoMimeType: f.photoMimeType || "",
+        },
       });
     } else {
       if (!f.restockPartId) throw new Error("กรุณาเลือกอะไหล่ที่จะเติมของ");
@@ -2363,7 +2523,7 @@ async function submitManagePartsForm() {
     }
 
     await refreshInBackground(true);
-    managePartsForm = { mode: "new", partName: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "" };
+    managePartsForm = { mode: "new", partName: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
     renderManagePartsView();
     const freshMsg = document.getElementById("mp-msg");
     freshMsg.className = "form-msg success";
@@ -2472,6 +2632,20 @@ const ADDSTOCK_ITEM_FIELD_DEFS = {
   simcard: [{ field: "S/N", label: "S/N ซิม" }, { field: "Mobile No.", label: "เบอร์โทร" }],
 };
 
+/** ดึงค่าที่เคยกรอกไว้แล้วของฟิลด์หนึ่งๆ จากข้อมูลที่โหลดไว้ในเครื่อง (state.data) มาทำเป็นรายการ dropdown แบบ
+ * "เลือกจากของเดิม" — ไม่ต้องยิง request เพิ่ม เพราะ state.data โหลดมาแสดงตารางอยู่แล้ว เรียงค่าล่าสุดที่เคยกรอกไว้
+ * ขึ้นก่อน (ไล่จากท้ายแถวย้อนขึ้นไป) สมมติว่าแถวใหม่ถูกเพิ่มต่อท้ายเรื่อยๆ ตามลำดับเวลา */
+function getDistinctFieldValues(assetKey, field) {
+  const rows = state.data[assetKey] || [];
+  const seen = new Set();
+  const out = [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const v = String(rows[i][field] || "").trim();
+    if (v && !seen.has(v)) { seen.add(v); out.push(v); }
+  }
+  return out;
+}
+
 let addStockForm = { assetKey: null, cfg: null, commonFields: [], common: {}, itemFields: [], items: [] };
 
 function renderAddStockInlineUI(area, assetKey) {
@@ -2479,10 +2653,12 @@ function renderAddStockInlineUI(area, assetKey) {
   let commonFields;
 
   if (assetKey === "moisturlyzer") {
+    const modelOptions = getDistinctFieldValues("moisturlyzer", "Model");
+    const mfdOptions = getDistinctFieldValues("moisturlyzer", "MFD");
     commonFields = [
       { key: "Products_Name", label: "ชื่อสินค้า *", value: "MoisturLyzer" },
-      { key: "Model", label: "รุ่น (Model) *", value: "" },
-      { key: "MFD", label: "MFD (วันที่ผลิต) — ใช้ค่าเดียวกันทั้งตะกร้า", value: "" },
+      { key: "Model", label: "รุ่น (Model) *", type: "combo", options: modelOptions, value: modelOptions[0] || "" },
+      { key: "MFD", label: "MFD (วันที่ผลิต) — ใช้ค่าเดียวกันทั้งตะกร้า", type: "combo", options: mfdOptions, value: mfdOptions[0] || "" },
       { key: "Lot_No.", label: "Lot No. — ใช้ค่าเดียวกันทั้งตะกร้า", value: "" },
     ];
   } else if (assetKey === "gateway") {
@@ -2515,6 +2691,18 @@ function renderAddStockInlineUI(area, assetKey) {
         <select id="as-common-${i}">
           ${f.options.map((o) => `<option value="${escapeAttr(o.value)}" ${o.value === addStockForm.common[f.key] ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
         </select>
+      </div>`;
+    }
+    if (f.type === "combo") {
+      // dropdown จากค่าที่เคยกรอกไว้แล้ว + ตัวเลือก "อื่นๆ" ให้พิมพ์ค่าใหม่เอง (สำหรับกรอกผ่านมือถือได้เร็วขึ้น)
+      const hasOpts = (f.options || []).length > 0;
+      return `<div class="form-field">
+        <label>${escapeHtml(f.label)}</label>
+        <select id="as-common-${i}">
+          ${(f.options || []).map((o) => `<option value="${escapeAttr(o)}" ${o === addStockForm.common[f.key] ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+          <option value="__other__" ${!hasOpts ? "selected" : ""}>+ อื่นๆ (ระบุใหม่)</option>
+        </select>
+        <input type="text" id="as-common-${i}-other" placeholder="พิมพ์ค่าใหม่" style="margin-top:8px; ${hasOpts ? "display:none;" : ""}">
       </div>`;
     }
     return `<div class="form-field">
@@ -2560,6 +2748,24 @@ function renderAddStockInlineUI(area, assetKey) {
 
   commonFields.forEach((f, i) => {
     const el = document.getElementById(`as-common-${i}`);
+    if (f.type === "combo") {
+      const otherInput = document.getElementById(`as-common-${i}-other`);
+      el.addEventListener("change", (e) => {
+        if (e.target.value === "__other__") {
+          otherInput.style.display = "block";
+          otherInput.value = "";
+          addStockForm.common[f.key] = "";
+          otherInput.focus();
+        } else {
+          otherInput.style.display = "none";
+          addStockForm.common[f.key] = e.target.value;
+        }
+      });
+      otherInput.addEventListener("input", (e) => {
+        addStockForm.common[f.key] = e.target.value;
+      });
+      return;
+    }
     el.addEventListener(f.type === "select" ? "change" : "input", (e) => {
       addStockForm.common[f.key] = e.target.value;
       if (assetKey === "gateway" && f.key === "Model") syncGatewayAddStockWarn();
