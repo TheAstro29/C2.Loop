@@ -172,6 +172,21 @@
     </div>
   </div>
 
+  <!-- โมดัล "ย้าย/เคลม" — ย้ายอุปกรณ์ที่เบิกออกไปแล้วไปลูกค้า/สถานที่ใหม่ หรือเคลม (เปลี่ยนเครื่องให้ลูกค้า) -->
+  <div id="transferClaimModal" class="image-modal-overlay no-print" style="display:none;">
+    <div class="image-modal">
+      <div class="image-modal-head">
+        <h3 id="transferClaimModalTitle">ย้าย/เคลม</h3>
+        <button class="btn-sm" onclick="closeTransferClaimModal()">✕ ปิด</button>
+      </div>
+      <div class="image-modal-body" id="transferClaimModalBody"></div>
+      <div class="image-modal-actions">
+        <button class="btn-primary" id="transferClaimSubmitBtn">ยืนยัน</button>
+      </div>
+      <div class="form-msg" id="transferClaimModalMsg"></div>
+    </div>
+  </div>
+
   <!-- โมดัลแสดงรหัสผ่านใหม่หลังสุ่ม (Phase 5) -->
   <div id="passwordResultModal" class="image-modal-overlay no-print" style="display:none;">
     <div class="image-modal">

@@ -226,6 +226,9 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .mcard-pill { font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
 .mcard-pill.stock { background: #e5f2ea; color: var(--ok); }
 .mcard-pill.used { background: #fdf1de; color: var(--warning); }
+/* ฟีเจอร์ "ย้าย/เคลม" — ป้ายสถานะ "อยู่ระหว่างเคลม"/"ตัดจำหน่าย" (มือถือ) */
+.mcard-pill.claim { background: #fdf1de; color: #b25b09; }
+.mcard-pill.writeoff { background: #eee; color: var(--gray); }
 .mcard-row { display: flex; font-size: 12px; padding: 3px 0; border-top: 1px dashed var(--border); gap: 8px; }
 .mcard-row:first-of-type { border-top: none; }
 .mcard-label { color: var(--gray); width: 108px; flex-shrink: 0; }
@@ -286,6 +289,17 @@ tbody tr:hover { background: #dbe9e0; }
 .badge-used { color: var(--info); font-weight: 600; }
 .empty-row td { text-align: center; color: var(--gray); padding: 24px; }
 
+/* ฟีเจอร์ "ย้าย/เคลม" — ป้ายสถานะ "อยู่ระหว่างเคลม"/"ตัดจำหน่าย" ในตาราง (เดสก์ท็อป) */
+.badge-claim {
+  display: inline-block; background: #fdf1de; color: #b25b09; font-size: 11.5px; font-weight: 600;
+  padding: 2px 9px; border-radius: 10px;
+}
+.badge-writeoff {
+  display: inline-block; background: #eee; color: var(--gray); font-size: 11.5px; font-weight: 600;
+  padding: 2px 9px; border-radius: 10px;
+}
+.cell-sub { font-size: 11px; color: var(--gray); margin-top: 3px; }
+
 /* ---------- Phase 2: forms, basket, transaction cards ---------- */
 .form-card {
   background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 20px;
@@ -298,6 +312,22 @@ tbody tr:hover { background: #dbe9e0; }
   width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-family: inherit;
 }
 .form-field textarea { resize: vertical; min-height: 60px; }
+.form-field .hint { font-size: 11px; color: var(--gray); margin-top: 5px; }
+.form-field.checkbox-field label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); font-weight: 400; cursor: pointer; }
+.form-field.checkbox-field input[type="checkbox"] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--green); flex-shrink: 0; }
+
+/* ฟีเจอร์ "ย้าย/เคลม" — แท็บสลับ "ย้ายอุปกรณ์" / "เคลม" ในโมดัล และกล่องสรุปข้อมูลปัจจุบัน */
+.tc-tabs { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+.tc-tab {
+  flex: 1; text-align: center; padding: 10px 8px; font-size: 12.5px; font-weight: 600; color: var(--gray);
+  background: var(--green-light); cursor: pointer; user-select: none;
+}
+.tc-tab.active { color: #fff; background: var(--green); }
+.tc-tab:not(:last-child) { border-right: 1px solid var(--border); }
+.info-box {
+  background: var(--green-light); border: 1px solid var(--border); border-radius: 8px; padding: 10px 13px;
+  font-size: 12.5px; color: var(--text); margin-bottom: 16px; line-height: 1.6;
+}
 
 /* Phase 11: checkbox "ยืมของ" ระดับทั้งใบเบิก */
 .loan-field { display: flex; align-items: center; gap: 10px; }
@@ -329,6 +359,9 @@ tbody tr:hover { background: #dbe9e0; }
 .btn-add:hover { background: var(--green-dark); }
 .btn-remove { background: var(--green-light); color: var(--danger); }
 .btn-remove:hover { background: #f0d9d9; }
+/* ฟีเจอร์ "ย้าย/เคลม" — ปุ่มเปิดโมดัลย้าย/เคลมในตาราง (แยกสีจาก แก้ไข/ลบ ให้สังเกตง่าย) */
+.btn-transfer { background: #e6eef7; color: var(--info); }
+.btn-transfer:hover { background: #d5e3f2; }
 
 .basket-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
 .basket-table th { text-align: left; padding: 8px 10px; background: var(--green-light); color: var(--green-dark); }
@@ -383,6 +416,9 @@ tbody tr:hover { background: #dbe9e0; }
 .status-Returned { background: #e6eef7; color: var(--info); }
 /* Phase 11: ป้าย "ยืม" — โชว์เพิ่มข้าง status-badge ปกติ ไม่ได้แทนที่สถานะเดิม แค่กำกับว่าเป็นการยืมไปทดลอง */
 .status-loan { background: #fdeee0; color: #b25b09; margin-left: 6px; }
+/* ฟีเจอร์ "ย้าย/เคลม" — ป้ายกำกับในหน้าประวัติเบิก/คืน แยกจาก status-badge สถานะปกติ (เหมือน status-loan) */
+.status-transfer { background: #e6eef7; color: var(--info); margin-left: 6px; }
+.status-claim { background: #fdf1de; color: #b25b09; margin-left: 6px; }
 
 .txn-card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 20px; margin-bottom: 14px; }
 .txn-card-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
@@ -680,10 +716,11 @@ tbody tr:hover { background: #dbe9e0; }
 .slip-table th, .slip-table td { border: 1px solid var(--border); padding: 11px 14px; font-size: 14px; text-align: left; }
 .slip-table th { background: var(--green); color: #fff; font-weight: 600; }
 .slip-table tr:nth-child(even) { background: var(--green-light); }
-.slip-col-no { width: 8%; }
-.slip-col-type { width: 37%; }
-.slip-col-serial { width: 35%; }
-.slip-col-qty { width: 20%; }
+.slip-col-no { width: 6%; }
+.slip-col-type { width: 24%; }
+.slip-col-serial { width: 22%; }
+.slip-col-connect { width: 32%; }
+.slip-col-qty { width: 16%; }
 .slip-table td:first-child, .slip-table th:first-child { text-align: center; }
 .slip-table td:last-child, .slip-table th:last-child { text-align: center; }
 .slip-table td:last-child { font-weight: 600; letter-spacing: .3px; }
