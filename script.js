@@ -608,6 +608,7 @@ const MOBILE_HOME_TILES = [
   { key: "colorSorterParts", label: "อะไหล่ Color Sorter", icon: "fa-cogs", color: "mh-c5" },
   { key: "panolyzerParts", label: "อะไหล่ Panolyzer", icon: "fa-cogs", color: "mh-c6" },
   { key: "issue", label: "เบิกอุปกรณ์", icon: "fa-dolly", color: "mh-c7" },
+  { key: "transferclaim", label: "ย้าย/เคลม", icon: "fa-exchange-alt", color: "mh-c4" },
   { key: "approvals", label: "อนุมัติการเบิก", icon: "fa-check-circle", color: "mh-c8", adminOnly: true, badge: true },
   { key: "history", label: "ประวัติเบิก/คืน", icon: "fa-history", color: "mh-c9" },
 ];
@@ -726,6 +727,7 @@ function renderMobileTabbar() {
   wrap.innerHTML = `
     <div class="mh-tab-item ${onHome ? "active" : ""}" onclick="showMobileHome()"><i class="fas fa-th-large"></i><span>เมนูหลัก</span></div>
     <div class="mh-tab-item ${active("issue")}" onclick="switchView('issue'); hideMobileHome();"><i class="fas fa-dolly"></i><span>เบิกของ</span></div>
+    <div class="mh-tab-item ${active("transferclaim")}" onclick="switchView('transferclaim'); hideMobileHome();"><i class="fas fa-exchange-alt"></i><span>ย้าย/เคลม</span></div>
     ${isAdmin ? `<div class="mh-tab-item ${active("approvals")}" onclick="switchView('approvals'); hideMobileHome();"><i class="fas fa-check-circle"></i><span>อนุมัติ</span>${pending > 0 ? `<span class="mh-tab-badge">${pending}</span>` : ""}</div>` : ""}
     <div class="mh-tab-item ${active("history")}" onclick="switchView('history'); hideMobileHome();"><i class="fas fa-history"></i><span>ประวัติ</span></div>
   `;
@@ -890,6 +892,9 @@ function translateIssuanceLog(doc) {
     Resolution: d.resolution || "",
     ResolvedAt: d.resolvedAt || "",
     ResolvedBy: d.resolvedBy || "",
+    // ฟีเจอร์ "ยกเลิกรายการ" — Admin ยกเลิกรายการที่ทำไปแล้ว (เบิก/ย้าย/เคลม) ระบบคืน status ให้อุปกรณ์อัตโนมัติ
+    CancelledBy: d.cancelledBy || "",
+    CancelledAt: d.cancelledAt || "",
   };
 }
 
@@ -1142,6 +1147,9 @@ function renderCurrentView() {
   } else if (state.currentView === "approvals") {
     titleEl.textContent = "อนุมัติการเบิก";
     renderApprovalsView();
+  } else if (state.currentView === "transferclaim") {
+    titleEl.textContent = "ย้าย/เคลม";
+    renderTransferClaimSearchView();
   } else if (state.currentView === "history") {
     titleEl.textContent = "ประวัติการเบิก/คืน";
     renderHistoryView();
@@ -1755,11 +1763,20 @@ async function printDashboardViaPopup() {
   }
 }
 
+/** พิมพ์ใบตามประเภทธุรกรรม — เบิกปกติ/ย้าย/เคลม ใช้ปุ่มเดิมปุ่มเดียว ระบบเลือกฟอร์มให้อัตโนมัติตาม MovementType
+ * (ฟีเจอร์ "ย้าย/เคลม" — ใบย้าย/ใบเคลมออกแบบใหม่แยกจากใบเบิกเดิมทั้งหมด ตามที่ผู้ใช้ขอ ไม่ใช้โครงใบเบิกซ้ำ) */
 function printSlip(transactionId) {
+  const txn0 = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
+  if (txn0 && txn0.MovementType === "Transfer") return printTransferSlip(transactionId);
+  if (txn0 && txn0.MovementType === "Claim") return printClaimSlip(transactionId);
+  return printIssuanceSlip(transactionId);
+}
+
+function printIssuanceSlip(transactionId) {
   const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
   if (!txn) return;
   const items = getItemsForTransaction(transactionId);
-  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว" };
+  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว", Cancelled: "ยกเลิกแล้ว" };
 
   const html = `
     <div class="print-slip report-doc formal-doc">
@@ -1824,6 +1841,158 @@ function printSlip(transactionId) {
     return;
   }
 
+  document.getElementById("printSlipRoot").innerHTML = html;
+  document.body.classList.add("print-slip-active");
+  printAfterImagesLoad(document.getElementById("printSlipRoot"));
+}
+
+/** หา VIEW_CONFIG ที่ตรงกับ AssetType จริง (เช่น "MoisturLyzer") — ใช้แทนการเดา key จาก AssetType ตรงๆ
+ * เพราะ key ใน VIEW_CONFIG เป็นตัวพิมพ์เล็กล้วน ("moisturlyzer") ไม่ตรงกับการทำตัวแรกเป็นพิมพ์เล็กเฉยๆ */
+function viewConfigByAssetType(assetType) {
+  return Object.values(VIEW_CONFIG).find((c) => c.assetType === assetType);
+}
+
+/** ใบย้ายอุปกรณ์ — ฟอร์มใหม่ (สีฟ้า) เน้นบล็อก "ย้ายจาก → ย้ายไปที่" ให้เห็นชัดว่าอุปกรณ์ย้ายจากลูกค้า/ไซต์ไหนไปไหน */
+function printTransferSlip(transactionId) {
+  const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
+  if (!txn) return;
+  const items = getItemsForTransaction(transactionId);
+  const item = items[0];
+  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "ย้ายแล้ว", Rejected: "ถูกปฏิเสธ", Cancelled: "ยกเลิกแล้ว" };
+  const assetLabel = item ? `${escapeHtml(viewConfigByAssetType(item.AssetType)?.title || item.AssetType)} — ${escapeHtml(item.SerialNo)}` : "-";
+  const connectLine = item && item.ConnectSerial
+    ? `<div class="formal-field"><span class="formal-field-label">เชื่อมต่อกับ</span><span class="formal-field-value">${escapeHtml(item.ConnectTo || "")} — ${escapeHtml(item.ConnectSerial)} (ย้ายตามไปด้วย)</span></div>`
+    : "";
+
+  const html = `
+    <div class="print-slip report-doc formal-doc formal-transfer">
+      <div class="formal-page-tag">C2-LOOP</div>
+      <div class="formal-header">
+        <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
+        <div class="formal-company">
+          <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
+          <div class="formal-company-sub">C2 Tech Company Limited</div>
+          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999, 064-654-5636</div>
+        </div>
+      </div>
+      <div class="formal-doctitle">ใบย้ายอุปกรณ์ <span class="formal-doctitle-en">Equipment Transfer Form</span></div>
+
+      <div class="formal-toprow">
+        <div class="formal-toprow-left">
+          <div class="formal-field"><span class="formal-field-label">อุปกรณ์</span><span class="formal-field-value">${assetLabel}</span></div>
+          ${connectLine}
+        </div>
+        <table class="formal-docinfo">
+          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
+          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
+          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</td></tr>
+        </table>
+      </div>
+
+      <div class="formal-swap-row">
+        <div class="formal-swap-box out">
+          <div class="formal-swap-label">ย้ายจาก (เดิม)</div>
+          <div class="formal-swap-value">${escapeHtml(txn.FromCustomer || "-")}</div>
+          <div class="formal-swap-sub">${escapeHtml(txn.FromLocation || "-")}</div>
+        </div>
+        <div class="formal-swap-arrow">➜</div>
+        <div class="formal-swap-box in">
+          <div class="formal-swap-label">ย้ายไปที่ (ใหม่)</div>
+          <div class="formal-swap-value">${escapeHtml(txn.CustomerName || "-")}</div>
+          <div class="formal-swap-sub">${escapeHtml(txn.SiteLocation || "-")}</div>
+        </div>
+      </div>
+
+      ${txn.Details ? `<div class="formal-reason-box"><b>หมายเหตุ:</b> ${escapeHtml(txn.Details)}</div>` : ""}
+      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span></div>
+
+      <div class="signature-row">
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ผู้ดำเนินการย้าย</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ลูกค้าปลายทางผู้รับเครื่อง</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (isInIframe()) { printSlipViaPopup(html); return; }
+  document.getElementById("printSlipRoot").innerHTML = html;
+  document.body.classList.add("print-slip-active");
+  printAfterImagesLoad(document.getElementById("printSlipRoot"));
+}
+
+/** ใบเคลม — ฟอร์มใหม่ (สีส้ม) เน้นบล็อก "เครื่องเดิม (ถอดออก) ⇄ เครื่องทดแทน (ให้ใหม่)" คู่กันชัดเจน */
+function printClaimSlip(transactionId) {
+  const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
+  if (!txn) return;
+  const items = getItemsForTransaction(transactionId);
+  const outItem = items.find((i) => i.SerialNo === txn.ClaimedSerial) || items[0];
+  const inItem = items.find((i) => i.SerialNo === txn.ReplacementSerial);
+  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เคลมแล้ว", Rejected: "ถูกปฏิเสธ", Cancelled: "ยกเลิกแล้ว" };
+  const typeLabel = (assetType) => (assetType ? (viewConfigByAssetType(assetType)?.title || assetType) : "-");
+
+  const html = `
+    <div class="print-slip report-doc formal-doc formal-claim">
+      <div class="formal-page-tag">C2-LOOP</div>
+      <div class="formal-header">
+        <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
+        <div class="formal-company">
+          <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
+          <div class="formal-company-sub">C2 Tech Company Limited</div>
+          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999, 064-654-5636</div>
+        </div>
+      </div>
+      <div class="formal-doctitle">ใบเคลมอุปกรณ์ <span class="formal-doctitle-en">Equipment Claim Form</span></div>
+
+      <div class="formal-toprow">
+        <div class="formal-toprow-left">
+          <div class="formal-field"><span class="formal-field-label">ลูกค้า</span><span class="formal-field-value">${escapeHtml(txn.CustomerName || "-")}</span></div>
+          <div class="formal-field"><span class="formal-field-label">สถานที่ติดตั้ง</span><span class="formal-field-value">${escapeHtml(txn.SiteLocation || "-")}</span></div>
+        </div>
+        <table class="formal-docinfo">
+          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
+          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
+          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</td></tr>
+        </table>
+      </div>
+
+      <div class="formal-swap-row">
+        <div class="formal-swap-box out">
+          <div class="formal-swap-label">เครื่องเดิม (ถอดออก)</div>
+          <div class="formal-swap-value">${escapeHtml(typeLabel(outItem && outItem.AssetType))} — ${escapeHtml(txn.ClaimedSerial || "-")}</div>
+        </div>
+        <div class="formal-swap-arrow">⇄</div>
+        <div class="formal-swap-box in">
+          <div class="formal-swap-label">เครื่องทดแทน (ให้ใหม่)</div>
+          <div class="formal-swap-value">${txn.ReplacementSerial ? `${escapeHtml(typeLabel(inItem && inItem.AssetType))} — ${escapeHtml(txn.ReplacementSerial)}` : "(ยังไม่เลือกเครื่องทดแทน)"}</div>
+        </div>
+      </div>
+
+      ${txn.Details ? `<div class="formal-reason-box"><b>เหตุผลที่เคลม:</b> ${escapeHtml(txn.Details)}</div>` : ""}
+      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span></div>
+
+      <div class="signature-row">
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ผู้ส่งมอบเครื่องทดแทน</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-role">ลูกค้าผู้รับเครื่องทดแทน</div>
+          <div class="signature-date">วันที่ ______/______/________</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (isInIframe()) { printSlipViaPopup(html); return; }
   document.getElementById("printSlipRoot").innerHTML = html;
   document.body.classList.add("print-slip-active");
   printAfterImagesLoad(document.getElementById("printSlipRoot"));
@@ -1988,7 +2157,10 @@ function renderRows(cfg, rows, isAdmin) {
     return matchesSearch && matchesStatus;
   });
 
-  if (isMobileViewport()) {
+  // หน้าอะไหล่ Color Sorter/Panolyzer (cfg.partCategory) ใช้การ์ด "ไม่มีเบิก" แม้บนจอ PC ด้วย (ไม่ใช่แค่มือถือ)
+  // เพราะรูปอะไหล่ใหญ่ขึ้นเห็นชัดกว่าตารางเดิมมาก ส่วนตารางอุปกรณ์ปกติ (MoisturLyzer/Gateway/SimCard) ยังใช้
+  // ตารางแบบเดิมบนจอ PC เหมือนเดิมทุกประการ (ดู .pcard-grid ใน style.css สำหรับ layout แบบ grid หลายคอลัมน์)
+  if (isMobileViewport() || cfg.partCategory) {
     renderRowsAsCards(cfg, filtered, isAdmin);
   } else {
     renderRowsAsTable(cfg, filtered, isAdmin);
@@ -2277,64 +2449,39 @@ function renderPartsListView(viewKey, cfg) {
   const mobile = isMobileViewport();
   const qtyAssetType = PART_QTY_ASSET_TYPE_BY_VIEW[viewKey];
   const qtyParts = getQtyPartsForCategory(PART_CATEGORY_BY_VIEW[viewKey]);
-  const qtyColspan = isAdmin ? 6 : 5;
 
-  const qtyPartsSectionHtml = mobile
-    ? `<div class="mcard-list">
-        ${qtyParts.length ? qtyParts.map((p) => {
-          const issued = computePartIssuedQty(p.PartID, qtyAssetType);
-          const pending = computePartPendingQty(p.PartID, qtyAssetType);
-          const actionsHtml = isAdmin
-            ? `<div class="mcard-actions">
-                 <button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button>
-                 <button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}', ${!!p.HasPhoto})">เพิ่ม/เปลี่ยนรูป</button>
-                 <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
-                 <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
-               </div>`
-            : `<div class="mcard-actions"><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></div>`;
-          const photoHtml = p.HasPhoto
-            ? `<div class="mcard-photo" data-photo-wrap><img data-photo-partid="${escapeAttr(p.PartID)}" alt=""></div>`
-            : `<div class="mcard-photo">📦</div>`;
-          return `
-          <div class="mcard mcard-with-photo">
-            ${photoHtml}
-            <div class="mcard-body">
-              <div class="mcard-head">
-                <div class="mcard-title">${escapeHtml(p.PartName)}</div>
-                <span class="mcard-pill stock">${escapeHtml(String(p.QuantityInStock))} ในสต็อก</span>
-              </div>
-              <div class="mcard-row"><div class="mcard-label">กำลังเบิกอยู่</div><div class="mcard-val">${issued}</div></div>
-              <div class="mcard-row"><div class="mcard-label">รออนุมัติ</div><div class="mcard-val">${pending}</div></div>
-              ${actionsHtml}
-            </div>
-          </div>`;
-        }).join("") : `<div class="mcard-empty">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</div>`}
-      </div>`
-    : `<div class="table-card">
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th></th><th>ชื่ออะไหล่</th><th>คงเหลือในสต็อก</th><th>กำลังเบิกอยู่</th><th>รออนุมัติ</th><th>ประวัติ</th>${isAdmin ? "<th>จัดการ</th>" : ""}</tr></thead>
-          <tbody>
-            ${qtyParts.length ? qtyParts.map((p) => {
-              const issued = computePartIssuedQty(p.PartID, qtyAssetType);
-              const pending = computePartPendingQty(p.PartID, qtyAssetType);
-              const thumbCell = p.HasPhoto
-                ? `<td data-photo-wrap><img data-photo-partid="${escapeAttr(p.PartID)}" class="table-thumb" alt=""></td>`
-                : `<td><span class="table-thumb-empty">📦</span></td>`;
-              const historyCell = `<td><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></td>`;
-              const actionsCell = isAdmin
-                ? `<td class="no-wrap">
-                     <button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}', ${!!p.HasPhoto})">เพิ่ม/เปลี่ยนรูป</button>
-                     <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
-                     <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
-                   </td>`
-                : "";
-              return `<tr>${thumbCell}<td>${escapeHtml(p.PartName)}</td><td><span class="badge-stock">${escapeHtml(String(p.QuantityInStock))}</span></td><td>${issued}</td><td>${pending}</td>${historyCell}${actionsCell}</tr>`;
-            }).join("") : `<tr class="empty-row"><td colspan="${qtyColspan + 1}">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</td></tr>`}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
+  // การ์ดอะไหล่แบบนับจำนวน — ใช้ดีไซน์เดียวกันทั้งมือถือและ PC (ต่างแค่ wrapper: มือถือเรียงคอลัมน์เดียว, PC จัด
+  // เป็น grid หลายคอลัมน์ผ่านคลาส .pcard-grid ใน style.css) แทนตารางเดิมที่รูปเล็กมาก (60×60px) ให้เห็นรูปอะไหล่
+  // ชัดเจนขึ้นตามที่ผู้ใช้ขอ ตัวเลข 3 ค่าเดิม (คงเหลือ/กำลังเบิก/รออนุมัติ) ยกมาเป็นแถบสถิติใต้ชื่อแทนคอลัมน์ตาราง
+  const qtyPartCardsHtml = qtyParts.length ? qtyParts.map((p) => {
+    const issued = computePartIssuedQty(p.PartID, qtyAssetType);
+    const pending = computePartPendingQty(p.PartID, qtyAssetType);
+    const actionsHtml = isAdmin
+      ? `<div class="mcard-actions">
+           <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
+           <button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button>
+           <button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}', ${!!p.HasPhoto})">เพิ่ม/เปลี่ยนรูป</button>
+           <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
+         </div>`
+      : `<div class="mcard-actions"><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></div>`;
+    const photoHtml = p.HasPhoto
+      ? `<div class="mcard-photo" data-photo-wrap><img data-photo-partid="${escapeAttr(p.PartID)}" alt=""></div>`
+      : `<div class="mcard-photo">📦</div>`;
+    return `
+      <div class="mcard mcard-with-photo">
+        ${photoHtml}
+        <div class="mcard-body">
+          <div class="mcard-title">${escapeHtml(p.PartName)}</div>
+          <div class="mcard-stat-row">
+            <div class="mcard-stat"><div class="num">${escapeHtml(String(p.QuantityInStock))}</div><div class="lbl">คงเหลือ</div></div>
+            <div class="mcard-stat${issued > 0 ? " warn" : ""}"><div class="num">${issued}</div><div class="lbl">กำลังเบิก</div></div>
+            <div class="mcard-stat"><div class="num">${pending}</div><div class="lbl">รออนุมัติ</div></div>
+          </div>
+          ${actionsHtml}
+        </div>
+      </div>`;
+  }).join("") : `<div class="mcard-empty">ยังไม่มีอะไหล่แบบนับจำนวนในหมวดนี้</div>`;
+  const qtyPartsSectionHtml = `<div class="mcard-list${mobile ? "" : " pcard-grid"}">${qtyPartCardsHtml}</div>`;
 
   content.innerHTML = `
     <h3 class="section-subtitle">อะไหล่แบบนับจำนวน (ไม่มี S/N)</h3>
@@ -2349,16 +2496,7 @@ function renderPartsListView(viewKey, cfg) {
         <option value="used">เบิกออกไปแล้ว</option>
       </select>
     </div>
-    ${mobile
-      ? `<div id="listCards" class="mcard-list"></div>`
-      : `<div class="table-card">
-      <div class="table-scroll">
-        <table>
-          <thead><tr>${cfg.partCategory ? "<th></th>" : ""}${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>จัดการ</th>" : "<th>ประวัติ</th>"}</tr></thead>
-          <tbody id="listTbody"></tbody>
-        </table>
-      </div>
-    </div>`}
+    <div id="listCards" class="mcard-list${mobile ? "" : " pcard-grid"}"></div>
     ${isAdmin ? `<div class="cache-note" style="margin-top:10px;">ต้องการเพิ่มอะไหล่ใหม่หรือเติมสต็อก? ไปที่เมนู "จัดการ Stock/อะไหล่"</div>` : ""}
   `;
   hydratePartPhotoThumbnails(content); // เติมรูปของ "อะไหล่แบบนับจำนวน" (qtyPartsSectionHtml) ที่ set ไว้ข้างบนนี้ก่อน
@@ -2904,9 +3042,10 @@ function openGenericFormModal(title, fields, onSave) {
   body.innerHTML = fields.map((f, i) => {
     // Phase 10: รองรับ field แบบ dropdown (type: "select") นอกเหนือจากช่องข้อความธรรมดาแบบเดิม
     if (f.type === "select") {
+      // ค้นหา S/N แบบพิมพ์หา — ใช้กับ dropdown ยาวๆ ทุกจุด (รวมถึงฟอร์มแก้ไข Gateway/SimCard ที่ผูกกับรายการเบิก)
       return `<div class="form-field">
         <label>${escapeHtml(f.label)}</label>
-        <select id="gfm-field-${i}">
+        <select id="gfm-field-${i}" class="searchable-select">
           ${(f.options || []).map((o) => `<option value="${escapeAttr(o.value)}" ${String(o.value) === String(f.value) ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
         </select>
       </div>`;
@@ -2917,6 +3056,7 @@ function openGenericFormModal(title, fields, onSave) {
       <input type="${f.type === "password" ? "password" : "text"}" id="gfm-field-${i}" autocomplete="${f.type === "password" ? "new-password" : "off"}" value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
     </div>`;
   }).join("");
+  enhanceSearchableSelects(body);
   const msgEl = document.getElementById("genericFormModalMsg");
   msgEl.className = "form-msg";
   msgEl.textContent = "";
@@ -3032,15 +3172,20 @@ function renderTransferClaimModalBody() {
   let fieldsHtml = "";
   let submitLabel = "";
 
+  const isAdmin = state.user.role === "Admin";
+  // Staff ส่งได้แค่ "คำขอ" ที่ต้องรอ Admin อนุมัติก่อนถึงจะมีผลจริง — Admin ยังคงทำได้ทันทีเหมือนเดิม (ดู
+  // submitTransferAsset/submitClaimAsset ด้านล่างที่แยกเรียก action คนละตัวตาม role)
+  const roleNoticeHtml = isAdmin ? "" : `<div class="info-box">📋 คำขอนี้จะถูกส่งไปรออนุมัติจาก Admin ก่อน ยังไม่มีผลกับข้อมูลจนกว่าจะอนุมัติ</div>`;
+
   if (tab === "transfer") {
-    submitLabel = "ยืนยันย้าย";
+    submitLabel = isAdmin ? "ยืนยันย้าย" : "ส่งคำขอย้าย";
     let connectFieldHtml = "";
     if (assetKey === "gateway") {
       const options = getLinkableIssuedMoisturlyzers();
       connectFieldHtml = `
         <div class="form-field">
           <label>เชื่อมต่อกับ MoisturLyzer เครื่องไหน (ไม่บังคับ)</label>
-          <select id="tc-connect">
+          <select id="tc-connect" class="searchable-select">
             <option value="">ยังไม่ระบุตอนนี้</option>
             ${options.map((o) => `<option value="${escapeAttr(o.serial)}">${escapeHtml(o.serial)}${o.customer ? " — " + escapeHtml(o.customer) : ""}</option>`).join("")}
           </select>
@@ -3050,7 +3195,7 @@ function renderTransferClaimModalBody() {
       connectFieldHtml = `
         <div class="form-field">
           <label>เชื่อมต่อกับ Gateway เครื่องไหน (ไม่บังคับ)</label>
-          <select id="tc-connect">
+          <select id="tc-connect" class="searchable-select">
             <option value="">ยังไม่ระบุตอนนี้</option>
             ${options.map((o) => `<option value="${escapeAttr(o.serial)}">${escapeHtml(o.serial)}${o.customer ? " — " + escapeHtml(o.customer) : ""}</option>`).join("")}
           </select>
@@ -3063,6 +3208,7 @@ function renderTransferClaimModalBody() {
          </div>`
       : "";
     fieldsHtml = `
+      ${roleNoticeHtml}
       <div class="info-box">ย้ายจาก: <strong>${escapeHtml(fromCustomer || "-")}</strong> · ${escapeHtml(fromLocation || "-")}</div>
       <div class="form-field">
         <label>ลูกค้าใหม่ *</label>
@@ -3076,9 +3222,10 @@ function renderTransferClaimModalBody() {
       ${moveSimHtml}
     `;
   } else {
-    submitLabel = "ยืนยันเคลม";
+    submitLabel = isAdmin ? "ยืนยันเคลม" : "ส่งคำขอเคลม";
     const stockOptions = getStockSerialsForAssetKey(assetKey).filter((s) => s !== serial);
     fieldsHtml = `
+      ${roleNoticeHtml}
       <div class="info-box">ข้อมูลปัจจุบัน: <strong>${escapeHtml(fromCustomer || "-")}</strong> · ${escapeHtml(fromLocation || "-")}</div>
       <div class="form-field">
         <label>เหตุผลการเคลม (ไม่บังคับ)</label>
@@ -3086,7 +3233,7 @@ function renderTransferClaimModalBody() {
       </div>
       <div class="form-field">
         <label>เลือกเครื่องทดแทนจาก Stock</label>
-        <select id="tc-replacement">
+        <select id="tc-replacement" class="searchable-select">
           ${!stockOptions.length ? `<option value="">ไม่มีเครื่องว่างใน Stock ตอนนี้</option>` : `<option value="">ไม่ระบุตอนนี้ (ถอดออกอย่างเดียวก่อน)</option>`}
           ${stockOptions.map((s) => `<option value="${escapeAttr(s)}">${escapeHtml(s)}</option>`).join("")}
         </select>
@@ -3096,6 +3243,7 @@ function renderTransferClaimModalBody() {
   }
 
   body.innerHTML = tabsHtml + fieldsHtml;
+  enhanceSearchableSelects(body);
 
   const submitBtn = document.getElementById("transferClaimSubmitBtn");
   submitBtn.textContent = submitLabel;
@@ -3118,15 +3266,21 @@ async function submitTransferAsset() {
     return;
   }
 
-  const confirmed = await showConfirm(`ยืนยันย้าย ${cfg.title} ${serial} ไปที่ลูกค้า "${newCustomer}"?`);
+  const isAdmin = state.user.role === "Admin";
+  const action = isAdmin ? "transferAsset" : "requestTransfer";
+  const confirmed = await showConfirm(
+    isAdmin
+      ? `ยืนยันย้าย ${cfg.title} ${serial} ไปที่ลูกค้า "${newCustomer}"?`
+      : `ยืนยันส่งคำขอย้าย ${cfg.title} ${serial} ไปที่ลูกค้า "${newCustomer}"? คำขอนี้ต้องรอ Admin อนุมัติก่อนถึงจะมีผลจริง`
+  );
   if (!confirmed) return;
 
   const submitBtn = document.getElementById("transferClaimSubmitBtn");
   const originalText = submitBtn.textContent;
-  submitBtn.disabled = true; submitBtn.textContent = "กำลังย้าย...";
+  submitBtn.disabled = true; submitBtn.textContent = isAdmin ? "กำลังย้าย..." : "กำลังส่งคำขอ...";
   try {
     const res = await apiPost({
-      action: "transferAsset", token: state.token, assetType: cfg.assetType, serialNo: serial,
+      action, token: state.token, assetType: cfg.assetType, serialNo: serial,
       newCustomer, newLocation, connectSerial, moveLinkedSimCard,
     });
     if (!res.ok) {
@@ -3136,6 +3290,7 @@ async function submitTransferAsset() {
     await refreshInBackground(true);
     closeTransferClaimModal();
     renderCurrentView();
+    if (!isAdmin) await showAlert("ส่งคำขอย้ายเรียบร้อยแล้ว รอ Admin อนุมัติ", "success");
   } catch (err) {
     msgEl.className = "form-msg error";
     msgEl.textContent = err.message;
@@ -3151,18 +3306,22 @@ async function submitClaimAsset() {
   const replacementEl = document.getElementById("tc-replacement");
   const replacementSerialNo = replacementEl ? replacementEl.value : "";
 
-  const confirmMsg = replacementSerialNo
-    ? `ยืนยันเคลม ${cfg.title} ${serial}? ระบบจะถอดเครื่องนี้ออก และเบิกเครื่องทดแทน ${replacementSerialNo} ให้ลูกค้าเดิมทันที`
-    : `ยืนยันเคลม ${cfg.title} ${serial}? ระบบจะถอดเครื่องนี้ออกเป็นสถานะ "อยู่ระหว่างเคลม" (ยังไม่เลือกเครื่องทดแทน)`;
+  const isAdmin = state.user.role === "Admin";
+  const action = isAdmin ? "claimAsset" : "requestClaim";
+  const confirmMsg = isAdmin
+    ? (replacementSerialNo
+        ? `ยืนยันเคลม ${cfg.title} ${serial}? ระบบจะถอดเครื่องนี้ออก และเบิกเครื่องทดแทน ${replacementSerialNo} ให้ลูกค้าเดิมทันที`
+        : `ยืนยันเคลม ${cfg.title} ${serial}? ระบบจะถอดเครื่องนี้ออกเป็นสถานะ "อยู่ระหว่างเคลม" (ยังไม่เลือกเครื่องทดแทน)`)
+    : `ยืนยันส่งคำขอเคลม ${cfg.title} ${serial}? คำขอนี้ต้องรอ Admin อนุมัติก่อนถึงจะมีผลจริง`;
   const confirmed = await showConfirm(confirmMsg);
   if (!confirmed) return;
 
   const submitBtn = document.getElementById("transferClaimSubmitBtn");
   const originalText = submitBtn.textContent;
-  submitBtn.disabled = true; submitBtn.textContent = "กำลังเคลม...";
+  submitBtn.disabled = true; submitBtn.textContent = isAdmin ? "กำลังเคลม..." : "กำลังส่งคำขอ...";
   try {
     const res = await apiPost({
-      action: "claimAsset", token: state.token, assetType: cfg.assetType, serialNo: serial,
+      action, token: state.token, assetType: cfg.assetType, serialNo: serial,
       reason, replacementSerialNo,
     });
     if (!res.ok) {
@@ -3172,6 +3331,7 @@ async function submitClaimAsset() {
     await refreshInBackground(true);
     closeTransferClaimModal();
     renderCurrentView();
+    if (!isAdmin) await showAlert("ส่งคำขอเคลมเรียบร้อยแล้ว รอ Admin อนุมัติ", "success");
   } catch (err) {
     msgEl.className = "form-msg error";
     msgEl.textContent = err.message;
@@ -3551,6 +3711,19 @@ function transferClaimErrorMessage(code, conflicts) {
   }
 }
 
+/** ฟีเจอร์ "ยกเลิกรายการ" — ข้อความ error สำหรับการยกเลิกรายการที่ทำไปแล้ว (เบิก/ย้าย/เคลม) */
+function cancelTransactionErrorMessage(code) {
+  switch (code) {
+    case "not_cancellable": return "ยกเลิกได้เฉพาะรายการที่มีสถานะ \"เบิกแล้ว\" เท่านั้น (ธุรกรรมนี้อาจถูกยกเลิก/คืนของไปแล้ว)";
+    case "state_changed": return "ไม่สามารถยกเลิกได้ — มีการนำอุปกรณ์ในรายการนี้ไปทำรายการอื่นต่อแล้ว (ย้ายต่อ/เคลมต่อ/คืนของ/ปิดเคสเคลม) กรุณาตรวจสอบและแก้ไขข้อมูลอุปกรณ์โดยตรงแทน";
+    case "item_not_found": return "ไม่พบรายการอุปกรณ์ของธุรกรรมนี้ (ข้อมูลอาจมีการเปลี่ยนแปลง)";
+    case "unknown_asset_type": return "ประเภทอุปกรณ์ในธุรกรรมนี้ไม่รู้จัก ไม่สามารถยกเลิกอัตโนมัติได้";
+    case "not_found": return "ไม่พบอุปกรณ์นี้ในระบบ (อาจถูกลบไปแล้ว)";
+    case "forbidden": return "การดำเนินการนี้สำหรับ Admin เท่านั้น";
+    default: return "ดำเนินการไม่สำเร็จ กรุณาลองใหม่";
+  }
+}
+
 /** Phase 10: ข้อความ error สำหรับการสลับเปลี่ยนเครื่อง Gateway/SimCard ที่ผูกกับรายการเบิก */
 function linkedItemErrorMessage(code) {
   switch (code) {
@@ -3639,13 +3812,13 @@ function openEditIssuance(transactionId) {
 }
 
 async function deleteIssuance(transactionId) {
-  const confirmed = await showConfirm(`ยืนยันลบรายการเบิก ${transactionId}? ใช้ได้เฉพาะรายการที่ถูกปฏิเสธหรือคืนของแล้วเท่านั้น และไม่สามารถย้อนกลับได้`, { type: "warning", okText: "ลบเลย", danger: true });
+  const confirmed = await showConfirm(`ยืนยันลบรายการเบิก ${transactionId}? ใช้ได้เฉพาะรายการที่ถูกปฏิเสธ/คืนของ/ยกเลิกไปแล้วเท่านั้น และไม่สามารถย้อนกลับได้`, { type: "warning", okText: "ลบเลย", danger: true });
   if (!confirmed) return;
   try {
     const res = await apiPost({ action: "deleteIssuance", token: state.token, transactionId });
     if (!res.ok) {
       if (res.error === "unauthorized") return handleUnauthorized();
-      await showAlert(res.error === "not_deletable" ? "ลบได้เฉพาะรายการที่ถูกปฏิเสธหรือคืนของแล้วเท่านั้น" : "ดำเนินการไม่สำเร็จ กรุณาลองใหม่", "error");
+      await showAlert(res.error === "not_deletable" ? "ลบได้เฉพาะรายการที่ถูกปฏิเสธ/คืนของ/ยกเลิกไปแล้วเท่านั้น" : "ดำเนินการไม่สำเร็จ กรุณาลองใหม่", "error");
       return;
     }
     await refreshInBackground(true);
@@ -4187,7 +4360,7 @@ function renderBasket() {
             if (!availableSim.length && !item.linkedSimSerial) {
               simCell = `<span class="cache-note">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
             } else {
-              simCell = `<select onchange="updateLinkedSim(${idx}, this.value)">
+              simCell = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
                 <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
                 ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
               </select>`;
@@ -4205,7 +4378,7 @@ function renderBasket() {
               serialCell = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
             } else {
               const gwCfg = VIEW_CONFIG.gateway;
-              serialCell = `<select onchange="updateLinkedGateway(${idx}, this.value)">
+              serialCell = `<select class="searchable-select" onchange="updateLinkedGateway(${idx}, this.value)">
                 <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
                 ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
               </select>`;
@@ -4223,7 +4396,7 @@ function renderBasket() {
             if (!linkableTargets.length) {
               serialCell = `<span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
             } else {
-              serialCell = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+              serialCell = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
                 <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
                 ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
               </select>`;
@@ -4237,7 +4410,7 @@ function renderBasket() {
             if (!availableGw.length) {
               serialCell = `<span class="cache-note">ไม่มี Gateway ที่เบิกออกไปแล้วในระบบ</span>`;
             } else {
-              serialCell = `<select onchange="updateSimConnectToGateway(${idx}, this.value)">
+              serialCell = `<select class="searchable-select" onchange="updateSimConnectToGateway(${idx}, this.value)">
                 <option value="">-- ไม่ระบุ Gateway เจาะจง --</option>
                 ${availableGw.map((g) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)} — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}</option>`).join("")}
               </select>`;
@@ -4251,7 +4424,7 @@ function renderBasket() {
               if (!linkableTargets.length) {
                 serialCell = `<span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
               } else {
-                serialCell = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+                serialCell = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
                   <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
                   ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
                 </select>`;
@@ -4273,6 +4446,7 @@ function renderBasket() {
     <div class="cache-note" style="margin-top:8px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
     <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
   `;
+  enhanceSearchableSelects(area);
 }
 
 /** เวอร์ชันมือถือของตะกร้าเบิก — แต่ละชิ้นเป็นการ์ดแยก วางฟิลด์ซ้อนแนวตั้งเต็มความกว้างจอ แทนตารางแนวนอนที่ต้องเลื่อนซ้าย-ขวา (ลอจิกการเลือก Gateway/SimCard/เชื่อมต่อเหมือนกับเวอร์ชันคอมพิวเตอร์ทุกประการ ต่างแค่การจัดวาง) */
@@ -4330,7 +4504,7 @@ function renderBasketMobile(area) {
       if (!availableSim.length && !item.linkedSimSerial) {
         simFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
       } else {
-        simFieldHtml = `<select onchange="updateLinkedSim(${idx}, this.value)">
+        simFieldHtml = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
           <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
           ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
         </select>`;
@@ -4345,7 +4519,7 @@ function renderBasketMobile(area) {
       if (!availableGw.length && !item.linkedGatewaySerial) {
         gwFieldHtml = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)} ว่างในสต๊อก</span>`;
       } else {
-        gwFieldHtml = `<select onchange="updateLinkedGateway(${idx}, this.value)">
+        gwFieldHtml = `<select class="searchable-select" onchange="updateLinkedGateway(${idx}, this.value)">
           <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
           ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
         </select>`;
@@ -4371,7 +4545,7 @@ function renderBasketMobile(area) {
       if (!linkableTargets.length) {
         targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
       } else {
-        targetFieldHtml = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+        targetFieldHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
           <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
           ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
         </select>`;
@@ -4386,7 +4560,7 @@ function renderBasketMobile(area) {
       if (!availableGw.length) {
         targetFieldHtml = `<span class="warn-text">ไม่มี Gateway ที่เบิกออกไปแล้วในระบบ</span>`;
       } else {
-        targetFieldHtml = `<select onchange="updateSimConnectToGateway(${idx}, this.value)">
+        targetFieldHtml = `<select class="searchable-select" onchange="updateSimConnectToGateway(${idx}, this.value)">
           <option value="">-- ไม่ระบุ Gateway เจาะจง --</option>
           ${availableGw.map((g) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)} — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}</option>`).join("")}
         </select>`;
@@ -4407,7 +4581,7 @@ function renderBasketMobile(area) {
         if (!linkableTargets.length) {
           targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
         } else {
-          targetFieldHtml = `<select onchange="updateBasketConnectSerial(${idx}, this.value)">
+          targetFieldHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
             <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
             ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
           </select>`;
@@ -4440,6 +4614,7 @@ function renderBasketMobile(area) {
     <div class="cache-note" style="margin-top:10px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
     <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
   `;
+  enhanceSearchableSelects(area);
 }
 
 /** Phase 6: สรุปสิ่งที่ยังขาดในตะกร้า (ถ้ามี) ให้เห็นชัดก่อนกดส่งคำขอ */
@@ -4677,35 +4852,194 @@ function renderApprovalsView() {
 
   content.innerHTML = `
     ${bulkActionBarHtml("bulk-approval-cb", selectableCount, [
-      { action: "approveIssuance", label: "อนุมัติ", cls: "btn-approve" },
+      { action: "approveAny", label: "อนุมัติ", cls: "btn-approve" },
       { action: "rejectIssuance", label: "ปฏิเสธ", cls: "btn-reject" },
     ])}
     ${pending.map((txn) => {
       const items = getItemsForTransaction(txn.TransactionID);
+      const isTransfer = txn.MovementType === "Transfer";
+      const isClaim = txn.MovementType === "Claim";
+      const movementBadge = isTransfer
+        ? `<span class="status-badge status-transfer">คำขอย้าย</span>`
+        : isClaim
+          ? `<span class="status-badge status-claim">คำขอเคลม</span>`
+          : "";
+      const requesterLine = (isTransfer || isClaim)
+        ? `<div class="txn-meta">ผู้ขอ: ${escapeHtml(txn.IssuedBy)}${txn.FromCustomer ? ` · ลูกค้าเดิม: ${escapeHtml(txn.FromCustomer)}${txn.FromLocation ? " — " + escapeHtml(txn.FromLocation) : ""}` : ""}</div>`
+        : "";
+      // เคลม: โชว์ "เครื่องเดิม ⇄ เครื่องทดแทน" ให้ Admin เห็นชัดว่ากำลังจะเปลี่ยนเครื่องอะไรให้อะไร ก่อนกดอนุมัติ
+      const claimSwapLine = isClaim
+        ? `<div class="txn-meta">เครื่องที่เคลม: <b>${escapeHtml(txn.ClaimedSerial || "-")}</b>${txn.ReplacementSerial ? ` ⇄ เครื่องทดแทน: <b>${escapeHtml(txn.ReplacementSerial)}</b>` : " (ยังไม่เลือกเครื่องทดแทน)"}</div>`
+        : "";
       return `
       <div class="txn-card">
         <div class="txn-card-head">
           ${txn._pendingSync ? "" : `<label class="txn-select"><input type="checkbox" class="bulk-approval-cb" data-txn-id="${escapeAttr(txn.TransactionID)}" onchange="toggleBulkSelect('${escapeAttr(txn.TransactionID)}', this.checked)"></label>`}
           <div>
-            <div class="txn-title">${escapeHtml(txn.CustomerName)} — ${escapeHtml(txn.SiteLocation || "")}</div>
-            <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ผู้เบิก: ${escapeHtml(txn.IssuedBy)} · ${formatDateTh(txn.Timestamp)}</div>
+            <div class="txn-title">${isTransfer ? "คำขอย้าย" : isClaim ? "คำขอเคลม" : escapeHtml(txn.CustomerName)} — ${escapeHtml(isClaim ? (txn.FromCustomer || txn.CustomerName || "") : txn.CustomerName)}${!isClaim && txn.SiteLocation ? " — " + escapeHtml(txn.SiteLocation) : ""}</div>
+            <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ${formatDateTh(txn.Timestamp)}</div>
           </div>
           <span class="status-badge status-PendingApproval">รออนุมัติ</span>
+          ${movementBadge}
           ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
         </div>
-        ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
-        <div class="txn-items">
+        ${requesterLine}
+        ${claimSwapLine}
+        ${txn.Details ? `<div class="txn-meta">${isClaim ? "เหตุผลที่เคลม" : "หมายเหตุ"}: ${escapeHtml(txn.Details)}</div>` : ""}
+        ${!isClaim ? `<div class="txn-items">
           ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}</div>`).join("")}
-        </div>
+        </div>` : ""}
         ${txn._pendingSync
           ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์ก่อนจึงจะอนุมัติได้</div>`
           : `<div class="txn-actions">
-               <button class="btn-sm btn-approve" onclick="approveTxn('${escapeAttr(txn.TransactionID)}', this)">อนุมัติ</button>
+               <button class="btn-sm btn-approve" onclick="approveTxn('${escapeAttr(txn.TransactionID)}', this)">อนุมัติ${isTransfer ? "ย้าย" : isClaim ? "เคลม" : ""}</button>
                <button class="btn-sm btn-reject" onclick="rejectTxn('${escapeAttr(txn.TransactionID)}', this)">ปฏิเสธ</button>
              </div>`}
       </div>`;
     }).join("")}
   `;
+}
+
+// ============================================================
+// เมนู "ย้าย/เคลม" แยกต่างหาก — ค้นหาเครื่องที่ต้องการย้าย/เคลมด้วย S/N ได้เลยทันทีที่เปิดเมนู ไม่ต้องเปิดตาราง
+// อุปกรณ์แต่ละประเภทก่อนแล้วค่อยหาปุ่ม (ของเยอะเลื่อนหาลำบาก) ค้นหาข้ามได้ทั้ง MoisturLyzer/Gateway/SimCard ในช่อง
+// เดียว ทุกแถวผลลัพธ์โชว์ S/N + ชื่อลูกค้า + Location กำกับไว้เสมอ กันเลือกผิดเครื่อง (ตามที่ขอมา)
+// ============================================================
+let transferClaimSearchTerm = "";
+
+/** รวมแถวอุปกรณ์ที่ "เบิกออกไปแล้ว" (ไม่ใช่ Stock/กำลังเคลม/ตัดจำหน่าย) จากทั้ง 3 ประเภท มาเป็นรายการเดียวเพื่อค้นหา */
+function getTransferClaimSearchableRows() {
+  const rows = [];
+  TRANSFER_CLAIM_ASSET_KEYS.forEach((assetKey) => {
+    const cfg = VIEW_CONFIG[assetKey];
+    (state.data[assetKey] || []).forEach((row) => {
+      if (isStockRow(row, cfg.stockField, cfg.stockRequiresField) || isClaimedRow(row, cfg) || isWrittenOffRow(row, cfg)) return;
+      rows.push({ assetKey, cfg, row, serial: String(row[cfg.serialField] || "") });
+    });
+  });
+  return rows;
+}
+
+function renderTransferClaimSearchView() {
+  const content = document.getElementById("viewContent");
+  content.innerHTML = `
+    <div class="tc-search-wrap">
+      <input type="text" id="tcSearchInput" class="tc-search-input" placeholder="พิมพ์ S/N ที่ต้องการย้ายหรือเคลม (ค้นหาข้ามได้ทั้ง MoisturLyzer/Gateway/SimCard)" autocomplete="off">
+      <div id="tcSearchResults"></div>
+    </div>
+  `;
+  const input = document.getElementById("tcSearchInput");
+  input.value = transferClaimSearchTerm;
+  input.addEventListener("input", () => {
+    transferClaimSearchTerm = input.value;
+    renderTransferClaimSearchResults();
+  });
+  renderTransferClaimSearchResults();
+  input.focus();
+}
+
+function renderTransferClaimSearchResults() {
+  const resultsEl = document.getElementById("tcSearchResults");
+  if (!resultsEl) return;
+  const term = transferClaimSearchTerm.trim().toLowerCase();
+
+  if (!term) {
+    resultsEl.innerHTML = `<div class="empty-state">พิมพ์เลข S/N ด้านบนเพื่อเริ่มค้นหาเครื่องที่ต้องการย้าย/เคลม</div>`;
+    return;
+  }
+
+  const matches = getTransferClaimSearchableRows()
+    .filter((m) => m.serial.toLowerCase().includes(term))
+    .sort((a, b) => a.serial.localeCompare(b.serial))
+    .slice(0, 50); // กันรายการยาวเกินไปถ้าค้นด้วยคำสั้นๆ แล้วตรงกันเยอะมาก
+
+  if (!matches.length) {
+    resultsEl.innerHTML = `<div class="empty-state">ไม่พบเครื่องนี้ในสถานะเบิกออกแล้ว — เครื่องอาจอยู่ใน Stock, กำลังเคลมอยู่, หรือถูกตัดจำหน่ายไปแล้ว</div>`;
+    return;
+  }
+
+  resultsEl.innerHTML = matches.map((m) => {
+    const customer = String(m.row.Customer_name || "").trim() || "-";
+    const location = String(m.row.Location || "").trim() || "-";
+    return `
+      <div class="tc-result-row" onclick="openTransferClaimModal('${escapeAttr(m.assetKey)}', '${escapeAttr(m.serial)}')">
+        <div class="tc-result-left">
+          <div class="tc-result-sn">${highlightMatch(m.serial, term)}</div>
+          <div class="tc-result-sub">ลูกค้า: <b>${escapeHtml(customer)}</b> &nbsp;·&nbsp; Location: <b>${escapeHtml(location)}</b></div>
+        </div>
+        <span class="tc-result-type">${escapeHtml(m.cfg.title)}</span>
+      </div>`;
+  }).join("");
+}
+
+/** ไฮไลต์ส่วนของ S/N ที่ตรงกับคำค้น (case-insensitive) ด้วย <mark> — ใช้ escapeHtml ครอบผลลัพธ์รวมอีกชั้นตอนแสดงผล
+ * จึงต้อง escape ทีละท่อนเองในนี้ก่อนประกอบ <mark> ไม่งั้น escapeHtml ชั้นนอกจะ escape แท็ก <mark> ทิ้งไปด้วย */
+function highlightMatch(text, term) {
+  if (!term) return escapeHtml(text);
+  const idx = text.toLowerCase().indexOf(term.toLowerCase());
+  if (idx === -1) return escapeHtml(text);
+  const before = text.slice(0, idx), match = text.slice(idx, idx + term.length), after = text.slice(idx + term.length);
+  return `${escapeHtml(before)}<mark>${escapeHtml(match)}</mark>${escapeHtml(after)}`;
+}
+
+// ============================================================
+// ฟีเจอร์ "ค้นหา S/N แบบพิมพ์หา" — แปลง <select class="searchable-select"> ธรรมดาให้กลายเป็นช่องพิมพ์ค้นหา
+// (combobox) โดยไม่ต้องแก้โค้ดจุดที่ใช้งาน select เดิมเลยแม้แต่บรรทัดเดียว — ตัว <select> เดิมยังอยู่ใน DOM
+// เหมือนเดิมทุกประการ (แค่ถูกซ่อนด้วย CSS) ทำหน้าที่เป็นค่าจริงที่โค้ดเดิมอ่าน .value / ฟัง onchange ได้ปกติ
+// ใช้กับทุกจุดที่มี dropdown เลือก S/N อุปกรณ์ตามที่ผู้ใช้ขอ เพราะบางรายการมีเป็นร้อยตัว เลื่อนหาลำบากมาก
+// ============================================================
+function makeSearchableSelect(select) {
+  if (!select || select.dataset.searchableInit) return;
+  select.dataset.searchableInit = "1";
+
+  const wrap = document.createElement("div");
+  wrap.className = "ss-wrap";
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  select.classList.add("ss-hidden-select");
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "ss-input";
+  input.autocomplete = "off";
+  input.placeholder = "พิมพ์เพื่อค้นหา...";
+  const list = document.createElement("div");
+  list.className = "ss-list";
+  wrap.appendChild(input);
+  wrap.appendChild(list);
+
+  const optionsData = () => Array.from(select.options).map((o) => ({ value: o.value, label: o.textContent, disabled: o.disabled }));
+  const syncInputFromSelect = () => {
+    const opt = select.options[select.selectedIndex];
+    input.value = opt ? opt.textContent : "";
+  };
+  const renderList = (term) => {
+    const t = (term || "").trim().toLowerCase();
+    const opts = optionsData().filter((o) => !o.disabled && (!t || o.label.toLowerCase().includes(t)));
+    list.innerHTML = !opts.length
+      ? `<div class="ss-empty">ไม่พบรายการที่ตรงกัน</div>`
+      : opts.slice(0, 300).map((o) => `<div class="ss-item${o.value === select.value ? " sel" : ""}" data-value="${escapeAttr(o.value)}">${highlightMatch(o.label, t)}</div>`).join("");
+    list.classList.add("open");
+  };
+  input.addEventListener("focus", () => renderList(""));
+  input.addEventListener("input", () => renderList(input.value));
+  input.addEventListener("blur", () => setTimeout(() => list.classList.remove("open"), 150));
+  list.addEventListener("mousedown", (e) => {
+    const item = e.target.closest(".ss-item");
+    if (!item) return;
+    e.preventDefault();
+    select.value = item.dataset.value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    syncInputFromSelect();
+    list.classList.remove("open");
+    input.blur();
+  });
+  syncInputFromSelect();
+}
+
+/** เรียกหลังจาก render HTML ที่มี <select class="searchable-select"> เสร็จทุกครั้ง เพื่อแปลงเป็นช่องพิมพ์ค้นหา */
+function enhanceSearchableSelects(root) {
+  (root || document).querySelectorAll("select.searchable-select").forEach(makeSearchableSelect);
 }
 
 // ============================================================
@@ -4765,8 +5099,12 @@ async function runBulkAction(action, actionLabel) {
   const failures = [];
   for (let i = 0; i < ids.length; i++) {
     if (progressEl) progressEl.textContent = `กำลังดำเนินการ ${i + 1}/${ids.length}...`;
+    // "approveAny" คือ sentinel พิเศษของปุ่มอนุมัติแบบกลุ่ม — ต้องดู MovementType ของแต่ละธุรกรรมเองแล้วเลือก action
+    // ที่ถูกต้อง (approveIssuance/approveTransfer/approveClaim) เพราะเลือกได้หลายรายการปนกันในครั้งเดียว
+    // ต่างจาก "rejectIssuance"/"returnTransaction" ที่เป็น action เดียวกันได้กับทุกประเภทธุรกรรมอยู่แล้ว
+    const resolvedAction = action === "approveAny" ? resolveApprovalAction(ids[i]) : action;
     try {
-      const res = await apiPost({ action, token: state.token, transactionId: ids[i] });
+      const res = await apiPost({ action: resolvedAction, token: state.token, transactionId: ids[i] });
       if (!res.ok) {
         if (res.error === "unauthorized") { handleUnauthorized(); return; }
         failures.push(`${ids[i]}: ${res.conflicts ? res.conflicts.join(", ") : (res.error || "unknown_error")}`);
@@ -4785,8 +5123,17 @@ async function runBulkAction(action, actionLabel) {
   }
 }
 
+/** ดูว่าธุรกรรมนี้เป็นคำขอเบิกปกติ/ย้าย/เคลม แล้วคืนชื่อ action ที่ถูกต้องสำหรับ "อนุมัติ" — ใช้ทั้งปุ่มอนุมัติเดี่ยว
+ * และปุ่มอนุมัติแบบกลุ่ม (bulk) เพราะสามธุรกรรมนี้แต่ละแบบมีฟังก์ชันอนุมัติคนละตัวกัน (ดู functions/index.js) */
+function resolveApprovalAction(transactionId) {
+  const log = (state.data.issuanceLog || []).find((l) => l.TransactionID === transactionId);
+  if (log && log.MovementType === "Transfer") return "approveTransfer";
+  if (log && log.MovementType === "Claim") return "approveClaim";
+  return "approveIssuance";
+}
+
 async function approveTxn(transactionId, btnEl) {
-  await runTxnAction("approveIssuance", transactionId, btnEl, "กำลังอนุมัติ...");
+  await runTxnAction(resolveApprovalAction(transactionId), transactionId, btnEl, "กำลังอนุมัติ...");
 }
 
 async function rejectTxn(transactionId, btnEl) {
@@ -4801,7 +5148,24 @@ async function returnTxn(transactionId, btnEl) {
   await runTxnAction("returnTransaction", transactionId, btnEl, "กำลังคืนของ...");
 }
 
-async function runTxnAction(action, transactionId, btnEl, loadingText) {
+/** ฟีเจอร์ "ยกเลิกรายการ" — Admin ยกเลิกรายการที่ "ทำไปแล้ว" (เบิก/ย้าย/เคลม สถานะ Issued) ระบบจะคืนสถานะของ
+ * อุปกรณ์กลับไปเป็นก่อนหน้าทำรายการนี้ให้อัตโนมัติ (ต่างจาก "ปฏิเสธคำขอ" ที่ใช้กับคำขอที่ยังรออนุมัติอยู่เท่านั้น) */
+async function cancelTxn(transactionId, btnEl) {
+  const log = (state.data.issuanceLog || []).find((l) => l.TransactionID === transactionId);
+  let warnText = "ยืนยันยกเลิกรายการนี้? ระบบจะคืนสถานะอุปกรณ์กลับไปเป็นก่อนหน้าทำรายการนี้ให้อัตโนมัติ";
+  if (log && log.MovementType === "Transfer") {
+    warnText = `ยืนยันยกเลิกการย้ายนี้? อุปกรณ์จะถูกย้ายกลับไปหาลูกค้าเดิม "${log.FromCustomer || "-"}" (${log.FromLocation || "-"}) ทันที`;
+  } else if (log && log.MovementType === "Claim") {
+    warnText = `ยืนยันยกเลิกการเคลมนี้? เครื่องที่เคลมออกไปจะกลับมาเป็น "เบิกอยู่" ให้ลูกค้าเดิมทันที${log.ReplacementSerial ? " และเครื่องทดแทนจะถูกดึงกลับเข้า Stock" : ""}`;
+  } else {
+    warnText = "ยืนยันยกเลิกรายการเบิกนี้? อุปกรณ์ทั้งหมดในรายการจะกลับเป็นสถานะ Stock ทันที (คล้ายกับปุ่ม \"คืนของ\" แต่บันทึกในประวัติว่าเป็นการยกเลิก ไม่ใช่การคืนของ)";
+  }
+  const confirmed = await showConfirm(warnText, { type: "warning" });
+  if (!confirmed) return;
+  await runTxnAction("cancelTransaction", transactionId, btnEl, "กำลังยกเลิก...", cancelTransactionErrorMessage);
+}
+
+async function runTxnAction(action, transactionId, btnEl, loadingText, errorMapper) {
   const originalText = btnEl ? btnEl.textContent : "";
   if (btnEl) { btnEl.disabled = true; btnEl.textContent = loadingText; }
   try {
@@ -4809,7 +5173,8 @@ async function runTxnAction(action, transactionId, btnEl, loadingText) {
     if (!res.ok) {
       if (res.error === "unauthorized") return handleUnauthorized();
       const conflictMsg = res.conflicts ? "\n" + res.conflicts.join("\n") : "";
-      await showAlert("ดำเนินการไม่สำเร็จ: " + (res.error || "unknown_error") + conflictMsg, "error");
+      const msg = errorMapper ? errorMapper(res.error) : "ดำเนินการไม่สำเร็จ: " + (res.error || "unknown_error");
+      await showAlert(msg + conflictMsg, "error");
       return;
     }
     await refreshInBackground(true);
@@ -4835,7 +5200,7 @@ function renderHistoryView() {
   }
 
   const statusLabel = {
-    PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว",
+    PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว", Cancelled: "ยกเลิกแล้ว",
   };
 
   content.innerHTML = `
@@ -4880,9 +5245,14 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
   listEl.innerHTML = filtered.map((txn) => {
     const items = getItemsForTransaction(txn.TransactionID);
     const canReturn = isAdmin && txn.RequestStatus === "Issued" && !txn.MovementType;
+    // ฟีเจอร์ "ยกเลิกรายการ" — ใช้ได้กับทุกรายการที่สถานะ "เบิกแล้ว" (เบิกปกติ/ย้าย/เคลม) ต่างจาก "คืนของ" ที่ใช้ได้
+    // เฉพาะเบิกปกติเท่านั้น (ดูหมายเหตุด้านบน) — สำหรับเบิกปกติจะมีทั้งสองปุ่มให้เลือกตามเจตนา (ลูกค้าคืนของจริง
+    // ใช้ "คืนของ" / Admin ทำรายการผิดพลาดอยากลบล้างใช้ "ยกเลิกรายการ") ผลลัพธ์กับตัวอุปกรณ์เหมือนกันแต่บันทึก
+    // ในประวัติต่างกัน ส่วนย้าย/เคลมมีแค่ "ยกเลิกรายการ" ทางเดียว
+    const canCancel = isAdmin && txn.RequestStatus === "Issued" && !txn._pendingSync;
     const canPrint = !txn._pendingSync;
     const canEdit = isAdmin && !txn._pendingSync;
-    const canDelete = isAdmin && !txn._pendingSync && (txn.RequestStatus === "Rejected" || txn.RequestStatus === "Returned");
+    const canDelete = isAdmin && !txn._pendingSync && (txn.RequestStatus === "Rejected" || txn.RequestStatus === "Returned" || txn.RequestStatus === "Cancelled");
     const canBulkReturn = canReturn && !txn._pendingSync;
     return `
       <div class="txn-card">
@@ -4893,6 +5263,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
             <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ผู้เบิก: ${escapeHtml(txn.IssuedBy)} · ${formatDateTh(txn.Timestamp)}</div>
             ${txn.ApprovedBy ? `<div class="txn-meta">ดำเนินการโดย: ${escapeHtml(txn.ApprovedBy)} เมื่อ ${formatDateTh(txn.ApprovedAt)}</div>` : ""}
             ${txn.ReturnedAt ? `<div class="txn-meta">คืนของเมื่อ: ${formatDateTh(txn.ReturnedAt)}</div>` : ""}
+            ${txn.CancelledAt ? `<div class="txn-meta">ยกเลิกโดย: ${escapeHtml(txn.CancelledBy)} เมื่อ ${formatDateTh(txn.CancelledAt)}</div>` : ""}
             ${txn._pendingSync ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์</div>` : ""}
           </div>
           <span class="status-badge status-${txn.RequestStatus}">${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</span>
@@ -4906,6 +5277,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
         </div>
         <div class="txn-actions">
           ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
+          ${canCancel ? `<button class="btn-sm btn-cancel-txn" onclick="cancelTxn('${escapeAttr(txn.TransactionID)}', this)">ยกเลิกรายการ</button>` : ""}
           ${canPrint ? `<button class="btn-sm btn-secondary" onclick="printSlip('${escapeAttr(txn.TransactionID)}')">พิมพ์ใบเบิก</button>` : ""}
           ${canEdit ? `<button class="btn-sm btn-secondary" onclick="openEditIssuance('${escapeAttr(txn.TransactionID)}')">แก้ไข</button>` : ""}
           ${canDelete ? `<button class="btn-sm btn-remove" onclick="deleteIssuance('${escapeAttr(txn.TransactionID)}')">ลบ</button>` : ""}

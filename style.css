@@ -246,6 +246,25 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
   color: var(--green); font-size: 38px; overflow: hidden;
 }
 .mcard-photo img { width: 100%; height: 100%; object-fit: cover; }
+
+/* แถบสถิติ 3 ค่าในการ์ดอะไหล่แบบนับจำนวน (คงเหลือ/กำลังเบิก/รออนุมัติ) แทนคอลัมน์ตารางเดิม */
+.mcard-stat-row { display: flex; gap: 6px; margin: 6px 0 2px; }
+.mcard-stat { flex: 1; text-align: center; background: var(--green-light); border-radius: 9px; padding: 6px 4px; }
+.mcard-stat .num { font-size: 15px; font-weight: 700; color: var(--green-dark); line-height: 1.15; }
+.mcard-stat.warn .num { color: #b25b09; }
+.mcard-stat .lbl { font-size: 9.5px; color: var(--gray); margin-top: 2px; }
+
+/* ---------- การ์ดรูปใหญ่บนจอ PC (หน้าอะไหล่ Color Sorter/Panolyzer) ----------
+ * ใช้โครง .mcard/.mcard-with-photo เดิมกับมือถือทุกอย่าง ต่างแค่ wrapper ชั้นนอกเป็น .pcard-grid (grid หลาย
+ * คอลัมน์แทนเรียงคอลัมน์เดียว) แล้วจัดรูปเป็นแบนเนอร์ใหญ่ด้านบนการ์ดแทนสี่เหลี่ยมเล็กด้านซ้าย ให้เห็นหน้าตา
+ * อะไหล่ชัดเจนกว่าตารางเดิมที่รูปมีแค่ 60×60px */
+.pcard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.pcard-grid .mcard { padding: 0; overflow: hidden; display: flex; }
+.pcard-grid .mcard-with-photo { flex-direction: column; height: 100%; width: 100%; }
+.pcard-grid .mcard-photo { width: 100%; height: 168px; border-radius: 0; font-size: 46px; }
+.pcard-grid .mcard-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
+.pcard-grid .mcard-actions { margin-top: auto; padding-top: 10px; border-top: 1px dashed var(--border); }
+.pcard-grid .mcard-empty { grid-column: 1 / -1; }
 .table-thumb { width: 60px; height: 60px; border-radius: 9px; object-fit: cover; vertical-align: middle; background: var(--green-light); }
 .table-thumb-empty {
   width: 60px; height: 60px; border-radius: 9px; background: var(--green-light); color: var(--green);
@@ -328,6 +347,47 @@ tbody tr:hover { background: #dbe9e0; }
   background: var(--green-light); border: 1px solid var(--border); border-radius: 8px; padding: 10px 13px;
   font-size: 12.5px; color: var(--text); margin-bottom: 16px; line-height: 1.6;
 }
+
+/* ฟีเจอร์ "ย้าย/เคลม" — หน้าค้นหาเครื่องแบบพิมพ์หา S/N (เมนูใหม่แยกจากตาราง) */
+.tc-search-wrap { max-width: 640px; margin: 0 auto; }
+.tc-search-input {
+  width: 100%; padding: 13px 16px; border: 1px solid var(--border); border-radius: 10px;
+  font-size: 15px; font-family: inherit; box-sizing: border-box; margin-bottom: 16px; background: #fff;
+}
+.tc-search-input:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px rgba(63,101,77,.12); }
+.tc-result-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  margin-bottom: 8px; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.tc-result-row:hover { border-color: var(--green); background: var(--green-light); }
+.tc-result-left { min-width: 0; }
+.tc-result-sn { font-weight: 700; color: var(--green-dark); font-size: 14.5px; }
+.tc-result-sn mark { background: #fdf1de; color: #b25b09; padding: 0 1px; border-radius: 3px; }
+.tc-result-sub { font-size: 12px; color: var(--gray); margin-top: 3px; }
+.tc-result-type {
+  flex-shrink: 0; background: var(--green-light); color: var(--green-dark); font-size: 11px; font-weight: 700;
+  padding: 4px 10px; border-radius: 20px; white-space: nowrap;
+}
+
+/* ฟีเจอร์ "ค้นหา S/N แบบพิมพ์หา" — combobox ที่ครอบ <select> เดิม ใช้แทน dropdown ยาวๆ ทุกจุดในแอป */
+.ss-wrap { position: relative; }
+.ss-hidden-select { position: absolute; opacity: 0; pointer-events: none; height: 1px; width: 1px; overflow: hidden; }
+.ss-input {
+  width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 13px;
+  font-family: inherit; background: #fff; box-sizing: border-box; cursor: pointer;
+}
+.ss-input:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px rgba(63,101,77,.12); cursor: text; }
+.ss-list {
+  display: none; position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px;
+  overflow-y: auto; background: #fff; border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow);
+}
+.ss-list.open { display: block; }
+.ss-item { padding: 8px 12px; font-size: 12.5px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.ss-item:last-child { border-bottom: none; }
+.ss-item:hover, .ss-item.sel { background: var(--green-light); }
+.ss-item mark { background: #fdf1de; color: #b25b09; padding: 0 1px; border-radius: 3px; }
+.ss-empty { padding: 10px 12px; font-size: 12.5px; color: var(--gray); }
 
 /* Phase 11: checkbox "ยืมของ" ระดับทั้งใบเบิก */
 .loan-field { display: flex; align-items: center; gap: 10px; }
@@ -414,6 +474,8 @@ tbody tr:hover { background: #dbe9e0; }
 .status-Approved, .status-Issued { background: #e5f2ea; color: var(--ok); }
 .status-Rejected { background: #fbe6e6; color: var(--danger); }
 .status-Returned { background: #e6eef7; color: var(--info); }
+/* ฟีเจอร์ "ยกเลิกรายการ" — สถานะ "ยกเลิกแล้ว" แยกจาก "คืนแล้ว"/"ถูกปฏิเสธ" ให้เห็นชัดในประวัติ */
+.status-Cancelled { background: #f1eeee; color: var(--gray); }
 /* Phase 11: ป้าย "ยืม" — โชว์เพิ่มข้าง status-badge ปกติ ไม่ได้แทนที่สถานะเดิม แค่กำกับว่าเป็นการยืมไปทดลอง */
 .status-loan { background: #fdeee0; color: #b25b09; margin-left: 6px; }
 /* ฟีเจอร์ "ย้าย/เคลม" — ป้ายกำกับในหน้าประวัติเบิก/คืน แยกจาก status-badge สถานะปกติ (เหมือน status-loan) */
@@ -434,6 +496,9 @@ tbody tr:hover { background: #dbe9e0; }
 .btn-reject:hover { background: #b83636; }
 .btn-return { background: var(--info); color: #fff; }
 .btn-return:hover { background: #245a8f; }
+/* ฟีเจอร์ "ยกเลิกรายการ" — สีส้มเข้ม แยกจาก "คืนของ" (สีฟ้า) ให้เห็นชัดว่าเป็นคนละการกระทำ */
+.btn-cancel-txn { background: #b25b09; color: #fff; }
+.btn-cancel-txn:hover { background: #8f4907; }
 .empty-state { text-align: center; color: var(--gray); padding: 40px; }
 
 /* Phase 5: ดำเนินการแบบกลุ่ม (bulk actions) */
@@ -768,6 +833,36 @@ tbody tr:hover { background: #dbe9e0; }
   font-size: 13px; color: var(--text); padding: 10px 14px; min-height: 20px;
   border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
   font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+
+/* ---------- ใบย้าย/ใบเคลม — ฟอร์มพิมพ์แยกเฉพาะ ออกแบบใหม่ไม่ใช้โครงใบเบิกเดิม (Phase: ย้าย/เคลม) ---------- */
+/* สีฟ้า = ใบย้ายอุปกรณ์, สีส้ม = ใบเคลม — ต่างจากใบเบิกสีเขียวชัดเจนตั้งแต่แถบมุมและเส้นใต้หัวเรื่อง กันสับสนว่าใบไหนคือใบไหน */
+.formal-doc.formal-transfer .formal-page-tag { background: var(--info); }
+.formal-doc.formal-transfer .formal-doctitle { border-bottom-color: var(--info); }
+.formal-doc.formal-transfer .slip-table th { background: var(--info); }
+.formal-doc.formal-claim .formal-page-tag { background: #b25b09; }
+.formal-doc.formal-claim .formal-doctitle { border-bottom-color: #b25b09; }
+.formal-doc.formal-claim .slip-table th { background: #b25b09; }
+
+.formal-swap-row { display: flex; align-items: stretch; gap: 14px; margin: 4px 0 18px; }
+.formal-swap-box {
+  flex: 1; border: 1.5px solid var(--border); border-radius: 8px; padding: 12px 15px;
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+.formal-swap-box.out { border-color: var(--danger); background: #fdf2f1; }
+.formal-swap-box.in { border-color: var(--ok); background: #eef8f0; }
+.formal-swap-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--gray); margin-bottom: 5px; }
+.formal-swap-value { font-weight: 700; font-size: 14.5px; color: var(--text); }
+.formal-swap-sub { font-size: 11.5px; color: var(--gray); margin-top: 3px; }
+.formal-swap-arrow { display: flex; align-items: center; justify-content: center; font-size: 22px; color: var(--gray); flex: 0 0 32px; }
+.formal-reason-box {
+  font-size: 13px; color: var(--text); padding: 10px 14px; margin-bottom: 14px;
+  border: 1px dashed var(--border); border-radius: 6px; background: var(--green-light);
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+@media (max-width: 700px) {
+  .formal-swap-row { flex-direction: column; }
+  .formal-swap-arrow { transform: rotate(90deg); }
 }
 
 /* ---------- Phase 10: ประวัติอะไหล่ (timeline) ---------- */
