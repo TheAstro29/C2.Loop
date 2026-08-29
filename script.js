@@ -8,10 +8,10 @@
  */
 
 // ============================================================
-// ตั้งค่า — ใส่ URL ของ Apps Script Web App ที่ deploy แล้ว
+// ตั้งค่า — ย้ายจาก Apps Script Web App มาเป็น Firebase แล้ว (ดู firebaseConfig ในหัวข้อ "Firebase adapter"
+// ด้านล่าง สำหรับ config การเชื่อมต่อจริง) เหลือไว้แค่ค่า interval ของ refresh รายชื่อผู้ใช้งาน (ดู startPolling)
 // ============================================================
 const CONFIG = {
-  API_URL: "https://script.google.com/macros/s/AKfycbzvEFmD5Vq7yDhkzdtjkPlzso-V5RKBAk91ibtxKUB1rXxEKVWKkTrTMf7D-ldACnb6SQ/exec",
   POLL_INTERVAL_MS: 9000,
 };
 
@@ -438,6 +438,14 @@ async function onLoginSubmit(ev) {
     localStorage.setItem(LS_TOKEN, state.token);
     localStorage.setItem(LS_USER, JSON.stringify(state.user));
 
+    // สำคัญ: ต้อง sign in เข้า Firebase Auth ด้วย custom token ที่ backend ออกให้คู่กับ token ของแอปเอง
+    // ก่อนแตะ Firestore listener ใดๆ ไม่งั้น firestore.rules (allow read: if request.auth != null) จะปฏิเสธหมด
+    // เพราะ token ของแอปเอง (state.token) เป็นคนละระบบกับ Firebase Auth — ใช้คู่กันคนละหน้าที่ (state.token
+    // ตรวจสอบสิทธิ์/role ฝั่ง Cloud Functions, Firebase custom token ใช้เปิดสิทธิ์อ่าน Firestore เท่านั้น)
+    if (res.firebaseCustomToken) {
+      await fbAuth.signInWithCustomToken(res.firebaseCustomToken);
+    }
+
     showApp();
     await refreshInBackground(true);
     startPolling();
@@ -461,6 +469,8 @@ function loginErrorMessage(code) {
 
 function logout() {
   stopPolling();
+  detachFirestoreListeners();
+  fbAuth.signOut().catch(() => {}); // เคลียร์ session ฝั่ง Firebase Auth ด้วย ไม่งั้น Firestore listener จะยังอ่านได้ต่อแม้ session ของแอปเองจะออกไปแล้ว
   destroyAllCharts();
   localStorage.removeItem(LS_TOKEN);
   localStorage.removeItem(LS_USER);
@@ -732,36 +742,54 @@ function hideGlobalLoading() {
   }
 }
 
-async function apiGet(params) {
-  const url = new URL(CONFIG.API_URL);
-  Object.keys(params).forEach((k) => url.searchParams.set(k, params[k]));
-  const resp = await fetch(url.toString(), { method: "GET" });
-  return resp.json();
+// ============================================================
+// Firebase adapter (ย้ายระบบจาก Apps Script -> Firebase)
+// apiPost() ยังคงชื่อ/พฤติกรรมภายนอกเดิมทุกอย่าง (รับ {action, token, ...} คืน {ok, ...}) เพื่อให้โค้ดส่วนที่เหลือ
+// ทั้งไฟล์ (ฟอร์ม/ตาราง/ปุ่มกว่า 20 จุดที่เรียก apiPost อยู่แล้ว) ไม่ต้องแก้อะไรเลยสักบรรทัด — เปลี่ยนแค่ "ข้างใน"
+// ให้ไปเรียก Cloud Functions (httpsCallable) แทนการยิง Apps Script Web App ตรงๆ
+// ชื่อ action ทุกตัวที่ใช้อยู่ในไฟล์นี้ (login, requestIssuance, approveIssuance, ...) ตรงกับชื่อ Cloud Function
+// ที่ deploy ไว้แล้วเป๊ะทุกตัว จึงเรียก httpsCallable(action) ได้ตรงๆ โดยไม่ต้องมีตาราง mapping ชื่อ
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyAEPgb8jWp9tyyUvLh7wDZYBmbgXZGUkcg",
+  authDomain: "c2-loop.firebaseapp.com",
+  projectId: "c2-loop",
+  storageBucket: "c2-loop.firebasestorage.app",
+  messagingSenderId: "656451347270",
+  appId: "1:656451347270:web:c1d338601d0403fda33b47",
+};
+const FUNCTIONS_REGION = "asia-southeast1";
+
+firebase.initializeApp(firebaseConfig);
+const fbAuth = firebase.auth();
+const fbDb = firebase.firestore();
+const fbFunctions = firebase.app().functions(FUNCTIONS_REGION);
+
+async function apiGet() {
+  // ของเดิมใช้ apiGet เฉพาะ action "checkVersion"/"getData" ซึ่งถูกแทนที่ด้วย Firestore real-time listener
+  // (ดูฟังก์ชัน attachFirestoreListeners ด้านล่าง) ไปหมดแล้ว ไม่มีจุดไหนในไฟล์นี้เรียก apiGet อีกต่อไป
+  // เหลือฟังก์ชันไว้เฉยๆ กันพังเงียบๆ ถ้ามีจุดที่ตกหล่นเรียกใช้อยู่ (จะได้เห็น error ชัดเจนแทน)
+  console.warn("[apiGet] ฟังก์ชันนี้ถูกเลิกใช้แล้วหลังย้ายไป Firestore listener");
+  return { ok: false, error: "deprecated_apiGet" };
 }
 
 async function apiPost(body) {
   showGlobalLoading();
   try {
-    // ส่งเป็น text/plain เพื่อเลี่ยง CORS preflight ที่ Apps Script Web App ไม่รองรับ
-    const resp = await fetch(CONFIG.API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(body),
-    });
-    const text = await resp.text();
-    try {
-      return JSON.parse(text);
-    } catch (parseErr) {
-      // เซิร์ฟเวอร์ตอบกลับมาไม่ใช่ JSON — ปกติเกิดจาก Apps Script คืนหน้า HTML แทน (ขอสิทธิ์เพิ่ม/URL ผิด/deploy
-      // เก่าไม่ตรงกับโค้ดล่าสุด) log ข้อความจริงไว้ใน console เพื่อเอาไปดูรายละเอียดได้ ไม่ใช่แค่โยน error ดิบๆ ให้ผู้ใช้เห็น
-      console.error("[apiPost] เซิร์ฟเวอร์ตอบกลับไม่ใช่ JSON — เนื้อหาที่ได้รับจริง:", text.slice(0, 1000));
-      const looksLikeAuthPage = /authoriz|permission|accounts\.google\.com|sign in/i.test(text);
-      throw new Error(
-        looksLikeAuthPage
-          ? "เซิร์ฟเวอร์ขอสิทธิ์เพิ่ม (น่าจะเป็น Google Drive) — เปิด Apps Script Editor แล้วรันฟังก์ชัน authorizeDriveAccess_ONETIME 1 ครั้งเพื่ออนุญาตสิทธิ์ก่อน"
-          : `เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง (HTTP ${resp.status}) — เปิด Apps Script Editor เมนู Executions ดู log ล่าสุดเพื่อหาสาเหตุที่แท้จริง`
-      );
-    }
+    const { action, ...data } = body || {};
+    if (!action) throw new Error("missing_action");
+    const callable = fbFunctions.httpsCallable(action);
+    const res = await callable(data);
+    return res.data;
+  } catch (err) {
+    // ปกติ error จาก httpsCallable จะมี err.code เป็น "functions/xxx" (เช่น permission-denied, unauthenticated)
+    // ต่างจาก error code ของแอปเอง (เช่น "invalid_credentials") ที่ฝังมาใน res.data.error ตอนเรียกสำเร็จ (ok:false)
+    // ฟังก์ชันแสดงข้อความ error ต่างๆ ในไฟล์นี้ (เช่น loginErrorMessage) เช็คจาก res.error เป็น string เดิม จึงแปลง
+    // err.code ให้เข้ารูปแบบเดียวกันตรงนี้ที่จุดเดียว ไม่ต้องแก้ทุกจุดที่เรียก apiPost
+    console.error(`[apiPost] เรียก Cloud Function "${body && body.action}" ไม่สำเร็จ:`, err);
+    if (err.code === "functions/unauthenticated") return { ok: false, error: "unauthorized" };
+    if (err.code === "functions/permission-denied") return { ok: false, error: "forbidden" };
+    return { ok: false, error: "network_error" };
   } finally {
     hideGlobalLoading();
   }
@@ -806,38 +834,160 @@ async function drainOfflineQueue() {
 }
 
 // ============================================================
-// Sync: cache-first + background revalidate + polling
+// Sync: Firestore real-time listener (onSnapshot) แทนที่ polling ทุก 9 วินาทีของเดิมทั้งหมด
+// ข้อมูลอัปเดตทันทีที่มีการเปลี่ยนแปลงจริง (ไม่ต้องรอรอบ poll) — นี่คือจุดที่แก้ปัญหา "Apps Script ทำงานช้า"
+// ที่ต้นเหตุจริงๆ (เดิมโหลดทั้ง 9 ชีตใหม่ทุกครั้งที่ version เปลี่ยน ผ่าน Apps Script ที่ตอบช้า)
+//
+// เอกสารในคอลเลกชัน moisturlyzer/gateway/simcard เก็บชื่อคอลัมน์เดิมจากสเปรดชีตตรงๆ (จาก migrate.js)
+// จึงใช้ข้อมูลตรงๆ ได้เลยไม่ต้องแปลง ส่วน issuanceLog/issuanceItems/partsCatalog/colorSorterPartUnits/
+// panolyzerPartUnits/partsActivityLog ฝั่ง Cloud Functions เก็บเป็น camelCase (ดู functions/index.js) จึงต้อง
+// แปลงชื่อฟิลด์กลับเป็น PascalCase แบบเดิมตรงนี้ เพื่อให้โค้ดแสดงผลที่เหลือทั้งไฟล์ (เขียนไว้ก่อนย้ายระบบ) ใช้งานได้
+// โดยไม่ต้องแก้โค้ดจุดอื่นเลย — TransactionID/PartID/SerialNo (ของอะไหล่มี S/N) เดิมเป็น doc ID ใน Firestore
+// ไม่ได้เก็บซ้ำเป็น field จึงต้องเติมจาก doc.id ตรงนี้ด้วย
 // ============================================================
-async function refreshInBackground(forceFullLoad) {
+function translateIssuanceLog(doc) {
+  const d = doc.data();
+  return {
+    TransactionID: doc.id,
+    Timestamp: d.timestamp || "",
+    CustomerName: d.customerName || "",
+    SiteLocation: d.siteLocation || "",
+    IssuedBy: d.issuedBy || "",
+    Details: d.details || "",
+    RequestStatus: d.requestStatus || "",
+    ApprovedBy: d.approvedBy || "",
+    ApprovedAt: d.approvedAt || "",
+    ReturnedAt: d.returnedAt || "",
+    IssuanceType: d.issuanceType || "เบิก",
+  };
+}
+
+function translateIssuanceItem(doc) {
+  const d = doc.data();
+  return {
+    TransactionID: d.transactionId || "",
+    AssetType: d.assetType || "",
+    SerialNo: d.serialNo || "",
+    ConnectTo: d.connectTo || "",
+    ConnectSerial: d.connectSerial || "",
+    PreviousStatus: d.previousStatus || "",
+    NewLocation: d.newLocation || "",
+    Quantity: d.quantity || 1,
+    ItemName: d.itemName || "",
+  };
+}
+
+function translatePartsCatalog(doc) {
+  const d = doc.data();
+  return {
+    PartID: doc.id,
+    PartName: d.partName || "",
+    Category: d.category || "",
+    HasSerial: d.hasSerial || "No",
+    QuantityInStock: d.quantityInStock || 0,
+    PhotoUrl: d.photoUrl || "",
+  };
+}
+
+function translatePartUnit(doc) {
+  const d = doc.data();
+  return {
+    PartID: d.partId || "",
+    PartName: d.partName || "",
+    SerialNo: doc.id,
+    Customer_name: d.customerName || "",
+    Location: d.location || "",
+  };
+}
+
+function translatePartsActivityLog(doc) {
+  const d = doc.data();
+  return {
+    Timestamp: d.timestamp || "",
+    PartID: d.partId || "",
+    PartName: d.partName || "",
+    Category: d.category || "",
+    Action: d.action || "",
+    Actor: d.actor || "",
+    Detail: d.detail || "",
+  };
+}
+
+// moisturlyzer/gateway/simcard: ไม่ต้องแปลง (เก็บชื่อคอลัมน์เดิมจากสเปรดชีตตรงๆ อยู่แล้ว)
+function translateRaw(doc) {
+  return Object.assign({}, doc.data());
+}
+
+let firestoreListeners = []; // unsubscribe functions ของ onSnapshot ที่เปิดอยู่ตอนนี้ (เคลียร์ตอน logout)
+let listenersReady = false;
+
+function attachFirestoreListeners() {
+  if (listenersReady) return;
+  listenersReady = true;
+
+  const bind = (collectionName, stateKey, translate) => {
+    const unsub = fbDb.collection(collectionName).onSnapshot(
+      (snap) => {
+        state.data[stateKey] = snap.docs.map(translate);
+        state.cachedAt = new Date().toISOString();
+        try {
+          localStorage.setItem(LS_CACHE, JSON.stringify({ data: state.data, cachedAt: state.cachedAt }));
+        } catch (e) { /* เต็ม quota ก็ปล่อยผ่าน ไม่ใช่ปัญหาคอขวด */ }
+        updatePendingBadge();
+        renderCurrentView();
+        setSyncStatus("online");
+      },
+      (err) => {
+        // สาเหตุที่พบบ่อยที่สุด: permission-denied เพราะ Firebase Auth (custom token) ยังไม่พร้อมตอนแอตแทช
+        // listener ครั้งแรก (จะหายเองอัตโนมัติทันทีที่ auth พร้อม เพราะ Firestore SDK re-auth listener เดิมให้)
+        console.error(`[firestore listener] ${collectionName} error:`, err);
+        setSyncStatus("offline");
+      }
+    );
+    firestoreListeners.push(unsub);
+  };
+
+  bind("moisturlyzer", "moisturlyzer", translateRaw);
+  bind("gateway", "gateway", translateRaw);
+  bind("simcard", "simcard", translateRaw);
+  bind("issuanceLog", "issuanceLog", translateIssuanceLog);
+  bind("issuanceItems", "issuanceItems", translateIssuanceItem);
+  bind("partsCatalog", "partsCatalog", translatePartsCatalog);
+  bind("colorSorterPartUnits", "colorSorterParts", translatePartUnit);
+  bind("panolyzerPartUnits", "panolyzerParts", translatePartUnit);
+  bind("partsActivityLog", "partsActivityLog", translatePartsActivityLog);
+}
+
+function detachFirestoreListeners() {
+  firestoreListeners.forEach((unsub) => unsub());
+  firestoreListeners = [];
+  listenersReady = false;
+}
+
+// accounts (รายชื่อผู้ใช้งาน) ล็อกอ่านตรงจาก Firestore ไว้เสมอ (มี passwordHash/salt อยู่ข้างใน — ดู firestore.rules)
+// จึงไม่มี real-time listener ให้ได้ ต้องขอผ่าน Cloud Function getUserList เป็นครั้งๆ ไป (เฉพาะ Admin เท่านั้น
+// ที่มีสิทธิ์เรียก — ตรงกับที่หน้า renderUsersView ก็จำกัดไว้เฉพาะ Admin อยู่แล้วเช่นกัน)
+async function refreshUsersList() {
+  if (!state.user || state.user.role !== "Admin") return;
+  try {
+    // ตั้งใจไม่เรียกผ่าน apiPost() ตรงนี้ (เรียก httpsCallable ตรงๆ แทน) เพราะ apiPost ผูกกับ
+    // showGlobalLoading()/hideGlobalLoading() ไว้ ถ้าเรียกผ่าน apiPost ทุก 9 วินาทีจากรอบ polling (ดู
+    // startPolling ด้านล่าง) จะเห็นหน้าโหลดกระพริบเป็นช่วงๆ ทั้งที่ไม่มีอะไรผิดปกติ — ตรงกับที่คอมเมนต์เดิมของ
+    // apiGet ในไฟล์นี้เตือนไว้ตั้งแต่แรกอยู่แล้ว ("ถ้าโชว์โอเวอร์เลย์ทุกรอบ poll จะกระพริบรำคาญโดยไม่มีประโยชน์")
+    const res = await fbFunctions.httpsCallable("getUserList")({ token: state.token });
+    if (res.data && res.data.ok) state.data.users = res.data.users || [];
+  } catch (err) {
+    console.error("refreshUsersList error:", err);
+  }
+}
+
+async function refreshInBackground() {
   setSyncStatus("syncing");
   try {
-    const versionRes = await apiGet({ action: "checkVersion", token: state.token });
-    if (!versionRes.ok) throw new Error(versionRes.error || "sync_failed");
-
-    if (forceFullLoad || versionRes.version !== state.data.version) {
-      const dataRes = await apiGet({ action: "getData", token: state.token });
-      if (!dataRes.ok) {
-        if (dataRes.error === "unauthorized") return handleUnauthorized();
-        throw new Error(dataRes.error || "load_failed");
-      }
-      state.data = {
-        moisturlyzer: dataRes.moisturlyzer,
-        gateway: dataRes.gateway,
-        simcard: dataRes.simcard,
-        issuanceLog: dataRes.issuanceLog || [],
-        issuanceItems: dataRes.issuanceItems || [],
-        users: dataRes.users || [],
-        partsCatalog: dataRes.partsCatalog || [],
-        colorSorterParts: dataRes.colorSorterParts || [],
-        panolyzerParts: dataRes.panolyzerParts || [],
-        partsActivityLog: dataRes.partsActivityLog || [],
-        version: dataRes.version,
-      };
-      state.cachedAt = new Date().toISOString();
-      localStorage.setItem(LS_CACHE, JSON.stringify({ data: state.data, cachedAt: state.cachedAt }));
-      updatePendingBadge();
-      renderCurrentView();
-    }
+    attachFirestoreListeners(); // idempotent — เปิด listener จริงแค่ครั้งแรกครั้งเดียวต่อ session
+    await refreshUsersList();
+    updatePendingBadge();
+    renderCurrentView();
     setSyncStatus("online");
   } catch (err) {
     console.error("sync error", err);
@@ -851,11 +1001,22 @@ async function handleUnauthorized() {
   logout();
 }
 
+// เดิมฟังก์ชันนี้ตั้ง setInterval ไว้ยิง refreshInBackground ทุก 9 วินาที (การ "poll") — ตอนนี้ข้อมูลหลักทั้งหมด
+// อัปเดตแบบ real-time ผ่าน Firestore listener แล้ว ไม่ต้อง poll อีกต่อไป เหลือไว้แค่ refresh รายชื่อผู้ใช้งานเป็น
+// ระยะ (accounts อ่านตรงไม่ได้ ต้องผ่าน Cloud Function ดังนั้นจึงไม่มี real-time ให้ใช้) เผื่อ Admin คนอื่นแก้ไข
+// ผู้ใช้งานจากเครื่องอื่นพร้อมกัน — คงชื่อฟังก์ชัน startPolling/stopPolling ไว้เหมือนเดิมเพราะมีเรียกใช้อยู่หลายจุด
 function startPolling() {
-  stopPolling();
+  if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(() => {
-    if (document.hidden) return; // ประหยัด quota เมื่อพับ/สลับแท็บ (Page Visibility API)
-    refreshInBackground(false);
+    if (document.hidden) return;
+    // เดิมเรียก renderCurrentView() แบบไม่มีเงื่อนไขทุก 9 วินาที ทำให้ทุกหน้ารวมถึง Dashboard ถูกวาดใหม่ทั้งที่
+    // ไม่มีอะไรเปลี่ยน — กราฟ Chart.js ที่ destroy+สร้างใหม่ทุกครั้งจึงดูเหมือน "รีเฟรชตลอดเวลา" ทั้งที่ข้อมูลจริง
+    // (moisturlyzer/gateway/simcard/issuance ฯลฯ) อัปเดตแบบ real-time ผ่าน Firestore listener อยู่แล้วไม่ต้องพึ่ง
+    // ตัวจับเวลานี้เลย ตัวจับเวลานี้มีไว้แค่ refresh รายชื่อผู้ใช้งาน (accounts อ่านตรงไม่ได้) จึงควรวาดหน้าจอใหม่
+    // ก็ต่อเมื่อกำลังเปิดหน้า "จัดการผู้ใช้งาน" อยู่จริงเท่านั้น
+    refreshUsersList().then(() => {
+      if (state.currentView === "users") renderCurrentView();
+    });
   }, CONFIG.POLL_INTERVAL_MS);
 }
 

@@ -214,6 +214,12 @@
     </div>
   </div>
 
+  <!-- Firebase (compat build — เลือกแบบนี้เพราะ script.js เดิมเป็นไฟล์ .js ธรรมดา ไม่ได้ตั้งเป็น ES module/มี
+       bundler จึงใช้ SDK แบบ compat ที่ผูกกับ global "firebase" object ตรงๆ ได้เลย ไม่ต้องแก้โครงสร้างไฟล์อื่น) -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-functions-compat.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
