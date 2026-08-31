@@ -1772,6 +1772,51 @@ function printSlip(transactionId) {
   return printIssuanceSlip(transactionId);
 }
 
+/** อุปกรณ์แบบมี S/N จริงที่ควรโชว์ในคอลัมน์ Serial ของใบเบิก — ไม่นับอะไหล่แบบนับจำนวน (SerialNo เป็น PartID ภายใน
+ * ไม่ใช่ S/N จริง) และไม่นับของนอกระบบ (Other, ไม่มี Serial เลย) */
+function itemHasRealSerial(item) {
+  return !PART_QTY_DEVICE_LABEL[item.AssetType] && item.AssetType !== "Other" && !!String(item.SerialNo || "").trim();
+}
+
+/** สร้างตารางรายการของใบเบิก (colgroup + thead + tbody) แบบซ่อนคอลัมน์อัตโนมัติ — เช็คระดับ "ทั้งใบเบิก" ไม่ใช่ทีละแถว:
+ * คอลัมน์ Serial โชว์ก็ต่อเมื่อมีอย่างน้อย 1 รายการที่มี S/N จริง (ดู itemHasRealSerial), คอลัมน์ "นำไปใส่อุปกรณ์ไหน"
+ * โชว์ก็ต่อเมื่อมีอย่างน้อย 1 รายการที่ระบุ ConnectTo ไว้ ถ้าใบเบิกนั้นไม่มีรายการไหนมีข้อมูลคอลัมน์ใดเลย ให้ตัด
+ * คอลัมน์นั้นทิ้งทั้งตารางแทนที่จะโชว์ "-"/"—" เกะกะไปเปล่าๆ — คอลัมน์ #, ประเภทอุปกรณ์, จำนวน อยู่เสมอทุกกรณี */
+function buildIssuanceSlipTable(items) {
+  const hasSerial = items.some(itemHasRealSerial);
+  const hasConnect = items.some((i) => !!i.ConnectTo);
+
+  const cols = [
+    { key: "no", label: "#", cls: "slip-col-no" },
+    { key: "type", label: "ประเภทอุปกรณ์", cls: "slip-col-type" },
+    ...(hasSerial ? [{ key: "serial", label: "Serial", cls: "slip-col-serial" }] : []),
+    ...(hasConnect ? [{ key: "connect", label: "นำไปใส่อุปกรณ์ไหน", cls: "slip-col-connect" }] : []),
+    { key: "qty", label: "จำนวน", cls: "slip-col-qty" },
+  ];
+
+  const colgroup = cols.map((c) => `<col class="${c.cls}">`).join("");
+  const thead = cols.map((c) => `<th>${c.label}</th>`).join("");
+  const rows = items.map((item, idx) => {
+    const cells = cols.map((c) => {
+      if (c.key === "no") return `<td>${idx + 1}</td>`;
+      if (c.key === "type") return `<td>${formatItemLabel(item, { withQty: false })}</td>`;
+      if (c.key === "serial") return `<td>${formatItemSerialLabel(item)}</td>`;
+      if (c.key === "connect") return `<td>${formatConnectColumn(item)}</td>`;
+      if (c.key === "qty") return `<td>${escapeHtml(String(item.AssetType === "Other" || PART_QTY_DEVICE_LABEL[item.AssetType] ? (Number(item.Quantity) || 1) : 1))}</td>`;
+      return "<td></td>";
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+
+  return `
+    <table class="slip-table">
+      <colgroup>${colgroup}</colgroup>
+      <thead><tr>${thead}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 function printIssuanceSlip(transactionId) {
   const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
   if (!txn) return;
@@ -1803,13 +1848,7 @@ function printIssuanceSlip(transactionId) {
         </table>
       </div>
 
-      <table class="slip-table">
-        <colgroup><col class="slip-col-no"><col class="slip-col-type"><col class="slip-col-serial"><col class="slip-col-connect"><col class="slip-col-qty"></colgroup>
-        <thead><tr><th>#</th><th>ประเภทอุปกรณ์</th><th>Serial</th><th>นำไปใส่อุปกรณ์ไหน</th><th>จำนวน</th></tr></thead>
-        <tbody>
-          ${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${formatItemLabel(i, { withQty: false })}</td><td>${formatItemSerialLabel(i)}</td><td>${formatConnectColumn(i)}</td><td>${escapeHtml(String(i.AssetType === "Other" || PART_QTY_DEVICE_LABEL[i.AssetType] ? (Number(i.Quantity) || 1) : 1))}</td></tr>`).join("")}
-        </tbody>
-      </table>
+      ${buildIssuanceSlipTable(items)}
       <div class="slip-table-summary">รวมทั้งหมด ${items.length} รายการ</div>
 
       <div class="formal-remark-box"><strong>หมายเหตุ:</strong> ${txn.Details ? escapeHtml(txn.Details) : ""}</div>
