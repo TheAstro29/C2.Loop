@@ -70,29 +70,34 @@
       <div class="nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
         <i class="fas fa-chart-line"></i> <span>Dashboard</span>
       </div>
+
+      <div class="nav-section-label">คลังอุปกรณ์</div>
       <div class="nav-item" data-view="moisturlyzer" onclick="switchView('moisturlyzer')">
-        <i class="fas fa-tint"></i> <span>MoisturLyzer</span>
+        <span class="nav-icon-chip" style="background:#17A672;"><i class="fas fa-tint"></i></span> <span>MoisturLyzer</span>
       </div>
       <div class="nav-item" data-view="gateway" onclick="switchView('gateway')">
-        <i class="fas fa-broadcast-tower"></i> <span>Gateway</span>
+        <span class="nav-icon-chip" style="background:#2f6fb0;"><i class="fas fa-broadcast-tower"></i></span> <span>Gateway</span>
       </div>
       <div class="nav-item" data-view="simcard" onclick="switchView('simcard')">
-        <i class="fas fa-sim-card"></i> <span>SimCard</span>
+        <span class="nav-icon-chip" style="background:#8B5CF6;"><i class="fas fa-sim-card"></i></span> <span>SimCard</span>
       </div>
       <div class="nav-item" data-view="colorSorterParts" onclick="switchView('colorSorterParts')">
-        <i class="fas fa-cogs"></i> <span>อะไหล่ Color Sorter</span>
+        <span class="nav-icon-chip" style="background:#e08e0b;"><i class="fas fa-cogs"></i></span> <span>อะไหล่ Color Sorter</span>
       </div>
       <div class="nav-item" data-view="panolyzerParts" onclick="switchView('panolyzerParts')">
-        <i class="fas fa-cogs"></i> <span>อะไหล่ Panolyzer</span>
+        <span class="nav-icon-chip" style="background:#EC6BAA;"><i class="fas fa-cogs"></i></span> <span>อะไหล่ Panolyzer</span>
       </div>
 
-      <div class="nav-divider"></div>
-
+      <div class="nav-section-label">การเบิก-คืน</div>
       <div class="nav-item" data-view="issue" onclick="switchView('issue')">
         <i class="fas fa-dolly"></i> <span>เบิกอุปกรณ์</span>
       </div>
       <div class="nav-item" data-view="transferclaim" onclick="switchView('transferclaim')">
         <i class="fas fa-exchange-alt"></i> <span>ย้าย/เคลม</span>
+      </div>
+      <div class="nav-item admin-only" data-view="supplierclaim" onclick="switchView('supplierclaim')">
+        <i class="fas fa-truck-loading"></i> <span>รอเคลมจาก Supplier</span>
+        <span class="nav-badge" id="supplierClaimBadge" style="display:none;"></span>
       </div>
       <div class="nav-item admin-only" data-view="approvals" onclick="switchView('approvals')">
         <i class="fas fa-check-circle"></i> <span>อนุมัติการเบิก</span>
@@ -101,6 +106,8 @@
       <div class="nav-item" data-view="history" onclick="switchView('history')">
         <i class="fas fa-history"></i> <span>ประวัติการเบิก/คืน</span>
       </div>
+
+      <div class="nav-section-label">ระบบ</div>
       <div class="nav-item admin-only" data-view="users" onclick="switchView('users')">
         <i class="fas fa-users-cog"></i> <span>จัดการผู้ใช้งาน</span>
       </div>
@@ -142,6 +149,9 @@
   <!-- ใบเบิก/รายงานสำหรับสั่งพิมพ์ — ปกติซ่อนอยู่ แสดงเฉพาะตอนสั่งพิมพ์ผ่าน printSlip() -->
   <div id="printSlipRoot"></div>
 
+  <!-- ป้ายติดเครื่อง Gateway สำหรับสั่งพิมพ์ — ปกติซ่อนอยู่ แสดงเฉพาะตอนสั่งพิมพ์ผ่าน printGatewayLabel() -->
+  <div id="printLabelRoot"></div>
+
   <!-- โมดัลตัวอย่างรูปรายงาน (สำหรับคัดลอก/บันทึกไปวางส่งใน LINE) -->
   <div id="imagePreviewModal" class="image-modal-overlay no-print" style="display:none;">
     <div class="image-modal">
@@ -169,6 +179,7 @@
       </div>
       <div class="image-modal-body" id="genericFormModalBody"></div>
       <div class="image-modal-actions">
+        <button class="btn-secondary" onclick="closeGenericFormModal()">ยกเลิก</button>
         <button class="btn-primary" id="genericFormSaveBtn">บันทึก</button>
       </div>
       <div class="form-msg" id="genericFormModalMsg"></div>

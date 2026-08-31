@@ -66,7 +66,7 @@ const VIEW_CONFIG = {
       { field: "Customer_name", label: "ลูกค้า" },
       { field: "Location", label: "สถานะ/ตำแหน่ง" },
       { field: "install_date", label: "วันติดตั้ง" },
-      { field: "_linkedAccessories", label: "เชื่อมต่อกับ", computed: true },
+      { field: "_linkedAccessories", label: "เชื่อมต่อกับ", computed: true, compute: computeLinkedAccessories },
     ],
     stockField: "Location",
   },
@@ -84,7 +84,7 @@ const VIEW_CONFIG = {
       { field: "Customer_name", label: "ลูกค้า" },
       { field: "Location", label: "สถานที่ติดตั้ง" },
       { field: "Install_device", label: "เชื่อมต่อกับ" },
-      { field: "S/N Device", label: "S/N อุปกรณ์ปลายทาง" },
+      { field: "S/N Device", label: "S/N อุปกรณ์ปลายทาง", computed: true, compute: computeGatewayLinkedMoisturlyzer },
       { field: "SimCard_SN", label: "SimCard ที่ใส่อยู่" },
       { field: "Activate_date", label: "วันเปิดใช้งาน" },
     ],
@@ -100,11 +100,13 @@ const VIEW_CONFIG = {
     // จึงไม่มี connectOptions ให้เลือกหลายแบบเหมือนเดิมอีกต่อไป — ดู addToBasket/renderBasket ที่ล็อก
     // connectTo ไว้เป็น "Gateway" ตายตัวเสมอสำหรับ SimCard โดยเฉพาะ
     columns: [
+      { field: "No", label: "ลำดับ" },
       { field: "Mobile No.", label: "เบอร์โทร" },
       { field: "S/N", label: "S/N ซิม" },
       { field: "Customer_name", label: "ลูกค้า" },
       { field: "Location", label: "สถานที่ใช้งาน" },
       { field: "Installed_device", label: "ใส่ในอุปกรณ์" },
+      { field: "_installedGateway", label: "Gateway ที่เชื่อมต่อ", computed: true, compute: computeSimInstalledGateway },
       { field: "Activate_date", label: "วันเปิดใช้บริการ" },
     ],
     stockField: "Installed_device",
@@ -552,6 +554,18 @@ function updatePendingBadge() {
   if (state.mobileHomeVisible) renderMobileHome();
   // อัปเดต badge รออนุมัติที่แถบเมนูด้านล่าง (แสดงอยู่ทุกหน้าจอมือถือ ไม่ใช่แค่หน้าแรก)
   syncMobileTabbar();
+  updateSupplierClaimBadge();
+}
+
+/** เมนู "รอเคลมจาก Supplier" (Admin เท่านั้น) — badge นับจำนวนรวมทุกประเภทอุปกรณ์ (MoisturLyzer/Gateway/SimCard)
+ * ที่อยู่ในสถานะ "อยู่ระหว่างเคลม" ตอนนี้ เรียกจุดเดียวกับ updatePendingBadge() ด้านบนเสมอ เพื่อให้อัปเดตพร้อมกัน
+ * ทุกจังหวะที่ข้อมูลเปลี่ยน (real-time listener/refreshInBackground/หลังทำรายการต่างๆ) โดยไม่ต้องเพิ่มจุดเรียกใหม่ */
+function updateSupplierClaimBadge() {
+  const badge = document.getElementById("supplierClaimBadge");
+  if (!badge) return;
+  const count = getSupplierClaimRows().length;
+  badge.style.display = count > 0 ? "inline-block" : "none";
+  badge.textContent = count;
 }
 
 // ============================================================
@@ -613,6 +627,7 @@ const MOBILE_HOME_TILES = [
   { key: "history", label: "ประวัติเบิก/คืน", icon: "fa-history", color: "mh-c9" },
 ];
 const MOBILE_HOME_ADMIN_TILES = [
+  { key: "supplierclaim", label: "รอเคลมจาก Supplier", icon: "fa-truck-loading", color: "mh-c4", badge: true },
   { key: "users", label: "จัดการผู้ใช้งาน", icon: "fa-users-cog", color: "mh-c9" },
   { key: "manageparts", label: "จัดการ Stock/อะไหล่", icon: "fa-toolbox", color: "mh-c5" },
 ];
@@ -627,7 +642,8 @@ function computeMobileHomeStats() {
     used += s.used;
   });
   const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
-  return { stock, used, pending };
+  const claimPending = getSupplierClaimRows().length;
+  return { stock, used, pending, claimPending };
 }
 
 function mobileHomeSearch(term) {
@@ -697,6 +713,7 @@ function renderMobileHome() {
         <div class="mh-grid mh-grid-2">
           ${MOBILE_HOME_ADMIN_TILES.map((t) => `
             <div class="mh-tile" onclick="switchView('${t.key}'); hideMobileHome();">
+              ${t.badge && stats.claimPending > 0 ? `<span class="mh-tile-badge">${stats.claimPending}</span>` : ""}
               <div class="mh-tile-icon ${t.color}"><i class="fas ${t.icon}"></i></div>
               <div class="mh-tile-lbl">${escapeHtml(t.label)}</div>
             </div>`).join("")}
@@ -906,6 +923,11 @@ function translateIssuanceItem(doc) {
     SerialNo: d.serialNo || "",
     ConnectTo: d.connectTo || "",
     ConnectSerial: d.connectSerial || "",
+    // เก็บไว้ตอนเบิกฝั่งเซิร์ฟเวอร์อยู่แล้ว (ดู index.js) แต่เดิมไม่เคยดึงมาที่ frontend เลย ทำให้ประวัติ/ใบเบิกของ
+    // SimCard ที่เบิกคู่กับ MoisturLyzer/Gateway ไม่มีทางโชว์ได้เลยว่าเสียบอยู่ใน Gateway "ตัวไหน" จริงๆ (ConnectTo/
+    // ConnectSerial ของเคสนั้นเก็บอุปกรณ์ปลายทาง เช่น MoisturLyzer/Panolyzer ไว้แทน ไม่ใช่ตัว Gateway) — ดู
+    // formatConnectColumn/formatConnectInfo ที่ใช้ฟิลด์นี้เป็นตัวหลักสำหรับ SimCard โดยเฉพาะ
+    InstalledGatewaySerial: d.installedGatewaySerial || "",
     PreviousStatus: d.previousStatus || "",
     NewLocation: d.newLocation || "",
     Quantity: d.quantity || 1,
@@ -1159,6 +1181,9 @@ function renderCurrentView() {
   } else if (state.currentView === "manageparts") {
     titleEl.textContent = "จัดการ Stock/อะไหล่";
     renderManagePartsView();
+  } else if (state.currentView === "supplierclaim") {
+    titleEl.textContent = "รอเคลมจาก Supplier";
+    renderSupplierClaimView();
   } else {
     const cfg = VIEW_CONFIG[state.currentView];
     titleEl.textContent = cfg.title.replace(" (มี S/N)", "");
@@ -2097,9 +2122,124 @@ function printSlipViaPopup(html) {
 }
 
 window.addEventListener("afterprint", () => {
-  document.body.classList.remove("print-dashboard-active", "print-slip-active");
+  document.body.classList.remove("print-dashboard-active", "print-slip-active", "print-label-active");
   document.getElementById("printSlipRoot").innerHTML = "";
+  document.getElementById("printLabelRoot").innerHTML = "";
+  removeLabelPageStyle();
 });
+
+// ============================================================
+// Phase 21: พิมพ์ป้ายติดเครื่อง Gateway — ป้ายขนาด 90×50มม. (เท่านามบัตร) โชว์ S/N Gateway ตัวใหญ่สุด, S/N
+// อุปกรณ์ปลายทางที่เชื่อมต่อ (MoisturLyzer/Panolyzer ฯลฯ — ใช้เฉพาะค่ายืนยันแล้วเท่านั้น ไม่ใช้ค่าที่ระบบ "เดา"
+// ไว้ กันป้ายพิมพ์ข้อมูลผิด), S/N ซิม+เบอร์โทรที่ใส่อยู่ และชื่อลูกค้า/สถานที่ตัวเล็กมุมล่าง
+// ============================================================
+
+/** สร้าง HTML ของป้าย 1 ใบจากแถว Gateway — คืน { html } ถ้าพิมพ์ได้ปกติ หรือ { error } ถ้าต้องให้ผู้ใช้ไปยืนยัน
+ * ข้อมูลก่อน (กรณี S/N อุปกรณ์ปลายทางมีแต่ค่าที่ระบบเดาไว้ ยังไม่ได้กรอก/ยืนยันจริง) */
+function buildGatewayLabelHtml(row, logoHref) {
+  const cfg = VIEW_CONFIG.gateway;
+  const gwSerial = String(row[cfg.serialField] || "");
+  const model = String(row.Model || "");
+  const customer = String(row.Customer_name || "").trim();
+  const location = String(row.Location || "").trim();
+
+  const confirmedDevice = String(row[cfg.deviceSerialField] || "").trim();
+  let deviceLine = "";
+  if (confirmedDevice) {
+    const deviceType = String(row[cfg.connectField] || "").trim() || "อุปกรณ์ปลายทาง";
+    deviceLine = `<div class="gwl-row"><span class="k">${escapeHtml(deviceType)} S/N</span><span class="v">${escapeHtml(confirmedDevice)}</span></div>`;
+  } else {
+    const guessed = computeGatewayLinkedMoisturlyzer(row);
+    if (guessed.length && guessed[0] && typeof guessed[0] === "object" && guessed[0].guessed) {
+      return { error: "ช่อง \"S/N อุปกรณ์ปลายทาง\" ของ Gateway เครื่องนี้ยังไม่ได้ยืนยัน (ระบบเดาไว้จากลูกค้า/สถานที่ที่ตรงกันเท่านั้น) กรุณากดแก้ไขแล้วกรอก/ยืนยันค่านี้ก่อนพิมพ์ป้าย กันป้ายพิมพ์ข้อมูลผิด" };
+    }
+  }
+
+  const simSerial = String(row.SimCard_SN || "").trim();
+  let simLine = "";
+  if (simSerial) {
+    const simRow = (state.data.simcard || []).find((s) => String(s["S/N"] || "") === simSerial);
+    const mobileNo = simRow ? String(simRow["Mobile No."] || "").trim() : "";
+    simLine = `<div class="gwl-row"><span class="k">SIM S/N</span><span class="v">${escapeHtml(simSerial)}</span></div>`
+      + (mobileNo ? `<div class="gwl-row"><span class="k">เบอร์ซิม</span><span class="v">${escapeHtml(mobileNo)}</span></div>` : "");
+  }
+
+  const html = `
+    <div class="gwl-card">
+      <div class="gwl-topline">
+        <img src="${escapeAttr(logoHref)}" class="gwl-logo" alt="C2TECH">
+        <span class="gwl-tag">GATEWAY</span>
+      </div>
+      <div class="gwl-model">${escapeHtml(model)}</div>
+      <div class="gwl-sn-main">${escapeHtml(gwSerial)}</div>
+      <div class="gwl-divider"></div>
+      ${deviceLine}
+      ${simLine}
+      ${(!deviceLine && !simLine) ? `<div class="gwl-row"><span class="k">สถานะ</span><span class="v">ยังไม่เชื่อมต่ออุปกรณ์/ซิม</span></div>` : ""}
+      <div class="gwl-footer">
+        <div class="cust">${customer ? `<b>${escapeHtml(customer)}</b>` : ""}${escapeHtml(location)}</div>
+      </div>
+    </div>
+  `;
+  return { html };
+}
+
+function injectLabelPageStyle() {
+  removeLabelPageStyle();
+  const style = document.createElement("style");
+  style.id = "labelPrintPageStyle";
+  style.textContent = "@page { size: 90mm 50mm; margin: 0; }";
+  document.head.appendChild(style);
+}
+function removeLabelPageStyle() {
+  const el = document.getElementById("labelPrintPageStyle");
+  if (el) el.remove();
+}
+
+function printGatewayLabel(serial) {
+  const cfg = VIEW_CONFIG.gateway;
+  const row = (state.data.gateway || []).find((r) => String(r[cfg.serialField]) === String(serial));
+  if (!row) return;
+  const logoHref = new URL("assets/c2tech-logo.png", window.location.href).href;
+  const result = buildGatewayLabelHtml(row, logoHref);
+  if (result.error) {
+    showAlert(result.error, "error");
+    return;
+  }
+  if (isInIframe()) { printGatewayLabelViaPopup(result.html); return; }
+  document.getElementById("printLabelRoot").innerHTML = result.html;
+  document.body.classList.add("print-label-active");
+  injectLabelPageStyle();
+  printAfterImagesLoad(document.getElementById("printLabelRoot"));
+}
+
+/** ทางเลือกสำรองสำหรับตอนแอปถูกฝังใน iframe — เปิดหน้าต่างใหม่พร้อม @page ของตัวเอง ไม่กระทบขนาดกระดาษของ
+ * การพิมพ์แบบอื่นในหน้าต่างหลัก */
+function printGatewayLabelViaPopup(html) {
+  const popup = window.open("", "_blank");
+  if (!popup) {
+    showAlert("เบราว์เซอร์บล็อกการเปิดหน้าต่างใหม่ กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้แล้วลองอีกครั้ง", "error");
+    return;
+  }
+  const styleHref = new URL("style.css", window.location.href).href;
+  popup.document.write(`<!DOCTYPE html><html><head><title>ป้าย Gateway</title><link rel="stylesheet" href="${styleHref}"><style>@page { size: 90mm 50mm; margin: 0; } body{margin:0;}</style></head><body class="print-label-active"><div id="printLabelRoot">${html}</div></body></html>`);
+  popup.document.close();
+  setTimeout(() => {
+    popup.focus();
+    const imgs = Array.from(popup.document.querySelectorAll("img"));
+    let printed = false;
+    const doPrint = () => { if (printed) return; printed = true; popup.print(); };
+    const pending = imgs.filter((img) => !img.complete);
+    if (!pending.length) { doPrint(); return; }
+    let remaining = pending.length;
+    pending.forEach((img) => {
+      const markDone = () => { remaining -= 1; if (remaining <= 0) doPrint(); };
+      img.addEventListener("load", markDone, { once: true });
+      img.addEventListener("error", markDone, { once: true });
+    });
+    setTimeout(doPrint, 1500);
+  }, 300);
+}
 
 // ============================================================
 // Phase 4: สร้างรูปรายงานสำหรับคัดลอกไปวางส่งใน LINE
@@ -2152,16 +2292,37 @@ async function copyReportImage() {
 // ============================================================
 // List views (read-only, Phase 1 — ยังไม่มีระบบเบิก/แก้ไข)
 // ============================================================
+// เก็บค่าช่องค้นหา/ตัวกรองสถานะไว้ข้ามการ render (คั่นตาม key ของแต่ละหน้า) เพราะเดิม input/select ถูกสร้างใหม่
+// ทุกครั้งที่ renderListView/renderPartsListView ทำงาน (เช่นหลังกดแก้ไข+บันทึกแล้วเรียก renderCurrentView() ใหม่)
+// ทำให้ค่าที่ผู้ใช้กรอกไว้หายไปต้อง filter หาใหม่ทุกครั้ง — ตอนนี้จำค่าไว้ใน object นี้แล้ว restore กลับเข้า
+// input/select ทุกครั้งที่ render ใหม่แทน
+const listViewFilters = {}; // { [filterKey]: { search: string, status: string } }
+
+function getListViewFilterState(filterKey) {
+  return listViewFilters[filterKey] || { search: "", status: "all" };
+}
+
+function saveListViewFilterState(filterKey) {
+  const searchEl = document.getElementById("searchBox");
+  const statusEl = document.getElementById("statusFilter");
+  listViewFilters[filterKey] = {
+    search: searchEl ? searchEl.value : "",
+    status: statusEl ? statusEl.value : "all",
+  };
+}
+
 function renderListView(cfg) {
   const content = document.getElementById("viewContent");
   const rows = state.data[cfg.key] || [];
   const isAdmin = state.user.role === "Admin";
   const mobile = isMobileViewport();
+  const filterKey = cfg.key;
+  const saved = getListViewFilterState(filterKey);
 
   // Phase 15: ปุ่ม "+ เพิ่มสต๊อก" ถูกย้ายไปรวมไว้ที่หน้า "จัดการ Stock/อะไหล่" หน้าเดียวแล้ว (ไม่มีปุ่มแยกในหน้านี้อีกต่อไป)
   content.innerHTML = `
     <div class="controls-row">
-      <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)">
+      <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)" value="${escapeAttr(saved.search)}">
       <select id="statusFilter">
         <option value="all">-- สถานะทั้งหมด --</option>
         <option value="stock">อยู่ในคลัง (Stock)</option>
@@ -2179,9 +2340,10 @@ function renderListView(cfg) {
       </div>
     </div>`}
   `;
+  document.getElementById("statusFilter").value = saved.status;
 
-  document.getElementById("searchBox").addEventListener("input", () => renderRows(cfg, rows, isAdmin));
-  document.getElementById("statusFilter").addEventListener("change", () => renderRows(cfg, rows, isAdmin));
+  document.getElementById("searchBox").addEventListener("input", () => { saveListViewFilterState(filterKey); renderRows(cfg, rows, isAdmin); });
+  document.getElementById("statusFilter").addEventListener("change", () => { saveListViewFilterState(filterKey); renderRows(cfg, rows, isAdmin); });
   renderRows(cfg, rows, isAdmin);
 }
 
@@ -2283,8 +2445,8 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
       : "";
     const cells = cfg.columns.map((c) => {
       if (c.computed) {
-        const linked = computeLinkedAccessories(row);
-        return `<td>${linked.length ? linked.map((l) => `<span class="badge-linked">${escapeHtml(l)}</span>`).join(" ") : `<span class="cache-note">-</span>`}</td>`;
+        const linked = (c.compute || computeLinkedAccessories)(row);
+        return `<td>${linked.length ? linked.map(renderLinkedBadge).join(" ") : `<span class="cache-note">-</span>`}</td>`;
       }
       let val = row[c.field];
       if (c.field === cfg.stockField) {
@@ -2309,6 +2471,11 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
     const photoBtn = cfg.partCategory
       ? `<button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', ${hasPartPhotoByPartId(row.PartID)})">เพิ่ม/เปลี่ยนรูป</button>`
       : "";
+    // Phase 21: ปุ่มพิมพ์ป้ายติดเครื่อง Gateway — เฉพาะตาราง Gateway เท่านั้น (ป้ายมีไว้แปะตัวเครื่อง Gateway โชว์
+    // S/N ตัวเอง + S/N อุปกรณ์/ซิมที่เชื่อมต่ออยู่ — ดู printGatewayLabel)
+    const printLabelBtn = cfg.key === "gateway"
+      ? `<button class="btn-sm btn-secondary" onclick="printGatewayLabel('${escapeAttr(serial)}')">🏷️ พิมพ์ป้าย</button>`
+      : "";
     const isTransferClaimType = TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key);
     const claimed = isTransferClaimType && isClaimedRow(row, cfg);
     const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
@@ -2329,6 +2496,7 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
            <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
            ${issued ? `<button class="btn-sm btn-transfer" onclick="openTransferClaimModal('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ย้าย/เคลม</button>` : ""}
            <button class="btn-sm btn-remove" onclick="deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
+           ${printLabelBtn}
            ${historyBtn}
            ${photoBtn}
          </td>`;
@@ -2358,11 +2526,14 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     const issued = isTransferClaimType && !claimed && !writtenOff && !stock;
 
     const bodyRows = cfg.columns
-      .filter((c) => c.field !== cfg.serialField && c.field !== "No" && c.field !== cfg.stockField)
+      // หมายเหตุ: เดิมซ่อนคอลัมน์ field "No" ออกจากการ์ดมือถือทุกประเภท เพราะของ MoisturLyzer เป็นแค่เลขลำดับ
+      // เก่าจากสเปรดชีต ไม่มีความหมายกับผู้ใช้ — จำกัดการซ่อนนี้ไว้เฉพาะ MoisturLyzer เท่านั้น เพราะ SimCard ใช้ field
+      // "No" เก็บ "ลำดับ SIM" จริงที่ AIS อ้างถึง (เช่น "ซิมลำดับที่ 30-40") ซึ่งเป็นข้อมูลสำคัญที่ต้องโชว์บนมือถือด้วย
+      .filter((c) => c.field !== cfg.serialField && !(c.field === "No" && cfg.key === "moisturlyzer") && c.field !== cfg.stockField)
       .map((c) => {
         if (c.computed) {
-          const linked = computeLinkedAccessories(row);
-          const val = linked.length ? linked.join(", ") : "-";
+          const linked = (c.compute || computeLinkedAccessories)(row);
+          const val = linked.length ? linked.map(linkedItemToText).join(", ") : "-";
           return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${escapeHtml(val)}</div></div>`;
         }
         const val = row[c.field];
@@ -2376,6 +2547,10 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     const hasPhoto = cfg.partCategory ? hasPartPhotoByPartId(row.PartID) : false;
     const photoBtn = cfg.partCategory
       ? `<button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', ${hasPhoto})">เพิ่ม/เปลี่ยนรูป</button>`
+      : "";
+    // Phase 21: ปุ่มพิมพ์ป้ายติดเครื่อง Gateway — เฉพาะการ์ด Gateway เท่านั้น (ดู printGatewayLabel)
+    const printLabelBtn = cfg.key === "gateway"
+      ? `<button class="btn-sm btn-secondary" onclick="printGatewayLabel('${escapeAttr(serial)}')">🏷️ พิมพ์ป้าย</button>`
       : "";
     let actionsHtml;
     if (isAdmin && claimed) {
@@ -2393,6 +2568,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
            <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
            ${issued ? `<button class="btn-sm btn-transfer" onclick="openTransferClaimModal('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ย้าย/เคลม</button>` : ""}
            <button class="btn-sm btn-remove" onclick="deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
+           ${printLabelBtn}
            ${historyBtn}
            ${photoBtn}
          </div>`;
@@ -2488,6 +2664,8 @@ function renderPartsListView(viewKey, cfg) {
   const mobile = isMobileViewport();
   const qtyAssetType = PART_QTY_ASSET_TYPE_BY_VIEW[viewKey];
   const qtyParts = getQtyPartsForCategory(PART_CATEGORY_BY_VIEW[viewKey]);
+  const filterKey = `parts:${viewKey}`;
+  const saved = getListViewFilterState(filterKey);
 
   // การ์ดอะไหล่แบบนับจำนวน — ใช้ดีไซน์เดียวกันทั้งมือถือและ PC (ต่างแค่ wrapper: มือถือเรียงคอลัมน์เดียว, PC จัด
   // เป็น grid หลายคอลัมน์ผ่านคลาส .pcard-grid ใน style.css) แทนตารางเดิมที่รูปเล็กมาก (60×60px) ให้เห็นรูปอะไหล่
@@ -2528,7 +2706,7 @@ function renderPartsListView(viewKey, cfg) {
 
     <h3 class="section-subtitle" style="margin-top:22px;">อะไหล่แบบมี S/N (รายชิ้น)</h3>
     <div class="controls-row">
-      <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)">
+      <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)" value="${escapeAttr(saved.search)}">
       <select id="statusFilter">
         <option value="all">-- สถานะทั้งหมด --</option>
         <option value="stock">อยู่ในคลัง (Stock)</option>
@@ -2538,10 +2716,11 @@ function renderPartsListView(viewKey, cfg) {
     <div id="listCards" class="mcard-list${mobile ? "" : " pcard-grid"}"></div>
     ${isAdmin ? `<div class="cache-note" style="margin-top:10px;">ต้องการเพิ่มอะไหล่ใหม่หรือเติมสต็อก? ไปที่เมนู "จัดการ Stock/อะไหล่"</div>` : ""}
   `;
+  document.getElementById("statusFilter").value = saved.status;
   hydratePartPhotoThumbnails(content); // เติมรูปของ "อะไหล่แบบนับจำนวน" (qtyPartsSectionHtml) ที่ set ไว้ข้างบนนี้ก่อน
 
-  document.getElementById("searchBox").addEventListener("input", () => renderRows(cfg, rows, isAdmin));
-  document.getElementById("statusFilter").addEventListener("change", () => renderRows(cfg, rows, isAdmin));
+  document.getElementById("searchBox").addEventListener("input", () => { saveListViewFilterState(filterKey); renderRows(cfg, rows, isAdmin); });
+  document.getElementById("statusFilter").addEventListener("change", () => { saveListViewFilterState(filterKey); renderRows(cfg, rows, isAdmin); });
   renderRows(cfg, rows, isAdmin);
 }
 
@@ -2793,13 +2972,214 @@ function renderManagePartsView() {
 
 /** สลับเนื้อหาส่วนล่างของหน้าตามประเภทที่เลือกไว้บนสุด — MoisturLyzer/Gateway/SimCard ใช้ฟอร์มเพิ่มสต๊อกแบบตะกร้าใหม่
  * ส่วนอะไหล่ Color Sorter/Panolyzer ยังคงใช้ระบบ new/restock เดิมทุกประการ แค่ย้ายมาอยู่ใต้ตัวเลือกนี้เท่านั้น */
+// SimCard เท่านั้น: สลับระหว่าง "+ เพิ่มสต๊อกใหม่" กับ "Activate ซิมที่รอดำเนินการ" ด้วยปุ่มแท็บคู่ (แทนที่จะซ้อนกันไว้
+// ทั้ง 2 ส่วนตลอดเวลาแบบเดิม) เพื่อไม่ให้หน้าจอยาวเกินไปเมื่อมีซิมรอ Activate จำนวนมาก — ค่าเริ่มต้นเป็น "เพิ่มสต๊อกใหม่"
+let mpSimTab = "addstock";
+
 function renderMpSubArea() {
   const area = document.getElementById("mp-subArea");
   if (mpAssetType === "colorSorterParts" || mpAssetType === "panolyzerParts") {
     managePartsForm.category = mpAssetType === "colorSorterParts" ? "ColorSorter" : "Panolyzer";
     renderPartsSubUI(area);
+  } else if (mpAssetType === "simcard") {
+    renderMpSimTabs(area);
   } else {
     renderAddStockInlineUI(area, mpAssetType);
+  }
+}
+
+function renderMpSimTabs(area) {
+  const pendingCount = getNotActivatedSimCards().length;
+  area.innerHTML = `
+    <div class="picker-row" style="margin-bottom:14px;">
+      <button class="btn-sm ${mpSimTab === "addstock" ? "btn-primary" : "btn-secondary"}" style="flex:1;" onclick="switchMpSimTab('addstock')">+ เพิ่มสต๊อกใหม่</button>
+      <button class="btn-sm ${mpSimTab === "activate" ? "btn-primary" : "btn-secondary"}" style="flex:1;" onclick="switchMpSimTab('activate')">✓ Activate ซิมที่รอดำเนินการ (${pendingCount})</button>
+    </div>
+    <div id="mp-simTabArea"></div>
+  `;
+  const tabArea = document.getElementById("mp-simTabArea");
+  if (mpSimTab === "activate") renderBulkActivateSimUI(tabArea);
+  else renderAddStockInlineUI(tabArea, "simcard");
+}
+
+function switchMpSimTab(tab) {
+  mpSimTab = tab;
+  renderMpSimTabs(document.getElementById("mp-subArea"));
+}
+
+// ============================================================
+// Phase: Activate SimCard หลายรายการพร้อมกัน (หลัง AIS ยืนยันเปิดเบอร์แล้ว) — อยู่ในหน้า "จัดการ Stock/อะไหล่"
+// ต่อท้ายฟอร์มเพิ่มสต๊อก SimCard เดิม ใช้ action "updateAsset" เดิม (ตัวเดียวกับฟอร์ม "แก้ไข") วนเรียกทีละรายการ
+// ที่เลือกไว้ — ไม่ต้องแก้ Cloud Functions ฝั่ง backend เลย
+// ============================================================
+let bulkActivateSimState = { date: "", selected: new Set() };
+
+/** ซิมที่ยังรอ Activate จริง = ยังไม่มีวันที่ Activate_date เลย ไม่ว่าสถานะ Installed_device ตอนนี้จะเป็นอะไร —
+ * เดิมจำกัดไว้เฉพาะแถวที่เป็น "Stock" เท่านั้น แต่ในทางปฏิบัติบางครั้งซิมถูกเบิก/ติดตั้งไปหาลูกค้าแล้วตั้งแต่ก่อนที่
+ * AIS จะยืนยันเปิดเบอร์จริง (Installed_device จึงไม่ใช่ "Stock" แล้ว) ทำให้รายการเหล่านั้นเคยตกหล่นไปจากลิสต์นี้
+ * จึงเปลี่ยนมาเช็คแค่ "ยังไม่มี Activate_date" เป็นหลัก (ยกเว้นแถวที่อยู่ระหว่างเคลม/ตัดจำหน่ายแล้ว ซึ่งไม่เกี่ยวกับ
+ * การ Activate อีกต่อไป) */
+function getNotActivatedSimCards() {
+  const cfg = VIEW_CONFIG.simcard;
+  const rows = (state.data.simcard || []).filter((r) => {
+    const activated = String(r[cfg.stockRequiresField] || "").trim();
+    if (activated) return false;
+    const status = String(r[cfg.stockField] || "").trim();
+    if (status === CLAIM_STOCK_VALUE || status === WRITEOFF_STOCK_VALUE) return false;
+    return true;
+  });
+  // เรียงตามลำดับ SIM (field "No") จากน้อยไปมาก ถ้ามีข้อมูลและเป็นตัวเลขได้ — ตรงกับที่ AIS แจ้งเป็นช่วง (30-40)
+  return rows.slice().sort((a, b) => {
+    const na = parseFloat(a.No), nb = parseFloat(b.No);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    if (!isNaN(na)) return -1;
+    if (!isNaN(nb)) return 1;
+    return String(a["Mobile No."] || "").localeCompare(String(b["Mobile No."] || ""));
+  });
+}
+
+function renderBulkActivateSimUI(area) {
+  const candidates = getNotActivatedSimCards();
+  bulkActivateSimState.selected = new Set(
+    [...bulkActivateSimState.selected].filter((s) => candidates.some((r) => String(r["S/N"]) === s))
+  );
+
+  if (!candidates.length) {
+    area.innerHTML = `
+      <div class="form-card">
+        <h3 style="margin:0 0 10px;">Activate SimCard หลายรายการพร้อมกัน</h3>
+        <div class="cache-note">ตอนนี้ไม่มีซิมที่รอ Activate (ทุกรายการมีวันที่เปิดใช้บริการครบแล้ว)</div>
+      </div>`;
+    return;
+  }
+
+  const allChecked = candidates.length > 0 && candidates.every((r) => bulkActivateSimState.selected.has(String(r["S/N"])));
+
+  area.innerHTML = `
+    <div class="form-card">
+      <h3 style="margin:0 0 4px;">Activate SimCard หลายรายการพร้อมกัน</h3>
+      <div class="cache-note" style="margin-bottom:14px;">
+        แสดงซิมทุกรายการที่ยังไม่ได้กรอกวันที่เปิดใช้บริการ (ไม่ว่าจะยังอยู่ใน Stock หรือเบิก/ติดตั้งไปหาลูกค้าแล้วก็ตาม) — เลือกรายการที่ AIS ยืนยันเปิดเบอร์แล้ว แล้วกรอกวันที่ครั้งเดียว ระบบจะใส่ให้ทุกรายการที่เลือก
+      </div>
+      <div class="form-field" style="max-width:260px;">
+        <label>วันที่เปิดใช้บริการ (Activate_date) *</label>
+        <input type="date" id="ba-date" value="${escapeAttr(bulkActivateSimState.date)}">
+      </div>
+      <div class="table-card" style="margin-top:12px;">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="ba-selectAll" ${allChecked ? "checked" : ""}></th>
+                <th>ลำดับ</th>
+                <th>S/N ซิม</th>
+                <th>เบอร์โทร</th>
+              </tr>
+            </thead>
+            <tbody id="ba-tbody">
+              ${candidates.map((r) => {
+                const sn = String(r["S/N"] || "");
+                const checked = bulkActivateSimState.selected.has(sn);
+                return `<tr>
+                  <td><input type="checkbox" class="ba-check" data-sn="${escapeAttr(sn)}" ${checked ? "checked" : ""}></td>
+                  <td>${escapeHtml(String(r.No || "-"))}</td>
+                  <td>${escapeHtml(sn)}</td>
+                  <td>${escapeHtml(String(r["Mobile No."] || "-"))}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="cache-note" id="ba-countNote" style="margin-top:8px;"></div>
+      <div class="form-msg" id="ba-msg"></div>
+      <button class="btn-primary" id="ba-submitBtn" style="margin-top:12px;">Activate ที่เลือกไว้</button>
+    </div>
+  `;
+
+  document.getElementById("ba-date").addEventListener("input", (e) => { bulkActivateSimState.date = e.target.value; });
+  document.getElementById("ba-selectAll").addEventListener("change", (e) => {
+    if (e.target.checked) candidates.forEach((r) => bulkActivateSimState.selected.add(String(r["S/N"])));
+    else bulkActivateSimState.selected.clear();
+    renderBulkActivateSimUI(area);
+  });
+  area.querySelectorAll(".ba-check").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const sn = e.target.getAttribute("data-sn");
+      if (e.target.checked) bulkActivateSimState.selected.add(sn);
+      else bulkActivateSimState.selected.delete(sn);
+      updateBulkActivateCountNote();
+      const selectAllEl = document.getElementById("ba-selectAll");
+      if (selectAllEl) selectAllEl.checked = candidates.every((r) => bulkActivateSimState.selected.has(String(r["S/N"])));
+    });
+  });
+  document.getElementById("ba-submitBtn").addEventListener("click", submitBulkActivateSim);
+  updateBulkActivateCountNote();
+}
+
+function updateBulkActivateCountNote() {
+  const note = document.getElementById("ba-countNote");
+  if (note) note.textContent = `เลือกไว้ ${bulkActivateSimState.selected.size} รายการ`;
+}
+
+async function submitBulkActivateSim() {
+  const msg = document.getElementById("ba-msg");
+  msg.className = "form-msg";
+  msg.textContent = "";
+
+  const selected = [...bulkActivateSimState.selected];
+  if (!selected.length) {
+    msg.className = "form-msg error";
+    msg.textContent = "กรุณาเลือกซิมอย่างน้อย 1 รายการ";
+    return;
+  }
+  const date = bulkActivateSimState.date;
+  if (!date) {
+    msg.className = "form-msg error";
+    msg.textContent = "กรุณากรอกวันที่เปิดใช้บริการ";
+    return;
+  }
+
+  const [dy, dm, dd] = date.split("-");
+  const dateLabel = dy && dm && dd ? `${dd}/${dm}/${dy}` : date;
+  const confirmed = await showConfirm(`ยืนยัน Activate ซิม ${selected.length} รายการ ด้วยวันที่ ${dateLabel}?`);
+  if (!confirmed) return;
+
+  const submitBtn = document.getElementById("ba-submitBtn");
+  const originalText = submitBtn.textContent;
+  submitBtn.disabled = true;
+
+  let successCount = 0;
+  const failed = [];
+  for (let i = 0; i < selected.length; i++) {
+    const serialNo = selected[i];
+    submitBtn.textContent = `กำลัง Activate... (${i + 1}/${selected.length})`;
+    try {
+      const res = await apiPost({
+        action: "updateAsset", token: state.token, assetType: "SimCard", serialNo,
+        updates: { Activate_date: date },
+      });
+      if (res.ok) {
+        successCount++;
+        bulkActivateSimState.selected.delete(serialNo);
+      } else {
+        if (res.error === "unauthorized") { submitBtn.disabled = false; submitBtn.textContent = originalText; return handleUnauthorized(); }
+        failed.push(serialNo);
+      }
+    } catch (err) {
+      failed.push(serialNo);
+    }
+  }
+
+  submitBtn.disabled = false;
+  submitBtn.textContent = originalText;
+  await refreshInBackground(true);
+  renderCurrentView();
+
+  if (!failed.length) {
+    await showAlert(`Activate สำเร็จ ${successCount} รายการ`, "success");
+  } else {
+    await showAlert(`Activate สำเร็จ ${successCount} รายการ — ล้มเหลว ${failed.length} รายการ (${failed.join(", ")}) กรุณาลองใหม่`, "warning");
   }
 }
 
@@ -3074,27 +3454,69 @@ function managePartErrorMessage(code) {
 // Phase 5: แก้ไข/ลบข้อมูลอุปกรณ์ + รายการเบิก (Admin เท่านั้น)
 // ============================================================
 
-/** เปิด modal ฟอร์มทั่วไปสำหรับแก้ไขข้อมูล — fields: [{key,label,value}], onSave(values[]) */
-function openGenericFormModal(title, fields, onSave) {
-  document.getElementById("genericFormModalTitle").textContent = title;
-  const body = document.getElementById("genericFormModalBody");
-  body.innerHTML = fields.map((f, i) => {
-    // Phase 10: รองรับ field แบบ dropdown (type: "select") นอกเหนือจากช่องข้อความธรรมดาแบบเดิม
-    if (f.type === "select") {
-      // ค้นหา S/N แบบพิมพ์หา — ใช้กับ dropdown ยาวๆ ทุกจุด (รวมถึงฟอร์มแก้ไข Gateway/SimCard ที่ผูกกับรายการเบิก)
-      return `<div class="form-field">
-        <label>${escapeHtml(f.label)}</label>
-        <select id="gfm-field-${i}" class="searchable-select">
-          ${(f.options || []).map((o) => `<option value="${escapeAttr(o.value)}" ${String(o.value) === String(f.value) ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
-        </select>
-      </div>`;
-    }
-    // Phase 12: รองรับ field แบบรหัสผ่าน (type: "password") — ซ่อนตัวอักษรที่พิมพ์ ใช้กับฟอร์มเปลี่ยนรหัสผ่านของตัวเอง
-    return `<div class="form-field">
-      <label>${escapeHtml(f.label)}</label>
-      <input type="${f.type === "password" ? "password" : "text"}" id="gfm-field-${i}" autocomplete="${f.type === "password" ? "new-password" : "off"}" value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
+/** เรนเดอร์ field เดียวของ genericFormModal — ใช้ร่วมกันทั้งโหมดเดิม (list เรียงตรงๆ) และโหมดจัดกลุ่มใหม่
+ * (ดู openGenericFormModal opts.groups) รองรับ f.locked (แสดงไอคอนล็อก+พื้นหลังเทาเตือนว่าไม่ควรแก้บ่อย แต่ยังแก้ได้
+ * ปกติ ไม่ได้ disable จริง), f.span2 (กินพื้นที่เต็ม 2 คอลัมน์ตอนอยู่ใน grid), f.hint (ข้อความเล็กใต้ช่อง) และ
+ * f.type ใหม่ "date" (ใช้ตัวเลือกวันที่ของเบราว์เซอร์แทนพิมพ์เอง) */
+function renderGenericFormField(f, i) {
+  const extraClasses = [f.locked ? "locked" : "", f.span2 ? "span2" : ""].filter(Boolean).join(" ");
+  const labelHtml = `${f.locked ? "🔒 " : ""}${escapeHtml(f.label)}`;
+  const hintHtml = f.hint ? `<div class="hint">${escapeHtml(f.hint)}</div>` : "";
+  // Phase 10: รองรับ field แบบ dropdown (type: "select") นอกเหนือจากช่องข้อความธรรมดาแบบเดิม
+  if (f.type === "select") {
+    // ค้นหา S/N แบบพิมพ์หา — ใช้กับ dropdown ยาวๆ ทุกจุด (รวมถึงฟอร์มแก้ไข Gateway/SimCard ที่ผูกกับรายการเบิก)
+    return `<div class="form-field ${extraClasses}">
+      <label>${labelHtml}</label>
+      <select id="gfm-field-${i}" class="searchable-select">
+        ${(f.options || []).map((o) => `<option value="${escapeAttr(o.value)}" ${String(o.value) === String(f.value) ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
+      </select>
+      ${hintHtml}
     </div>`;
-  }).join("");
+  }
+  // Phase 12: รองรับ field แบบรหัสผ่าน (type: "password") — ซ่อนตัวอักษรที่พิมพ์ ใช้กับฟอร์มเปลี่ยนรหัสผ่านของตัวเอง
+  // Phase 21: รองรับ field แบบวันที่ (type: "date") — ใช้ตัวเลือกวันที่ของเบราว์เซอร์แทนพิมพ์ข้อความเอง (ดู
+  // thaiDateToIso/isoDateToThai ที่แปลงกลับไปมากับรูปแบบ "วัน/เดือน/ปี" ที่ระบบเก็บจริงในฐานข้อมูล)
+  const inputType = f.type === "password" ? "password" : f.type === "date" ? "date" : "text";
+  return `<div class="form-field ${extraClasses}">
+    <label>${labelHtml}</label>
+    <input type="${inputType}" id="gfm-field-${i}" autocomplete="${f.type === "password" ? "new-password" : "off"}" value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
+    ${hintHtml}
+  </div>`;
+}
+
+/** เปิด modal ฟอร์มทั่วไปสำหรับแก้ไขข้อมูล — fields: [{key,label,value,type?,locked?,span2?,hint?,group?}], onSave(values[])
+ * opts.groups (ไม่บังคับ): { [groupKey]: { label, order } } — ถ้าใส่มา จะจัด field ที่มี f.group ตรงกันเป็นหมวดๆ
+ * พร้อม header กลุ่ม + จัด grid 2 คอลัมน์บนจอกว้าง (ใช้กับฟอร์มแก้ไขอุปกรณ์ที่มีฟิลด์เยอะ ดู openEditAsset) —
+ * ถ้าไม่ใส่ opts.groups จะ fallback ไปแบบเดิม (เรียง field ตรงๆ ทีละแถวคอลัมน์เดียว) เหมือนก่อนหน้านี้ทุกจุดที่เรียกใช้
+ * (renamePartPrompt, แก้ไขรายการเบิก, เปลี่ยนรหัสผ่าน ฯลฯ) opts.serial (ไม่บังคับ): แสดง S/N ตัวใหญ่แยกบรรทัดใต้ title */
+function openGenericFormModal(title, fields, onSave, opts) {
+  opts = opts || {};
+  const grouped = !!opts.groups;
+  const titleEl = document.getElementById("genericFormModalTitle");
+  const modalBox = document.querySelector("#genericFormModal .image-modal");
+  if (grouped) {
+    titleEl.innerHTML = `<div class="gfm2-title">${escapeHtml(title)}</div>${opts.serial ? `<div class="gfm2-serial">${escapeHtml(opts.serial)}</div>` : ""}`;
+  } else {
+    titleEl.textContent = title;
+  }
+  if (modalBox) modalBox.classList.toggle("gfm-wide", grouped);
+
+  const body = document.getElementById("genericFormModalBody");
+  if (grouped) {
+    const byGroup = {};
+    fields.forEach((f, i) => {
+      const g = f.group || "other";
+      (byGroup[g] = byGroup[g] || []).push(i);
+    });
+    const groupKeys = Object.keys(byGroup).sort((a, b) => ((opts.groups[a] || {}).order ?? 99) - ((opts.groups[b] || {}).order ?? 99));
+    body.innerHTML = groupKeys.map((g) => {
+      const meta = opts.groups[g] || { label: g };
+      const fieldsHtml = byGroup[g].map((i) => renderGenericFormField(fields[i], i)).join("");
+      return `<div class="gfm2-section"><div class="gfm2-section-label">${escapeHtml(meta.label)}</div><div class="gfm2-grid">${fieldsHtml}</div></div>`;
+    }).join("");
+  } else {
+    body.innerHTML = fields.map((f, i) => renderGenericFormField(f, i)).join("");
+  }
   enhanceSearchableSelects(body);
   const msgEl = document.getElementById("genericFormModalMsg");
   msgEl.className = "form-msg";
@@ -3129,16 +3551,107 @@ const EXTRA_EDITABLE_FIELDS = {
   moisturlyzer: ["Linked_Accessories_Note"],
 };
 
+// ============================================================
+// Phase 21: ปรับหน้าต่างแก้ไขข้อมูลอุปกรณ์ให้ใช้งานง่ายขึ้น — จัดกลุ่มฟิลด์เป็นหมวดๆ (แทนเรียงตาม field ดิบใน
+// Firestore), ใช้ป้ายภาษาไทยที่มีอยู่แล้วใน VIEW_CONFIG.columns แทนชื่อ field ดิบ, ใช้ตัวเลือกวันที่แทนพิมพ์เอง
+// สำหรับฟิลด์วันที่ และทำเครื่องหมายฟิลด์รหัสอ้างอิง (S/N หลัก, No.) ให้ดูต่างจากฟิลด์อื่นด้วยไอคอนล็อก+พื้นหลังเทา
+// (ยังแก้ไขได้ปกติ ไม่ได้ disable จริง — แค่เตือนสายตาว่าไม่ควรแก้โดยไม่จำเป็น)
+// ============================================================
+
+// จัดกลุ่ม field ตามชื่อ field (ใช้ชื่อเดียวกันได้ทุกประเภทอุปกรณ์ เพราะ field ชื่อเดียวกันมีความหมายตรงกันเสมอ
+// เช่น Customer_name/Location เป็น "ลูกค้า/สถานที่" ทุกที่) — field ที่ไม่ได้ระบุไว้ที่นี่ ตกไปกลุ่ม "other" อัตโนมัติ
+const ASSET_FIELD_GROUP = {
+  Products_Name: "product", PartName: "product", Model: "product", "Lot_No.": "product",
+  MFD: "product", "Mobile No.": "product",
+  Customer_name: "customer", Location: "customer", location: "customer", install_date: "customer",
+  Install_device: "status", Installed_device: "status", "S/N Device": "status",
+  SimCard_SN: "status", Activate_date: "status",
+};
+const ASSET_FIELD_GROUP_META = {
+  product: { label: "ข้อมูลสินค้า/อุปกรณ์", order: 1 },
+  customer: { label: "ลูกค้า/สถานที่ติดตั้ง", order: 2 },
+  status: { label: "สถานะ/การเชื่อมต่อ", order: 3 },
+  other: { label: "อื่นๆ/รหัสอ้างอิง", order: 4 },
+};
+// field ที่เก็บวันที่แบบข้อความรูปแบบ "วัน/เดือน/ปี" (เช่น "15/01/2025") — ใช้ตัวเลือกวันที่ของเบราว์เซอร์แทนพิมพ์เอง
+const ASSET_DATE_FIELDS = new Set(["MFD", "install_date", "Activate_date"]);
+// field ที่ควรกินพื้นที่เต็ม 2 คอลัมน์ในฟอร์ม (ข้อความมักยาว)
+const ASSET_SPAN2_FIELDS = new Set(["Customer_name", "Linked_Accessories_Note"]);
+// ป้ายภาษาไทยสำหรับ field ที่ไม่ได้อยู่ใน VIEW_CONFIG.columns (เช่นฟิลด์กรอกเองที่ไม่ได้โชว์เป็นคอลัมน์ตาราง)
+const ASSET_FIELD_LABEL_OVERRIDES = {
+  moisturlyzer: { Linked_Accessories_Note: "หมายเหตุอุปกรณ์ที่เชื่อมต่อ (กรอกเอง)" },
+};
+
+/** "15/01/2025" -> "2025-01-15" (สำหรับใส่ใน <input type="date">) — คืนค่า "" ถ้าไม่ตรงรูปแบบหรือว่าง (ให้ fallback
+ * ไปใช้ช่องข้อความธรรมดาแทน กันข้อมูลเก่าที่อาจเก็บมาผิดรูปแบบหายไปโดยไม่รู้ตัว) */
+function thaiDateToIso(str) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(str || "").trim());
+  if (!m) return "";
+  const [, d, mo, y] = m;
+  return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
+/** "2025-01-15" -> "15/01/2025" (แปลงกลับก่อนบันทึกลงฐานข้อมูล ให้รูปแบบเดิมเป๊ะเหมือนที่ระบบอื่นๆ ในแอปคาดหวัง) */
+function isoDateToThai(str) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str || "").trim());
+  if (!m) return "";
+  const [, y, mo, d] = m;
+  return `${d}/${mo}/${y}`;
+}
+
+function getAssetFieldLabel(assetKey, cfg, field) {
+  const override = (ASSET_FIELD_LABEL_OVERRIDES[assetKey] || {})[field];
+  if (override) return override;
+  const col = (cfg.columns || []).find((c) => c.field === field);
+  return col ? col.label : field;
+}
+
+function getAssetFieldGroup(cfg, field) {
+  if (field === cfg.serialField || field === "No") return "other";
+  return ASSET_FIELD_GROUP[field] || "other";
+}
+
 function openEditAsset(assetKey, serial) {
   const cfg = VIEW_CONFIG[assetKey];
   const row = (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField]) === String(serial));
   if (!row) return;
   (EXTRA_EDITABLE_FIELDS[assetKey] || []).forEach((k) => { if (!(k in row)) row[k] = ""; });
-  const fields = Object.keys(row).filter((k) => !k.startsWith("_")).map((k) => ({ key: k, label: k, value: row[k] }));
+  // Phase 21 (แก้บัค): เอกสารบางรายการ (เช่น Gateway ที่เพิ่มเข้าสต๊อกตรงๆ ไม่เคยผ่านการเบิกเลย) จะไม่มี field ที่
+  // ระบุไว้ใน VIEW_CONFIG.columns ครบทุกตัวเก็บอยู่ใน Firestore จริง (เช่นไม่มี Customer_name/Location/
+  // Activate_date/"S/N Device" เลยสักตัว) เพราะฟอร์มเดิมสร้างช่องกรอกจาก Object.keys(row) ตรงๆ — ฟิลด์ที่ไม่มีอยู่
+  // จริงในเอกสารนั้นๆ จะไม่โผล่ในฟอร์มแก้ไขเลย ทำให้ Admin กรอกข้อมูลย้อนหลังไม่ได้ (ต้องมีฟิลด์นั้นอยู่แล้วถึงจะ
+  // แก้ได้) เติมค่าว่างให้ทุก field ที่ระบุไว้เป็นคอลัมน์ของอุปกรณ์ประเภทนี้ก่อนเสมอ (ไม่นับ field เสมือนที่ขึ้นต้น
+  // ด้วย "_" เพราะเป็นค่า compute ล้วนๆ ไม่ใช่ field จริงในฐานข้อมูล) เพื่อให้ช่องกรอกครบทุกครั้งไม่ว่าเอกสารเดิมจะมี
+  // ข้อมูลอยู่ก่อนหรือไม่
+  (cfg.columns || []).forEach((c) => {
+    if (c.field.startsWith("_")) return;
+    if (!(c.field in row)) row[c.field] = "";
+  });
 
-  openGenericFormModal(`แก้ไขข้อมูล ${cfg.title} — ${serial}`, fields, async (values) => {
+  const fields = Object.keys(row).filter((k) => !k.startsWith("_")).map((k) => {
+    const rawVal = row[k];
+    // ใช้ตัวเลือกวันที่ได้เฉพาะตอนค่าที่มีอยู่ว่างเปล่า หรือตรงรูปแบบ วัน/เดือน/ปี เป๊ะเท่านั้น — ถ้าข้อมูลเก่าเก็บ
+    // มาผิดรูปแบบ (พิมพ์มือแบบอื่น) ให้ fallback เป็นช่องข้อความธรรมดาแทน กันข้อมูลเพี้ยน/หายตอนแปลงกลับไปมา
+    const useDatePicker = ASSET_DATE_FIELDS.has(k) && (!rawVal || thaiDateToIso(rawVal));
+    const locked = k === cfg.serialField || k === "No";
+    return {
+      key: k,
+      label: getAssetFieldLabel(assetKey, cfg, k),
+      value: useDatePicker ? thaiDateToIso(rawVal) : (rawVal === undefined || rawVal === null ? "" : rawVal),
+      type: useDatePicker ? "date" : "text",
+      group: getAssetFieldGroup(cfg, k),
+      locked,
+      span2: ASSET_SPAN2_FIELDS.has(k),
+      hint: k === cfg.serialField ? "รหัสอ้างอิงหลัก — แก้ไขได้แต่ควรระวัง" : "",
+      _isDateField: ASSET_DATE_FIELDS.has(k),
+    };
+  });
+
+  openGenericFormModal(cfg.title, fields, async (values) => {
     const updates = {};
-    fields.forEach((f, i) => { updates[f.key] = values[i]; });
+    fields.forEach((f, i) => {
+      updates[f.key] = f.type === "date" ? isoDateToThai(values[i]) : values[i];
+    });
     const msg = document.getElementById("genericFormModalMsg");
     try {
       const res = await apiPost({ action: "updateAsset", token: state.token, assetType: cfg.assetType, serialNo: serial, updates });
@@ -3153,7 +3666,7 @@ function openEditAsset(assetKey, serial) {
       msg.className = "form-msg error";
       msg.textContent = err.message;
     }
-  });
+  }, { groups: ASSET_FIELD_GROUP_META, serial });
 }
 
 // ============================================================
@@ -3380,6 +3893,129 @@ async function submitClaimAsset() {
 }
 
 /** ปิดเคสเคลม — คืนเข้าสต็อก (ซ่อมเสร็จ) หรือ ตัดจำหน่าย (ซ่อมไม่ได้) เรียกตรงจากปุ่มในตาราง ไม่ผ่านโมดัล */
+// ============================================================
+// Phase: หน้ารวม "รอเคลมจาก Supplier" (Admin เท่านั้น) — รวมทุกประเภทอุปกรณ์ (MoisturLyzer/Gateway/SimCard) ที่ถอด
+// ออกจากลูกค้าไปเคลมแล้ว (สถานะ "Claim") ไว้ในตารางเดียวพร้อมคอลัมน์ "ประเภท" กำกับ แทนที่จะต้องไล่เปิดทีละหน้า
+// เพื่อดูว่ามีอะไรค้างรอ Supplier อยู่บ้าง — ใช้กลไก resolveClaimAction เดิมทุกอย่าง (ไม่มี action ใหม่ฝั่ง backend)
+// ============================================================
+const SUPPLIER_CLAIM_TYPE_META = {
+  moisturlyzer: { label: "MoisturLyzer", color: "#17A672" },
+  gateway: { label: "Gateway", color: "#2f6fb0" },
+  simcard: { label: "SimCard", color: "#8B5CF6" },
+};
+
+/** รวมแถวที่อยู่ระหว่างเคลม (isClaimedRow) จากทั้ง 3 ประเภทเข้าเป็นลิสต์เดียว เรียงตามที่รอนานสุดก่อน */
+function getSupplierClaimRows() {
+  const out = [];
+  TRANSFER_CLAIM_ASSET_KEYS.forEach((assetKey) => {
+    const cfg = VIEW_CONFIG[assetKey];
+    (state.data[assetKey] || []).forEach((row) => {
+      if (isClaimedRow(row, cfg)) {
+        out.push({ assetKey, cfg, row, serial: String(row[cfg.serialField] || "") });
+      }
+    });
+  });
+  out.sort((a, b) => {
+    const da = new Date(a.row.ClaimedAt || 0).getTime() || 0;
+    const db = new Date(b.row.ClaimedAt || 0).getTime() || 0;
+    return da - db; // เก่าสุด (รอนานสุด) ขึ้นก่อน
+  });
+  return out;
+}
+
+/** แปลงวันที่เคลม (ClaimedAt) เป็นจำนวนวันที่รอมาแล้ว — ให้ Admin เห็นเร็วๆ ว่ารายการไหนค้างนานผิดปกติ */
+function daysWaitingLabel(dateStr) {
+  if (!dateStr) return "-";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "-";
+  const days = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+  return days === 0 ? "วันนี้" : `${days} วัน`;
+}
+
+function renderSupplierClaimView() {
+  const content = document.getElementById("viewContent");
+  if (state.user.role !== "Admin") {
+    content.innerHTML = `<div class="empty-state">หน้านี้สำหรับ Admin เท่านั้น</div>`;
+    return;
+  }
+  const items = getSupplierClaimRows();
+  const mobile = isMobileViewport();
+
+  content.innerHTML = `
+    <div class="form-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <h3 style="margin:0;">รอเคลมจาก Supplier</h3>
+        <div class="cache-note">${items.length} รายการ — รวมทุกประเภทอุปกรณ์ที่ถอดออกจากลูกค้าไปเคลมแล้ว ยังรอผลจาก Supplier เรียงตามที่รอนานสุดก่อน</div>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      ${!items.length
+        ? `<div class="empty-state">ไม่มีรายการที่รอเคลมอยู่ในขณะนี้</div>`
+        : mobile
+          ? `<div id="scCards" class="mcard-list"></div>`
+          : `<div class="table-card">
+              <div class="table-scroll">
+                <table>
+                  <thead><tr><th>ประเภท</th><th>S/N</th><th>ลูกค้าเดิม</th><th>สถานที่เดิม</th><th>เหตุผลการเคลม</th><th>เคลมเมื่อ</th><th>รอมาแล้ว</th><th>จัดการ</th></tr></thead>
+                  <tbody id="scTbody"></tbody>
+                </table>
+              </div>
+            </div>`
+      }
+    </div>
+  `;
+
+  if (!items.length) return;
+  if (mobile) renderSupplierClaimCards(items); else renderSupplierClaimTable(items);
+}
+
+function renderSupplierClaimTable(items) {
+  const tbody = document.getElementById("scTbody");
+  if (!tbody) return;
+  tbody.innerHTML = items.map(({ assetKey, row, serial }) => {
+    const meta = SUPPLIER_CLAIM_TYPE_META[assetKey];
+    return `<tr>
+      <td><span class="badge-linked" style="background:${meta.color}22; color:${meta.color};">${escapeHtml(meta.label)}</span></td>
+      <td>${escapeHtml(serial)}</td>
+      <td>${escapeHtml(row.ClaimedFromCustomer || "-")}</td>
+      <td>${escapeHtml(row.ClaimedFromLocation || "-")}</td>
+      <td>${escapeHtml(row.ClaimReason || "-")}</td>
+      <td>${escapeHtml(formatDateTh(row.ClaimedAt))}</td>
+      <td>${escapeHtml(daysWaitingLabel(row.ClaimedAt))}</td>
+      <td class="no-wrap">
+        <button class="btn-sm btn-primary" onclick="resolveClaimAction('${escapeAttr(assetKey)}', '${escapeAttr(serial)}', 'toStock')">คืนเข้าสต็อก</button>
+        <button class="btn-sm btn-remove" onclick="resolveClaimAction('${escapeAttr(assetKey)}', '${escapeAttr(serial)}', 'writeOff')">ตัดจำหน่าย</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+function renderSupplierClaimCards(items) {
+  const wrap = document.getElementById("scCards");
+  if (!wrap) return;
+  wrap.innerHTML = items.map(({ assetKey, row, serial }) => {
+    const meta = SUPPLIER_CLAIM_TYPE_META[assetKey];
+    return `
+      <div class="mcard">
+        <div class="mcard-head">
+          <div>
+            <div class="mcard-title">${escapeHtml(serial)}</div>
+            <div class="mcard-sub">${escapeHtml(meta.label)}</div>
+          </div>
+          <span class="mcard-pill claim">รอมา ${escapeHtml(daysWaitingLabel(row.ClaimedAt))}</span>
+        </div>
+        <div class="mcard-row"><div class="mcard-label">ลูกค้าเดิม</div><div class="mcard-val">${escapeHtml(row.ClaimedFromCustomer || "-")}</div></div>
+        <div class="mcard-row"><div class="mcard-label">สถานที่เดิม</div><div class="mcard-val">${escapeHtml(row.ClaimedFromLocation || "-")}</div></div>
+        <div class="mcard-row"><div class="mcard-label">เหตุผล</div><div class="mcard-val">${escapeHtml(row.ClaimReason || "-")}</div></div>
+        <div class="mcard-row"><div class="mcard-label">เคลมเมื่อ</div><div class="mcard-val">${escapeHtml(formatDateTh(row.ClaimedAt))}</div></div>
+        <div class="mcard-actions">
+          <button class="btn-sm btn-primary" onclick="resolveClaimAction('${escapeAttr(assetKey)}', '${escapeAttr(serial)}', 'toStock')">คืนเข้าสต็อก</button>
+          <button class="btn-sm btn-remove" onclick="resolveClaimAction('${escapeAttr(assetKey)}', '${escapeAttr(serial)}', 'writeOff')">ตัดจำหน่าย</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
 async function resolveClaimAction(assetKey, serial, resolution) {
   const cfg = VIEW_CONFIG[assetKey];
   const label = resolution === "toStock" ? "คืนเข้าสต็อก" : "ตัดจำหน่าย";
@@ -4149,6 +4785,9 @@ function addToBasket(assetKey, serial) {
     assetType: cfg.assetType, assetKey, serialNo: serial,
     connectTo: cfg.connectOptions ? cfg.connectOptions[0] : "",
     connectSerial: "",
+    // Phase: สถานที่ติดตั้งเฉพาะจุด — ว่างไว้ = ใช้ "สถานที่ติดตั้ง/ไซต์งาน" รวมของทั้งคำขอ (พฤติกรรมเดิม)
+    // กรอกแล้ว = override เฉพาะชิ้นนี้ ใช้กับกรณีเบิกหลายเครื่องให้ลูกค้าเจ้าเดียวกันแต่ไปติดตั้งคนละจุด
+    location: "",
   };
 
   if (cfg.assetType === "MoisturLyzer") {
@@ -4193,6 +4832,11 @@ function updateBasketConnectTo(index, value) {
 function updateBasketConnectSerial(index, value) {
   issuanceForm.basket[index].connectSerial = value;
   refreshBasketNotice();
+}
+
+/** สถานที่เฉพาะจุด — ไม่ต้องวาดตะกร้าใหม่ (แค่พิมพ์ข้อความ ไม่กระทบ dropdown อื่น) แค่เก็บค่าไว้ใน state รอส่งตอนกดยืนยัน */
+function updateBasketLocation(index, value) {
+  issuanceForm.basket[index].location = value;
 }
 
 /** เบิก SimCard เชื่อมกับ Gateway ที่เบิกออกไปแล้ว — ก่อนบันทึกค่าเช็คก่อนว่า Gateway ตัวที่เลือกมี SimCard เดิม
@@ -4355,7 +4999,7 @@ function renderBasket() {
 
   area.innerHTML = `
     <table class="basket-table">
-      <thead><tr><th>ประเภท</th><th>Serial</th><th>เชื่อมต่อกับ / ใส่ใน</th><th>เครื่องที่เชื่อมต่อ (เจาะจง)</th><th>SimCard คู่กัน</th><th></th></tr></thead>
+      <thead><tr><th>ประเภท</th><th>Serial</th><th>เชื่อมต่อกับ / ใส่ใน</th><th>เครื่องที่เชื่อมต่อ (เจาะจง)</th><th>SimCard คู่กัน</th><th>สถานที่เฉพาะจุด</th><th></th></tr></thead>
       <tbody>
         ${issuanceForm.basket.map((item, idx) => {
           // Phase 12: ของนอกระบบ (พิมพ์ชื่อเอง) — ไม่มี cfg/รุ่น/การเชื่อมต่อใดๆ เกี่ยวข้อง แสดงชื่อ+serial+จำนวนที่พิมพ์มา
@@ -4365,6 +5009,7 @@ function renderBasket() {
               <td>${escapeHtml(item.itemName)} <span class="cache-note">(นอกระบบ)</span></td>
               <td>${escapeHtml(item.serialNo)}</td>
               <td><input type="number" min="1" value="${escapeAttr(String(item.quantity != null ? item.quantity : 1))}" style="width:80px;" onchange="updateBasketQuantity(${idx}, this.value)"> ชิ้น</td>
+              <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -4377,6 +5022,7 @@ function renderBasket() {
               <td>${escapeHtml(item.partName)} <span class="cache-note">(นับจำนวน)</span></td>
               <td><span class="cache-note">-</span></td>
               <td><input type="number" min="1" value="${escapeAttr(String(item.quantity))}" style="width:80px;" onchange="updateBasketQuantity(${idx}, this.value)"> ชิ้น</td>
+              <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -4471,18 +5117,23 @@ function renderBasket() {
             }
           }
 
+          const locationCell = `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
+              value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">`;
+
           return `<tr>
             <td>${escapeHtml(cfg.title)}</td>
             <td>${escapeHtml(item.serialNo)}</td>
             <td>${connectCell}</td>
             <td>${serialCell}</td>
             <td>${simCell}</td>
+            <td>${locationCell}</td>
             <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
           </tr>`;
         }).join("")}
       </tbody>
     </table>
     <div class="cache-note" style="margin-top:8px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
+    <div class="cache-note">"สถานที่เฉพาะจุด" ไม่บังคับกรอก — ถ้าปล่อยว่างจะใช้สถานที่ติดตั้ง/ไซต์งานรวมที่กรอกไว้ด้านบนของแบบฟอร์ม (ข้อ 1) ให้ทุกเครื่อง กรอกเฉพาะเครื่องที่ไปติดตั้งคนละจุดกับที่อื่น</div>
     <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
   `;
   enhanceSearchableSelects(area);
@@ -4629,6 +5280,14 @@ function renderBasketMobile(area) {
       }
     }
 
+    // Phase: สถานที่ติดตั้งเฉพาะจุด — ต่อท้ายฟิลด์อื่นๆ ของการ์ดเสมอ (ไม่บังคับ ว่างไว้ = ใช้สถานที่รวมของทั้งคำขอ)
+    fields.push({
+      label: `สถานที่เฉพาะจุด (ไม่บังคับ)`,
+      html: `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
+        value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">`,
+      req: false,
+    });
+
     const fieldsHtml = fields.map((f) => `
       <div class="basket-field">
         <label class="${f.req ? "req" : ""}">${f.label}</label>
@@ -4700,11 +5359,16 @@ async function submitIssuanceRequest() {
     // มาแต่เดิม) — บอกเซิร์ฟเวอร์ตรงๆ ว่า SimCard ตัวนี้ไปอยู่ใน Gateway "ตัวไหน" (S/N Gateway จริง) เพื่ออัปเดต
     // ฟิลด์ SimCard_SN ของ Gateway ตัวนั้น ใช้กับ SimCard ที่เบิกเป็นรายการเดี่ยวเท่านั้น (ตอนนี้ล็อก connectTo ไว้
     // เป็น "Gateway" เสมอ ดู addToBasket) ค่า connectSerial ที่เลือกไว้ก็คือ S/N Gateway เป้าหมายอยู่แล้ว
-    const simItem = { assetType: b.assetType, serialNo: b.serialNo, connectTo: b.connectTo, connectSerial: b.connectSerial || "" };
+    // สถานที่เฉพาะจุด (ไม่บังคับ) — ว่าง = ไม่ส่งค่านี้ไปเลย ให้เซิร์ฟเวอร์ใช้สถานที่รวมของทั้งคำขอ (payload.siteLocation)
+    // ตามเดิมทุกประการ อุปกรณ์ที่เบิกคู่กัน (Gateway/SimCard ที่เลือกผูกไว้กับ MoisturLyzer/Gateway หลัก) ใช้สถานที่
+    // เดียวกับตัวหลักเสมอ เพราะติดตั้งจุดเดียวกันจริงในทางกายภาพ
+    const itemLocation = String(b.location || "").trim() || undefined;
+
+    const simItem = { assetType: b.assetType, serialNo: b.serialNo, connectTo: b.connectTo, connectSerial: b.connectSerial || "", newLocation: itemLocation };
     if (b.assetType === "SimCard") simItem.installedGatewaySerial = b.connectSerial || "";
     items.push(simItem);
     if (b.assetType === "MoisturLyzer" && b.linkedGatewaySerial) {
-      items.push({ assetType: "Gateway", serialNo: b.linkedGatewaySerial, connectTo: "MoisturLyzer", connectSerial: b.serialNo });
+      items.push({ assetType: "Gateway", serialNo: b.linkedGatewaySerial, connectTo: "MoisturLyzer", connectSerial: b.serialNo, newLocation: itemLocation });
     }
     if ((b.assetType === "MoisturLyzer" || b.assetType === "Gateway") && b.linkedSimSerial) {
       const simConnectTo = b.assetType === "MoisturLyzer" ? "MoisturLyzer" : (b.model === GATEWAY_MODEL_PANOLYZER ? "Panolyzer" : "MoisturLyzer");
@@ -4713,7 +5377,7 @@ async function submitIssuanceRequest() {
       // installedGatewaySerial ต้องเป็น S/N ของ Gateway ที่ซิมนี้ใส่อยู่จริงเสมอ: ถ้าเบิกคู่กับ MoisturLyzer
       // ก็คือ Gateway ที่เลือกคู่กันไว้ (linkedGatewaySerial) ถ้าเบิก Gateway ตรงๆ ก็คือตัว Gateway นั้นเอง (b.serialNo)
       const installedGatewaySerial = b.assetType === "MoisturLyzer" ? b.linkedGatewaySerial : b.serialNo;
-      items.push({ assetType: "SimCard", serialNo: b.linkedSimSerial, connectTo: simConnectTo, connectSerial: simConnectSerial, installedGatewaySerial });
+      items.push({ assetType: "SimCard", serialNo: b.linkedSimSerial, connectTo: simConnectTo, connectSerial: simConnectSerial, installedGatewaySerial, newLocation: itemLocation });
     }
   });
 
@@ -4777,7 +5441,7 @@ function applyOptimisticIssuance(tempTxnId, payload) {
   payload.items.forEach((item) => {
     state.data.issuanceItems.push({
       TransactionID: tempTxnId, AssetType: item.assetType, SerialNo: item.serialNo, ConnectTo: item.connectTo || "",
-      ConnectSerial: item.connectSerial || "", PreviousStatus: "Stock", NewLocation: payload.siteLocation,
+      ConnectSerial: item.connectSerial || "", PreviousStatus: "Stock", NewLocation: item.newLocation || payload.siteLocation,
       ItemName: item.itemName || "", Quantity: item.quantity || 1, _pendingSync: true,
     });
   });
@@ -4831,18 +5495,51 @@ function formatItemSerialLabel(item) {
   return escapeHtml(item.SerialNo);
 }
 
-/** สร้างข้อความ "(เชื่อมกับ Gateway — เครื่อง MZ-002)" สำหรับแสดงในประวัติ/ใบเบิก — รวม ConnectSerial ถ้ามีการระบุเครื่องเจาะจงไว้ */
-function formatConnectInfo(item) {
+/** ข้อความอธิบาย "เชื่อมต่อ/ติดตั้งอยู่กับอะไร" แบบข้อความล้วน (ไม่มีวงเล็บ/คำนำหน้า) ใช้เป็นแกนกลางให้ทั้ง
+ * formatConnectInfo (ประวัติ) และ formatConnectColumn (ใบเบิกที่พิมพ์) เรียกใช้ร่วมกัน
+ *
+ * กรณีพิเศษ SimCard: ตอนเบิก SimCard คู่กับ MoisturLyzer/Gateway (เลือก "SimCard คู่กัน" ในแถวเดียวกันตอนเบิก)
+ * ConnectTo/ConnectSerial ของรายการ SimCard นั้นจะถูกเซ็ตเป็น "อุปกรณ์ปลายทาง" (เช่น MoisturLyzer/Panolyzer)
+ * ไม่ใช่ตัว Gateway ที่ซิมเสียบอยู่จริง (ดูที่มาใน handleSubmitIssuance) ทำให้ประวัติ/ใบเบิกเดิมไม่เคยโชว์ได้เลยว่า
+ * ซิมตัวนี้ใส่อยู่ใน Gateway ตัวไหน ทั้งที่ระบบรู้ค่านี้อยู่แล้วใน InstalledGatewaySerial (เก็บคู่กันมาตั้งแต่ต้น
+ * แต่ไม่เคยถูกดึงมาแสดงผล) จึงต้องโชว์ Gateway จริงจาก InstalledGatewaySerial เป็นหลักก่อนเสมอสำหรับ SimCard
+ * แล้วค่อยกำกับอุปกรณ์ปลายทางต่อท้ายเป็นข้อมูลเสริมถ้ามี */
+function describeItemConnection(item) {
+  if (item.AssetType === "SimCard" && item.InstalledGatewaySerial) {
+    let text = "Gateway — เครื่อง " + escapeHtml(item.InstalledGatewaySerial);
+    if (item.ConnectTo && item.ConnectTo !== "Gateway") {
+      text += ` (เชื่อมต่อ ${escapeHtml(item.ConnectTo)}${item.ConnectSerial ? " — เครื่อง " + escapeHtml(item.ConnectSerial) : ""})`;
+    }
+    return text;
+  }
   if (!item.ConnectTo) return "";
-  let text = " (เชื่อมกับ " + escapeHtml(item.ConnectTo);
+  let text = escapeHtml(item.ConnectTo);
   if (item.ConnectSerial) text += " — เครื่อง " + escapeHtml(item.ConnectSerial);
-  text += ")";
   return text;
 }
 
-/** คอลัมน์ "นำไปใส่อุปกรณ์ไหน" ในใบเบิกที่พิมพ์ — ใช้ข้อมูล ConnectTo/ConnectSerial เดียวกับ formatConnectInfo
- * แต่แสดงเป็นข้อความล้วนไม่มีวงเล็บ/คำนำหน้า (เพราะอยู่ในเซลล์ตารางของตัวเองแล้ว ไม่ได้ต่อท้ายชื่ออุปกรณ์แบบ
- * formatConnectInfo) รายการที่ไม่ได้ระบุว่าเชื่อมกับอะไรจะโชว์ "—" แทนช่องว่าง */
+/** สร้างข้อความ "(เชื่อมกับ Gateway — เครื่อง MZ-002)" สำหรับแสดงในหน้าประวัติ/รายการในระบบ (ไม่ใช่ใบเบิกที่พิมพ์ —
+ * ดู formatConnectColumn) — ใช้ describeItemConnection ที่โชว์ Gateway ตัวจริงของ SimCard ให้เต็มๆ ได้เพราะพื้นที่
+ * แสดงผลบนจอไม่ตายตัวเหมือนตารางที่ต้องพิมพ์ลงกระดาษ */
+function formatConnectInfo(item) {
+  const text = describeItemConnection(item);
+  return text ? ` (เชื่อมกับ ${text})` : "";
+}
+
+/** Phase: สถานที่เฉพาะจุด — โชว์ "→ สถานที่" ต่อท้ายรายการเฉพาะชิ้นที่สถานที่ติดตั้งต่างจากสถานที่รวมของทั้งคำขอ
+ * (txn.SiteLocation) เท่านั้น ถ้าไม่ได้ระบุเฉพาะจุดไว้หรือค่าตรงกับสถานที่รวมอยู่แล้ว จะไม่โชว์อะไรเพิ่ม (เงียบเหมือนเดิม) —
+ * ใช้ในหน้าอนุมัติการเบิก/ประวัติการเบิก-คืน (ไม่ใช่ใบเบิกที่พิมพ์ ซึ่งพื้นที่ตารางจำกัดกว่า) */
+function formatItemLocationTag(item, txn) {
+  const loc = String(item.NewLocation || "").trim();
+  const txnLoc = String((txn && txn.SiteLocation) || "").trim();
+  if (!loc || loc === txnLoc) return "";
+  return ` <span class="loc-tag">→ ${escapeHtml(loc)}</span>`;
+}
+
+/** คอลัมน์ "นำไปใส่อุปกรณ์ไหน" ในใบเบิกที่พิมพ์ — ตั้งใจไม่ใช้ describeItemConnection (ซึ่งจะต่อข้อความอุปกรณ์
+ * ปลายทางของ SimCard เพิ่มเข้ามาอีกก้อน) เพราะเซลล์ในตารางพิมพ์มีความกว้างจำกัด/ตายตัว ข้อความที่ยาวเกินจะดัน
+ * ตารางทั้งใบล้นออกนอกหน้ากระดาษ จึงคงให้โชว์แค่ ConnectTo/ConnectSerial ตรงๆ แบบเดิม สั้นกระชับพอสำหรับพิมพ์
+ * ส่วนรายละเอียด Gateway ตัวจริงของ SimCard ให้ไปดูที่หน้าประวัติในระบบแทน (ดู formatConnectInfo) */
 function formatConnectColumn(item) {
   if (!item.ConnectTo) return "—";
   let text = escapeHtml(item.ConnectTo);
@@ -4856,6 +5553,22 @@ function formatConnectColumn(item) {
  * มีเครื่องเชื่อมต่ออยู่ — Admin แก้ไขเพิ่มเติมเองได้ผ่านฟิลด์ Linked_Accessories_Note (ฟอร์มแก้ไขอุปกรณ์เดียวกับ
  * ที่แก้ Lot No.) ค่านี้จะโชว์ต่อท้ายรายการที่คำนวณได้จากประวัติเสมอ ไม่ได้แทนที่กัน (กันเผลอลบข้อมูลจริงที่ระบบ
  * ติดตามได้อยู่แล้วทิ้งไปโดยไม่ได้ตั้งใจ) */
+/** ตัวช่วยแสดงผลร่วมกันสำหรับคอลัมน์ "computed" ทุกคอลัมน์ (เชื่อมต่อกับ/Gateway ที่เชื่อมต่อ/S/N อุปกรณ์ปลายทาง ฯลฯ)
+ * รองรับ 2 รูปแบบ: string ธรรมดา (ค่ายืนยันแล้ว เช่น จากประวัติการเบิกหรือฟิลด์ที่กรอกไว้จริง) กับ object
+ * { text, guessed: true } (ค่าที่ระบบเดาให้จากข้อมูลอื่น เช่น ลูกค้า/สถานที่ตรงกัน ยังไม่ได้ยืนยันจริง) —
+ * แบบหลังจะได้ badge สีส้มขอบเส้นประ + เครื่องหมาย ? กำกับไว้ให้เห็นชัดว่าต่างจากค่าที่ยืนยันแล้ว */
+function renderLinkedBadge(l) {
+  const guessed = l && typeof l === "object" && l.guessed;
+  const text = guessed ? l.text : l;
+  const title = guessed ? ` title="เดาจากลูกค้า/สถานที่ที่ตรงกัน — ยังไม่ยืนยัน กดปุ่มแก้ไขเพื่อระบุให้ชัดเจน"` : "";
+  return `<span class="badge-linked${guessed ? " badge-guess" : ""}"${title}>${escapeHtml(text)}${guessed ? " ?" : ""}</span>`;
+}
+function linkedItemToText(l) {
+  const guessed = l && typeof l === "object" && l.guessed;
+  const text = guessed ? l.text : l;
+  return guessed ? `${text} (ยังไม่ยืนยัน)` : text;
+}
+
 function computeLinkedAccessories(row) {
   const serial = String(row[VIEW_CONFIG.moisturlyzer.serialField] || "");
   const issuedTxnIds = new Set(
@@ -4866,6 +5579,46 @@ function computeLinkedAccessories(row) {
     .map((i) => `${i.AssetType} ${i.SerialNo}`);
   const manual = String(row.Linked_Accessories_Note || "").trim();
   return manual ? [...fromHistory, manual] : fromHistory;
+}
+
+/** หา Gateway ที่ซิมตัวนี้เสียบอยู่จริง "ตอนนี้" — reverse lookup จากฟิลด์ SimCard_SN ที่เก็บไว้บนตัวเอกสาร Gateway
+ * เอง (ฟิลด์เดียวกับที่ระบบใช้เช็คกันเบิกซิมทับ Gateway เดิมอยู่แล้ว ดู updateSimConnectToGateway) จึงเป็นแหล่ง
+ * ข้อมูลที่สดและแม่นที่สุดในระบบ ไม่ต้องพึ่งประวัติการเบิกเก่าเหมือน computeLinkedAccessories เพราะเอกสารซิมเอง
+ * ไม่เคยเก็บ S/N ของ Gateway ไว้เลย (เก็บแค่ชื่อประเภทอุปกรณ์ปลายทางใน Installed_device) — คืนอาเรย์ว่างถ้าไม่เจอ
+ * Gateway ตัวไหนที่ระบุว่ามีซิมนี้อยู่ (เช่น ยังไม่เคยผูกกับ Gateway ไหนเลย หรือเป็นข้อมูลเก่าก่อนหน้านี้) */
+function computeSimInstalledGateway(row) {
+  const simSerial = String(row[VIEW_CONFIG.simcard.serialField] || "").trim();
+  if (!simSerial) return [];
+  const gwCfg = VIEW_CONFIG.gateway;
+  const gw = (state.data.gateway || []).find((g) => String(g[GATEWAY_SIMCARD_FIELD] || "").trim() === simSerial);
+  return gw ? [String(gw[gwCfg.serialField] || "")] : [];
+}
+
+/** S/N ของ MoisturLyzer ปลายทางของ Gateway แถวนี้ — ถ้าฟิลด์ "S/N Device" มีค่าอยู่แล้ว (ยืนยันแล้ว ไม่ว่าจะพิมพ์
+ * ไว้ตอนเบิก Panolyzer หรือเลือกเจาะจงไว้ตอนเบิก MoisturLyzer) คืนค่านั้นตรงๆ เหมือนเดิมทุกประการ — ถ้าว่างและ
+ * Gateway แถวนี้เชื่อมต่อกับ "MoisturLyzer" (Install_device) ให้ลองเดาจากลูกค้า+สถานที่ที่ตรงกันเป๊ะกับ MoisturLyzer
+ * ที่ติดตั้งอยู่จริง (ไม่ใช่ของใน Stock) เดาให้ก็ต่อเมื่อเจอ "พอดี 1 เครื่อง" เท่านั้น (กันเดาผิดถ้ามีมากกว่า 1 เครื่อง
+ * ตรงกัน) ผลลัพธ์ที่เดาได้จะคืนเป็น { text, guessed: true } ให้ตัวแสดงผล (renderRowsAsTable/Cards) ใส่ badge แยก
+ * ให้เห็นชัดว่ายังไม่ยืนยัน — ไม่เขียนกลับลงฐานข้อมูลเลย เป็นแค่การคำนวณตอนแสดงผลเท่านั้น */
+function computeGatewayLinkedMoisturlyzer(row) {
+  const cfg = VIEW_CONFIG.gateway;
+  const confirmed = String(row[cfg.deviceSerialField] || "").trim();
+  if (confirmed) return [confirmed];
+
+  if (String(row[cfg.connectField] || "").trim() !== LINKABLE_TARGET_ASSET_TYPE) return [];
+  const customer = String(row.Customer_name || "").trim();
+  if (!customer) return [];
+  const location = String(row.Location || "").trim();
+
+  const moistCfg = VIEW_CONFIG.moisturlyzer;
+  const candidates = (state.data.moisturlyzer || []).filter((m) =>
+    String(m.Customer_name || "").trim() === customer &&
+    String(m.Location || "").trim() === location &&
+    !isStockRow(m, moistCfg.stockField, moistCfg.stockRequiresField)
+  );
+  if (candidates.length !== 1) return [];
+  const serial = String(candidates[0][moistCfg.serialField] || "").trim();
+  return serial ? [{ text: serial, guessed: true }] : [];
 }
 
 function renderApprovalsView() {
@@ -4926,7 +5679,7 @@ function renderApprovalsView() {
         ${claimSwapLine}
         ${txn.Details ? `<div class="txn-meta">${isClaim ? "เหตุผลที่เคลม" : "หมายเหตุ"}: ${escapeHtml(txn.Details)}</div>` : ""}
         ${!isClaim ? `<div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}</div>`).join("")}
+          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}${formatItemLocationTag(i, txn)}</div>`).join("")}
         </div>` : ""}
         ${txn._pendingSync
           ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์ก่อนจึงจะอนุมัติได้</div>`
@@ -5312,7 +6065,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
         </div>
         ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
         <div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}</div>`).join("")}
+          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}${formatItemLocationTag(i, txn)}</div>`).join("")}
         </div>
         <div class="txn-actions">
           ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
