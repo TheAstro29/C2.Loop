@@ -169,20 +169,33 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 
 /* ---------- Dashboard ---------- */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+/* Phase: ปรับโฉมการ์ด KPI ใหม่ทั้งหมด (ตามพรีวิว "Design A" ที่ผู้ใช้เลือก) — ไอคอนวงกลมสีต่อหมวด (ตรงกับ
+   DASHBOARD_CATEGORY_META ตัวเดียวกับที่มือถือใช้) + แถบสีบนขอบการ์ด (--kpi-accent ตั้งค่าจาก JS ต่อการ์ด)
+   + ตัวเลขใหญ่ + แถบสัดส่วนอัตราใช้งานแทนแถวตัวเลขล้วนๆ เดิม */
 .kpi-card {
-  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px;
-  border-left: 4px solid var(--green);
+  background: #fff; border-radius: 16px; padding: 18px 20px;
+  box-shadow: 0 1px 3px rgba(20,40,28,.06), 0 8px 20px -14px rgba(20,40,28,.2);
+  border-top: 4px solid var(--kpi-accent, var(--green));
 }
-.kpi-card-title {
-  font-size: 15px; font-weight: 700; color: var(--green-dark); margin-bottom: 12px;
-  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+.kpi-card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.kpi-icon-badge {
+  width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0; color: #fff; font-size: 17px;
+  display: flex; align-items: center; justify-content: center;
 }
+.kpi-card-title-plain { font-size: 14px; font-weight: 700; color: var(--green-dark); flex: 1; min-width: 0; }
+.kpi-card-title-plain.with-count { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kpi-num { font-size: 28px; font-weight: 700; color: var(--green-dark); line-height: 1; margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+.kpi-num small { font-size: 12.5px; font-weight: 600; color: var(--gray); margin-left: 4px; }
+.kpi-util-bar { width: 100%; height: 7px; border-radius: 4px; background: var(--sub2, #D2DCD8); overflow: hidden; margin-bottom: 8px; }
+.kpi-util-bar span { display: block; height: 100%; border-radius: 4px; }
+.kpi-util-legend { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--gray); }
+.kpi-util-legend .kpi-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+
 .kpi-stat-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
 .kpi-stat-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
 .kpi-stat-dot.dot-info { background: var(--info); }
 .kpi-stat-dot.dot-warn { background: var(--warning); }
 .kpi-stat-dot.dot-danger { background: var(--danger); }
-.kpi-stat-row:first-of-type .kpi-stat-label { margin-left: 16px; }
 .kpi-stat-label { font-size: 13px; color: var(--gray); flex: 1; }
 .kpi-stat-value { font-size: 17px; font-weight: 700; color: var(--green-dark); }
 .kpi-stat-value.info { color: var(--info); }
@@ -191,7 +204,6 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .kpi-stat-sub { font-size: 11px; color: var(--gray); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
 
 /* Phase 17: การ์ดอะไหล่บน Dashboard — แสดงรายชื่ออะไหล่ทุกชื่อในการ์ดเดียว (แทนตัวเลขรวมก้อนเดียว) */
-.kpi-card-title.with-count { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .parts-count-pill { font-size: 11px; font-weight: 700; color: var(--green); background: var(--green-light); padding: 2px 9px; border-radius: 999px; flex-shrink: 0; }
 .parts-list { max-height: 260px; overflow-y: auto; margin: 2px -20px -6px; padding: 0 20px; }
 .part-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
@@ -239,6 +251,10 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .mcard-pill { font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
 .mcard-pill.stock { background: #e5f2ea; color: var(--ok); }
 .mcard-pill.used { background: #fdf1de; color: var(--warning); }
+/* Phase (ปรับปรุงตามคำขอผู้ใช้): ป้าย "รอ Activate" ต่อท้ายป้าย "อยู่ในคลัง" — ใช้กับซิมที่อยู่ในคลังจริงแต่ยัง
+   Activate ไม่เสร็จ (เบิกไม่ได้) ห่อ 2 ป้ายไว้ด้วยกันกันไม่ให้ justify-content ของ .mcard-head ดันแยกห่างกัน */
+.mcard-pill-group { display: flex; gap: 6px; flex-shrink: 0; }
+.mcard-pill.pending-activate { background: #fdeceb; color: var(--danger); }
 /* ฟีเจอร์ "ย้าย/เคลม" — ป้ายสถานะ "อยู่ระหว่างเคลม"/"ตัดจำหน่าย" (มือถือ) */
 .mcard-pill.claim { background: #fdf1de; color: #b25b09; }
 .mcard-pill.writeoff { background: #eee; color: var(--gray); }
@@ -801,6 +817,74 @@ tbody tr.row-clickable { cursor: pointer; }
   font-size: 11px; color: var(--gray); font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
 }
 
+/* ---------- Phase: Dashboard เดสก์ท็อป — แผง "ต้องดำเนินการ" / "กิจกรรมล่าสุด" ท้ายหน้า ----------
+   เดิมมีแค่บนมือถือ (dash-pending-alert/dash-activity-list) เพิ่มเข้าเดสก์ท็อปด้วยเพื่อให้ไม่ต้องสลับไปดูบน
+   มือถือถึงจะเห็น ใช้คลาส .dash-pending-alert/.dash-activity-list/.dash-activity-item ชุดเดียวกับมือถือ (นิยาม
+   อยู่ในส่วน "Dashboard เวอร์ชันมือถือ" ด้านล่างไฟล์นี้ ไม่ผูกกับ media query ใดๆ จึงใช้ซ้ำได้ตรงๆ) */
+.dash-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 4px; }
+.dash-panel-card h3 { margin: 0 0 12px; font-size: 14px; color: var(--green-dark); }
+.dash-panel-card .dash-pending-alert { margin-top: 0; }
+.dash-panel-card .dash-activity-list { box-shadow: none; border: 1px solid var(--border); }
+@media (max-width: 900px) {
+  .dash-bottom-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- Phase: รายงานพิมพ์แบบทางการ (Executive Print Report) ----------
+   ซ่อนอยู่บนจอปกติเสมอ (#formalReportArea) โชว์เฉพาะตอนสั่งพิมพ์จริง (ดู @media print ด้านบน และ
+   buildFormalDashboardReportHtml ใน script.js) หน่วยที่ใช้เป็น mm ตั้งใจให้ตรงกับกระดาษจริงตอนพิมพ์ */
+.formal-report-print-only { display: none; }
+.rp-page { width: 210mm; min-height: 297mm; padding: 16mm 18mm 14mm; display: flex; flex-direction: column; }
+.rp-body { flex: 1; }
+.rp-header { display: flex; align-items: center; gap: 8mm; padding-bottom: 6mm; border-bottom: 2px solid var(--green); }
+.rp-logo-col { flex: 0 0 auto; }
+.rp-logo-col img { height: 10mm; width: auto; display: block; }
+.rp-title-col { flex: 1; min-width: 0; border-left: 1px solid var(--border); padding-left: 8mm; }
+.rp-title-th { font-size: 19px; font-weight: 700; color: var(--green-dark); line-height: 1.3; }
+.rp-title-en { font-size: 10.5px; color: var(--gray); letter-spacing: .05em; text-transform: uppercase; margin-top: 2px; }
+
+.rp-metabar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; padding: 4mm 0; border-bottom: 1px solid var(--border); margin-bottom: 7mm; }
+.rp-meta-item { font-size: 10px; color: var(--gray); line-height: 1.5; }
+.rp-meta-item b { display: block; color: var(--text); font-size: 11px; font-weight: 600; margin-top: 1px; }
+
+.rp-exec-title { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--sub1, #63816F); margin-bottom: 3mm; }
+.rp-exec-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--green); border-bottom: 1px solid var(--border); margin-bottom: 8mm; }
+.rp-exec-cell { padding: 4mm 5mm 4mm 0; border-right: 1px solid var(--border); }
+.rp-exec-cell:last-child { border-right: none; padding-right: 0; }
+.rp-exec-label { font-size: 9.5px; color: var(--gray); font-weight: 600; margin-bottom: 2.5mm; line-height: 1.35; }
+.rp-exec-num { font-size: 23px; font-weight: 700; color: var(--green-dark); font-variant-numeric: tabular-nums; }
+.rp-exec-num small { font-size: 10px; font-weight: 500; color: var(--gray); }
+.rp-exec-sub { font-size: 9.5px; color: var(--gray); margin-top: 1.5mm; }
+.rp-exec-sub b.up { color: var(--ok); } .rp-exec-sub b.warn { color: #a8721b; }
+
+.rp-section-title { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--sub1, #63816F); margin: 0 0 3mm; display: flex; align-items: center; gap: 6px; }
+table.rp-table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 8mm; }
+table.rp-table th { background: var(--green-dark); color: #fff; font-weight: 600; text-align: left; padding: 2.6mm 3mm; font-size: 10px; }
+table.rp-table th.num, table.rp-table td.num { text-align: right; }
+table.rp-table td { padding: 2.6mm 3mm; border-bottom: 1px solid var(--border); }
+table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
+.rp-util-cell { display: flex; align-items: center; gap: 2mm; white-space: nowrap; }
+.rp-util-bar { display: inline-block; width: 20mm; height: 2.2mm; background: var(--sub2, #D2DCD8); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+.rp-util-bar span { display: block; height: 100%; background: var(--green); }
+.rp-table tfoot td { font-weight: 700; border-top: 2px solid var(--green-dark); border-bottom: none; background: #fff; }
+
+.rp-charts { display: grid; grid-template-columns: 1.3fr 1fr; gap: 8mm; margin-bottom: 8mm; }
+.rp-chart-box { border: 1px solid var(--border); border-radius: 3px; padding: 4mm; }
+.rp-chart-box canvas { max-height: 130px; }
+.rp-fig-caption { font-size: 9px; color: var(--gray); text-align: center; margin-top: 2mm; }
+
+.rp-attn { border: 1px solid #d9b877; background: #FBF6EA; border-radius: 3px; padding: 4mm 5mm; margin-bottom: 8mm; font-size: 10.5px; }
+.rp-attn-head { font-weight: 700; color: #8a5f16; margin-bottom: 2mm; display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
+.rp-attn ul { margin: 0; padding-left: 5mm; }
+.rp-attn li { margin-bottom: 1mm; }
+
+.rp-sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10mm; margin-top: 12mm; }
+.rp-sign-cell { text-align: center; font-size: 10px; color: var(--gray); }
+.rp-sign-line { border-bottom: 1px dotted var(--sub1, #63816F); height: 12mm; margin-bottom: 2mm; }
+.rp-sign-role { font-weight: 600; color: var(--text); }
+
+.rp-footer { margin-top: auto; padding-top: 3mm; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 8mm; font-size: 8.5px; color: var(--gray); }
+.rp-footer .rp-pageno { font-weight: 600; white-space: nowrap; }
+
 /* ---------- Phase 5: badge เชื่อมโยงอุปกรณ์ (แสดงในรายการ MoisturLyzer) ---------- */
 .badge-linked {
   display: inline-block; background: var(--green-light); color: var(--green-dark);
@@ -1071,9 +1155,16 @@ tbody tr.row-clickable { cursor: pointer; }
 
   body.print-dashboard-active .sidebar,
   body.print-dashboard-active .no-print,
+  body.print-dashboard-active .main-header,
   body.print-dashboard-active #offlineBanner { display: none !important; }
+  /* บั๊กที่ผู้ใช้แจ้ง: หัวข้อ "Dashboard" + เวลาซิงก์ล่าสุด (.main-header) เล็ดลอดขึ้นหน้าพิมพ์เสมอ เพราะไม่เคย
+     ถูกซ่อนตอนพิมพ์มาก่อน (ปกติจะเห็นเฉพาะตอนพิมพ์ Dashboard เพราะหน้าอื่นไม่มีปุ่มพิมพ์รายงาน) */
   body.print-dashboard-active .main { padding: 0; }
   body.print-dashboard-active .report-doc { box-shadow: none; }
+  /* Phase: รายงานพิมพ์แบบทางการ — สลับโชว์ #formalReportArea (ซ่อนอยู่บนจอปกติ) แทน #dashboardReportArea
+     เดิมตอนสั่งพิมพ์จริงเท่านั้น (ดู buildFormalDashboardReportHtml ใน script.js) */
+  body.print-dashboard-active #dashboardReportArea { display: none !important; }
+  body.print-dashboard-active .formal-report-print-only { display: block !important; }
 
   .signature-row-3 { flex-direction: row !important; }
   .signature-row-3 .signature-box { width: 32% !important; }

@@ -56,8 +56,9 @@ const VIEW_CONFIG = {
     assetType: "MoisturLyzer",
     serialField: "Product ID",
     connectField: null,
+    // Phase (ตัดตามคำขอผู้ใช้): เอาคอลัมน์ "No" ออก — เป็นแค่เลขลำดับเก่าจากสเปรดชีตต้นฉบับ ไม่ได้เรียงตาม S/N
+    // หรือลำดับที่มีความหมายอะไรกับผู้ใช้เลย (การ์ดมือถือซ่อนคอลัมน์นี้อยู่แล้วด้วยเหตุผลเดียวกัน — ดู renderRowsAsCards)
     columns: [
-      { field: "No", label: "No" },
       { field: "Products_Name", label: "สินค้า" },
       { field: "Model", label: "รุ่น" },
       { field: "Product ID", label: "Product ID" },
@@ -1207,7 +1208,30 @@ function goToLinkedAsset(viewKey, serial) {
   }
 }
 
+// Phase (แก้บั๊กที่ผู้ใช้แจ้ง): ตารางเด้งกลับไปแถวแรก/บนสุดทุกครั้งที่แก้ไขข้อมูล 1 แถว — เกิดเพราะ renderCurrentView()
+// ถูกเรียกซ้ำหลายครั้งหลังบันทึกฟอร์ม (ทั้งจาก Firestore listener ที่อัปเดตข้อมูลสด, refreshInBackground(), และ
+// เรียกตรงๆ อีกที) และแต่ละครั้งทำ content.innerHTML สร้าง DOM ใหม่ทั้งก้อน ทำให้ scroll position ของหน้าเว็บและ
+// ตาราง (.table-scroll) รีเซ็ตเป็น 0 เสมอ — ตอนนี้จำตำแหน่ง scroll ไว้ก่อน render แล้วคืนกลับให้หลัง render เสร็จ
+// "เฉพาะตอนที่ยังอยู่หน้าเดิม" (ข้อมูลอัปเดตสด/บันทึกฟอร์ม) เท่านั้น — ถ้าเป็นการสลับไปหน้าอื่นจริงๆ (switchView
+// เปลี่ยน state.currentView) ยังคงให้เลื่อนกลับขึ้นบนสุดตามปกติเหมือนเดิม ไม่งั้นสลับเมนูแล้วจะค้าง scroll เดิม
+let _lastRenderedView = null;
 function renderCurrentView() {
+  const isSameViewRefresh = _lastRenderedView === state.currentView;
+  const pageScrollY = isSameViewRefresh ? window.scrollY : null;
+  const prevTableScroll = isSameViewRefresh ? document.querySelector(".table-scroll") : null;
+  const tableScrollTop = prevTableScroll ? prevTableScroll.scrollTop : null;
+  _lastRenderedView = state.currentView;
+
+  renderCurrentViewInner();
+
+  if (tableScrollTop !== null) {
+    const newTableScroll = document.querySelector(".table-scroll");
+    if (newTableScroll) newTableScroll.scrollTop = tableScrollTop;
+  }
+  if (pageScrollY !== null) window.scrollTo(window.scrollX, pageScrollY);
+}
+
+function renderCurrentViewInner() {
   const titleEl = document.getElementById("viewTitle");
   if (state.currentView === "dashboard") {
     titleEl.textContent = "Dashboard";
@@ -1250,12 +1274,22 @@ function renderCurrentView() {
 // ============================================================
 // Dashboard (read-only summary — เทียบเท่าชีต Dashboard เดิม)
 // ============================================================
-// Phase 9: requireField (ถ้ามี) ต้องมีค่าไม่ว่างด้วยจึงจะนับเป็น "Stock" จริง — ใช้กับ SimCard
-// ที่ต้องรอ AIS Activate (กรอกวันที่ใน Activate_date) ก่อน แม้ Installed_device จะเป็น "Stock" แล้วก็ตาม
-function isStockRow(row, stockField, requireField) {
+/** เช็คแค่ "ที่ตั้ง/สถานะจริง" ตาม stockField อย่างเดียว (ไม่สนใจว่า Activate หรือยัง) — ความหมายคือ "อยู่ในคลัง
+ * ทางกายภาพ" ใช้กับจุดที่แสดงสถานะ/สรุปยอด (badge, ตัวกรอง, การ์ด KPI) ตามที่ผู้ใช้ขอ: ซิมที่วางอยู่ในคลังจริงแต่
+ * ยังไม่ Activate ควรนับ/แสดงเป็น "อยู่ในคลัง" ไม่ใช่ "เบิกออกไปแล้ว" ทั้งที่ยังไม่เคยถูกเบิกเลย — ดู isStockRow()
+ * ด้านล่างสำหรับเช็ค "พร้อมเบิกได้จริง" ที่ยังคงต้อง Activate ด้วย (ใช้เฉพาะจุดที่เกี่ยวกับระบบเบิก/ย้าย/เคลม) */
+function isPhysicalStockRow(row, stockField) {
   const v = row[stockField];
-  const inStock = v && String(v).trim().toLowerCase() === "stock";
-  if (!inStock) return false;
+  return !!(v && String(v).trim().toLowerCase() === "stock");
+}
+
+// Phase 9: requireField (ถ้ามี) ต้องมีค่าไม่ว่างด้วยจึงจะถือว่า "พร้อมเบิกได้จริง" — ใช้กับ SimCard
+// ที่ต้องรอ AIS Activate (กรอกวันที่ใน Activate_date) ก่อน แม้ Installed_device จะเป็น "Stock" แล้วก็ตาม
+// หมายเหตุ: ใช้เฉพาะจุดที่เกี่ยวกับ "เบิก/ย้าย/เคลม" (เลือกของไปเบิก/สลับเครื่อง/หาของทดแทน) เท่านั้น ส่วนจุดที่
+// แสดงสถานะทั่วไป (badge/ตัวกรอง/สรุปยอด) ให้ใช้ isPhysicalStockRow() แทน เพราะ "อยู่ในคลังจริง" กับ "พร้อมเบิก
+// ได้จริง" เป็นคนละความหมายกัน (ผู้ใช้แจ้งว่าซิมที่ยังไม่ Activate ควรนับเป็น "อยู่ในคลัง" แต่ไม่ให้เลือกเบิกได้)
+function isStockRow(row, stockField, requireField) {
+  if (!isPhysicalStockRow(row, stockField)) return false;
   if (requireField && !(row[requireField] && String(row[requireField]).trim())) return false;
   return true;
 }
@@ -1270,27 +1304,40 @@ function isWrittenOffRow(row, cfg) {
 
 function computeSummary(rows, cfg) {
   const total = rows.length;
-  const stock = rows.filter((r) => isStockRow(r, cfg.stockField, cfg.stockRequiresField)).length;
+  // Phase (ปรับปรุงตามคำขอผู้ใช้): "อยู่ในคลัง" (stock) ตอนนี้ดูแค่ที่ตั้งจริง (isPhysicalStockRow) ไม่สนใจว่า
+  // Activate หรือยัง — ซิมที่วางอยู่ในคลังจริงแต่ยังไม่ Activate จึงนับเป็น "อยู่ในคลัง" ถูกต้อง แทนที่จะถูกนับ
+  // ปนไปกับ "เบิกออกไปแล้ว" แบบเดิม (ดู isStockRow()/isPhysicalStockRow() ด้านบนสำหรับรายละเอียดความต่าง)
+  const stock = rows.filter((r) => isPhysicalStockRow(r, cfg.stockField)).length;
   const used = total - stock;
   const activateField = rows.length && "Activate_date" in rows[0] ? "Activate_date" : (rows.length && "install_date" in rows[0] ? "install_date" : null);
   const activated = activateField ? rows.filter((r) => r[activateField] && String(r[activateField]).trim() !== "").length : null;
 
-  // Phase 9: สำหรับอุปกรณ์ที่ต้องรอ Activate ก่อนถึงจะนับเป็น Stock (เช่น SimCard) แยกยอดให้ชัดเจน
-  // ว่า Activate แล้วเหลือกี่ชิ้น (พร้อมเบิก), Activate แล้วเบิกไปกี่ชิ้น, และยังไม่ได้ Activate อีกกี่ชิ้น
+  // Phase 9 (ปรับปรุง): สำหรับอุปกรณ์ที่ต้องรอ Activate ก่อนถึงจะเบิกได้ (เช่น SimCard) แยกยอดในคลัง (stock)
+  // ออกเป็น "พร้อมเบิก" (Activate แล้ว) กับ "รอ Activate" (อยู่ในคลังแต่เบิกไม่ได้จนกว่าจะ Activate) ให้ชัดเจน —
+  // stockPendingActivate = อยู่ในคลังจริงแต่ยังไม่ Activate, activatedUsed = เบิกออกไปแล้วและ Activate แล้ว,
+  // notActivated = ยังไม่ Activate ทั้งระบบไม่ว่าสถานะปัจจุบันจะเป็นอะไร (รวมที่เบิกไปแล้วด้วย เพราะบางครั้งซิมถูก
+  // เบิกไปติดตั้งก่อนที่ AIS จะยืนยันเปิดเบอร์จริงก็มี — ใช้ติดตามงาน "รอ AIS" แยกต่างหาก ดู getNotActivatedSimCards())
   let notActivated = null;
   let activatedUsed = null;
+  let stockPendingActivate = null;
   if (cfg.stockRequiresField) {
     notActivated = rows.filter((r) => !String(r[cfg.stockRequiresField] || "").trim()).length;
-    activatedUsed = used - notActivated;
+    stockPendingActivate = rows.filter((r) => isPhysicalStockRow(r, cfg.stockField) && !String(r[cfg.stockRequiresField] || "").trim()).length;
+    activatedUsed = rows.filter((r) => !isPhysicalStockRow(r, cfg.stockField) && String(r[cfg.stockRequiresField] || "").trim()).length;
   }
-  return { total, stock, used, activated, notActivated, activatedUsed };
+  return { total, stock, used, activated, notActivated, activatedUsed, stockPendingActivate };
 }
 
 // สีประจำแต่ละหมวดอุปกรณ์บนหน้า Dashboard มือถือ — ใช้สีเดียวกับไอคอนหน้าแรกมือถือ (mh-c2..mh-c6) เพื่อให้สื่อความหมายตรงกันทั้งแอป
+// หมายเหตุ (ข้อควรระวังจากผู้ใช้): ไอคอน/สีของแต่ละหมวดในตารางนี้ต้อง "เหมือนกันทุกจุด" ทั้งเดสก์ท็อปและมือถือ
+// เสมอ (ใช้สื่อสารกันในทีมด้วย) — ห้ามไปกำหนดไอคอนแยกซ้ำที่อื่นแล้วให้ค่าไม่ตรงกับตารางนี้ ทุกจุดที่ต้องโชว์
+// ไอคอนของหมวดอุปกรณ์บน Dashboard (ทั้งการ์ด KPI เดสก์ท็อป และ dash-cat-grid มือถือ) ต้องอ้างอิงตารางนี้ตารางเดียว
+// ("Panolyzer" เพิ่มเข้ามาใหม่ — ใช้ fa-microscope/สีฟ้าอมเขียวเดียวกับ MOBILE_HOME_TILES เพื่อให้ตรงกับหน้าแรกมือถือ)
 const DASHBOARD_CATEGORY_META = {
   moisturlyzer: { icon: "fa-tint", color: "#17A672" },
   gateway: { icon: "fa-broadcast-tower", color: "#2f6fb0" },
   simcard: { icon: "fa-sim-card", color: "#8B5CF6" },
+  panolyzer: { icon: "fa-microscope", color: "#0EA5A5" },
   colorSorterParts: { icon: "fa-cogs", color: "#e08e0b" },
   panolyzerParts: { icon: "fa-cogs", color: "#EC6BAA" },
 };
@@ -1422,7 +1469,27 @@ function renderDashboard() {
     summary: computeSummary(state.data[cfg.key] || [], cfg),
   }));
 
+  // Phase: เพิ่ม Panolyzer เข้ามาใน Dashboard ด้วย (เดิมไม่เคยโชว์เลยเพราะ Panolyzer ไม่ได้อยู่ใน VIEW_CONFIG —
+  // ดูคอมเมนต์ที่ประกาศ PANOLYZER_KEY — จึงต้องคำนวณสรุปแยกเองแล้วผลักเข้า summaries ตรงนี้จุดเดียว เพื่อให้ทั้ง
+  // การ์ด KPI เดสก์ท็อปด้านล่าง และ dash-cat-grid/วงแหวนสรุปของมือถือ (renderDashboardMobile) เห็นตรงกันเสมอ —
+  // ตรงตามที่ผู้ใช้ย้ำว่าไอคอน/หมวดหมู่บน Dashboard ต้องเหมือนกันทั้ง PC และมือถือ)
+  const panolyzerRows = state.data.panolyzer || [];
+  const panolyzerStockCount = panolyzerRows.filter(isPanolyzerStockRow).length;
+  summaries.push({
+    cfg: { key: PANOLYZER_KEY, title: PANOLYZER_ASSET_TYPE },
+    summary: {
+      total: panolyzerRows.length, stock: panolyzerStockCount, used: panolyzerRows.length - panolyzerStockCount,
+      activated: null, notActivated: null, activatedUsed: null,
+    },
+  });
+
   if (isMobileViewport()) { renderDashboardMobile(content, summaries); return; }
+
+  // Phase: แผง "ต้องดำเนินการ"/"กิจกรรมล่าสุด" ใหม่ท้าย Dashboard เดสก์ท็อป — เดิมมีแค่ในเวอร์ชันมือถือ
+  // (renderDashboardMobile) เท่านั้น ดึงตัวเลข/รายการเดียวกันมาใช้ซ้ำเพื่อให้ทั้ง 2 จอเห็นข้อมูลตรงกัน
+  const isAdmin = state.user.role === "Admin";
+  const pendingApprovalsCount = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
+  const recentActivity = computeRecentActivity(5);
 
   // Phase 17: รวมของใกล้หมด/หมดจากทุกหมวดอะไหล่ (ชื่อละหลายชิ้น) มาเตือนไว้บนสุด เพราะซ่อนอยู่ในรายการ scroll ของแต่ละการ์ด
   const allPartsLow = Object.keys(PART_CATEGORY_BY_VIEW)
@@ -1449,63 +1516,59 @@ function renderDashboard() {
       ${reportHeaderHtml("รายงานสรุปคลังอุปกรณ์", "Equipment Inventory Summary Report", "วันที่ออกรายงาน", formatDateTh(new Date().toISOString()))}
       <div class="kpi-grid">`;
   summaries.forEach(({ cfg, summary }) => {
+    // Phase: ไอคอน/สีต่อการ์ดหนึ่งอันเดียวกับที่ใช้บน Dashboard มือถือเป๊ะๆ (DASHBOARD_CATEGORY_META ตารางเดียว
+    // ใช้ร่วมกันทั้ง 2 จอ — ผู้ใช้ย้ำว่าไอคอน PC/มือถือต้องตรงกันเพราะใช้สื่อสารกันในทีมด้วย)
+    const meta = DASHBOARD_CATEGORY_META[cfg.key] || { icon: "fa-box", color: "#3F654D" };
+    const cardTitle = escapeHtml(cfg.title.replace(" (มี S/N)", ""));
+    const cardHead = `<div class="kpi-card-top"><div class="kpi-icon-badge" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div><div class="kpi-card-title-plain${PART_CATEGORY_BY_VIEW[cfg.key] ? " with-count" : ""}">${PART_CATEGORY_BY_VIEW[cfg.key] ? `<span>${cardTitle}</span>` : cardTitle}`;
+
     // Phase 17: หมวดอะไหล่ (Color Sorter / Panolyzer) — แสดงรายชื่ออะไหล่ทุกชื่อในการ์ด แทนตัวเลขรวมก้อนเดียว
     if (PART_CATEGORY_BY_VIEW[cfg.key]) {
       const items = computePartsBreakdown(cfg.key);
       html += `
-      <div class="kpi-card">
-        <div class="kpi-card-title with-count">
-          <span>${escapeHtml(cfg.title.replace(" (มี S/N)", ""))}</span>
-          <span class="parts-count-pill">${items.length} รายชื่อ</span>
-        </div>
+      <div class="kpi-card" style="--kpi-accent:${meta.color}">
+        ${cardHead}<span class="parts-count-pill">${items.length} รายชื่อ</span></div></div>
         ${partsBreakdownListHtml(items)}
       </div>`;
       return;
     }
     if (cfg.stockRequiresField) {
-      // Phase 9: SimCard (หรืออุปกรณ์อื่นที่ต้องรอ Activate) — แยกยอดให้ชัดว่า Activate แล้วเหลือ/ใช้ไปกี่ชิ้น
-      // และยังไม่ได้ Activate (รอ AIS) อีกกี่ชิ้น แทนที่จะรวมกับ "เบิกออกไปแล้ว" แบบเดิมจนสับสน
+      // Phase 9 (ปรับปรุงตามคำขอผู้ใช้): "อยู่ในคลัง" (Stock) ตอนนี้แยกชัดเป็น 2 กลุ่มย่อย — พร้อมเบิกได้จริง
+      // (Activate แล้ว) กับ อยู่ในคลังแต่เบิกไม่ได้ (รอ Activate) แทนที่จะปนกับ "เบิกออกไปแล้ว" แบบเดิม
+      const stockReady = summary.stock - summary.stockPendingActivate;
       html += `
-      <div class="kpi-card">
-        <div class="kpi-card-title">${escapeHtml(cfg.title)}</div>
-        <div class="kpi-stat-row">
-          <span class="kpi-stat-label">ทั้งหมด</span>
-          <span class="kpi-stat-value">${summary.total}</span>
-        </div>
+      <div class="kpi-card" style="--kpi-accent:${meta.color}">
+        ${cardHead}</div></div>
+        <div class="kpi-num">${summary.total} <small>ทั้งหมด</small></div>
         <div class="kpi-stat-row">
           <span class="kpi-stat-dot dot-info"></span>
-          <span class="kpi-stat-label">Activate แล้ว — พร้อมเบิก (Stock)</span>
-          <span class="kpi-stat-value info">${summary.stock}</span>
-        </div>
-        <div class="kpi-stat-row">
-          <span class="kpi-stat-dot dot-warn"></span>
-          <span class="kpi-stat-label">Activate แล้ว — เบิกออกไปแล้ว</span>
-          <span class="kpi-stat-value warn">${summary.activatedUsed}</span>
+          <span class="kpi-stat-label">อยู่ในคลัง — พร้อมใช้งาน</span>
+          <span class="kpi-stat-value info">${stockReady}</span>
         </div>
         <div class="kpi-stat-row">
           <span class="kpi-stat-dot dot-danger"></span>
-          <span class="kpi-stat-label">ยังไม่ได้ Activate (รอ AIS)</span>
-          <span class="kpi-stat-value danger">${summary.notActivated}</span>
-        </div>
-      </div>`;
-      return;
-    }
-    html += `
-      <div class="kpi-card">
-        <div class="kpi-card-title">${escapeHtml(cfg.title)}</div>
-        <div class="kpi-stat-row">
-          <span class="kpi-stat-label">ทั้งหมด</span>
-          <span class="kpi-stat-value">${summary.total}</span>
-        </div>
-        <div class="kpi-stat-row">
-          <span class="kpi-stat-dot dot-info"></span>
-          <span class="kpi-stat-label">อยู่ในคลัง (Stock)</span>
-          <span class="kpi-stat-value info">${summary.stock}</span>
+          <span class="kpi-stat-label">อยู่ในคลัง — ยังไม่ Activate</span>
+          <span class="kpi-stat-value danger">${summary.stockPendingActivate}</span>
         </div>
         <div class="kpi-stat-row">
           <span class="kpi-stat-dot dot-warn"></span>
           <span class="kpi-stat-label">เบิกออกไปแล้ว</span>
           <span class="kpi-stat-value warn">${summary.used}</span>
+        </div>
+      </div>`;
+      return;
+    }
+    // การ์ดปกติ (MoisturLyzer/Gateway/Panolyzer) — เพิ่มแถบ "อัตราใช้งาน" (สัดส่วน Stock เทียบเบิกแล้ว) แทน
+    // แถวตัวเลขล้วนๆ เดิม ให้เห็นสัดส่วนได้ในสายตาแรกโดยไม่ต้องอ่านตัวเลข 2 บรรทัดเทียบกันเอง
+    const utilPct = summary.total > 0 ? Math.round((summary.stock / summary.total) * 100) : 0;
+    html += `
+      <div class="kpi-card" style="--kpi-accent:${meta.color}">
+        ${cardHead}</div></div>
+        <div class="kpi-num">${summary.total} <small>ทั้งหมด</small></div>
+        <div class="kpi-util-bar"><span style="width:${utilPct}%; background:${meta.color}"></span></div>
+        <div class="kpi-util-legend">
+          <span><i class="kpi-dot" style="background:${meta.color}"></i>ในคลัง ${summary.stock}</span>
+          <span><i class="kpi-dot" style="background:var(--sub2, #D2DCD8)"></i>เบิกแล้ว ${summary.used}</span>
         </div>
         ${summary.activated !== null ? `<div class="kpi-stat-sub">เปิดใช้งานแล้ว (Activated): ${summary.activated}</div>` : ""}
       </div>`;
@@ -1524,11 +1587,47 @@ function renderDashboard() {
       </div>
       ${reportFooterHtml()}
     </div>
+    <div class="dash-bottom-grid no-print">
+      ${isAdmin && pendingApprovalsCount > 0 ? `
+      <div class="chart-card dash-panel-card">
+        <h3>ต้องดำเนินการ</h3>
+        <div class="dash-pending-alert" onclick="switchView('approvals')">
+          <div class="dash-pending-icon"><i class="fas fa-clock"></i></div>
+          <div class="dash-pending-text"><b>มีคำขอรออนุมัติ ${pendingApprovalsCount} รายการ</b><span>คลิกเพื่อตรวจสอบและอนุมัติทันที</span></div>
+          <i class="fas fa-chevron-right"></i>
+        </div>
+      </div>` : ""}
+      ${recentActivity.length ? `
+      <div class="chart-card dash-panel-card">
+        <h3>กิจกรรมล่าสุด</h3>
+        <div class="dash-activity-list">
+          ${recentActivity.map((ev) => {
+            const meta = ACTIVITY_TYPE_META[ev.type] || { icon: "fa-circle", cls: "issue" };
+            return `
+            <div class="dash-activity-item">
+              <div class="dash-activity-icon ${meta.cls}"><i class="fas ${meta.icon}"></i></div>
+              <div class="dash-activity-text"><b>${ev.title}</b><span>${ev.sub}</span></div>
+              <div class="dash-activity-time">${formatRelativeTimeTh(ev.time)}</div>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>` : ""}
+    </div>
+    <!-- Phase: รายงานพิมพ์แบบทางการ — ซ่อนอยู่บนจอปกติเสมอ (.formal-report-print-only) โชว์เฉพาะตอนพิมพ์
+         (ดู @media print ใน style.css) เพราะโครงสร้างต่างจาก #dashboardReportArea ด้านบนมากเกินจะใช้ CSS
+         ปรับโฉมให้กันได้ตรงๆ จึงแยกสร้าง HTML ชุดใหม่ทั้งหมด (buildFormalDashboardReportHtml) -->
+    <div id="formalReportArea" class="formal-report-print-only">
+      ${buildFormalDashboardReportHtml(summaries)}
+    </div>
   `;
 
   content.innerHTML = html;
   renderMonthlyTrendChart();
   renderStockSnapshotChart(summaries);
+  // เก็บ summaries ล่าสุดไว้ใน state เพื่อให้ printDashboard() เรียกวาดกราฟรายงานทางการซ้ำได้ตอนกำลังจะพิมพ์จริง
+  // (ดูเหตุผลเต็มๆ ที่ printDashboard())
+  state.__dashboardSummaries = summaries;
+  renderFormalReportCharts(computeFormalReportRows(summaries));
 }
 
 // ============================================================
@@ -1687,12 +1786,242 @@ function reportFooterHtml() {
 }
 
 // ============================================================
+// Phase: รายงานพิมพ์แบบทางการ (Executive Print Report) — ผู้ใช้ขอให้รายงานที่พิมพ์ออกมา "ดูเป็นทางการ เอาไว้
+// เสนอผู้บริหาร" ต่างจากหน้า Dashboard บนจอ (การ์ด KPI สีสัน) ค่อนข้างมาก จึงแยกสร้าง HTML ชุดนี้ไว้ต่างหากใน
+// container ที่ซ่อนอยู่บนจอปกติ (#formalReportArea, ดู renderDashboard) แล้วโชว์เฉพาะตอนพิมพ์ผ่าน @media print
+// (ดู style.css) แทนที่จะพยายามบิด CSS ให้ตาราง KPI บนจอแปลงร่างเป็นเอกสารทางการ ซึ่งโครงสร้าง DOM ต่างกัน
+// เกินจะทำด้วย CSS ล้วนๆ — ตัวเลขทุกตัวในรายงานนี้คำนวณจากข้อมูลจริงเหมือนหน้า Dashboard ปกติ ไม่มีค่าสมมติ
+// ============================================================
+
+/** รวมแถวตารางสรุปคงคลังของรายงานทางการ — อุปกรณ์ปกติ (MoisturLyzer/Gateway/SimCard/Panolyzer) ใช้ตัวเลข
+ * total/stock/used ตรงๆ จาก summaries เดิม ส่วนหมวดอะไหล่ (Color Sorter/Panolyzer Parts) ที่มีหลายชื่อในหมวด
+ * เดียว รวมยอดทุกชื่อเป็นแถวเดียวต่อหมวด (ไม่ลงรายละเอียดทีละชื่อ เพราะรายงานนี้เป็นสรุปภาพรวมหน้าเดียวให้ผู้บริหาร
+ * ใครอยากดูละเอียดทีละชื่ออะไหล่ยังเปิดดูได้ในหน้า Dashboard บนจอปกติ/หน้าคลังอะไหล่โดยตรง) */
+function computeFormalReportRows(summaries) {
+  return summaries.map(({ cfg, summary }) => {
+    if (PART_CATEGORY_BY_VIEW[cfg.key]) {
+      const items = computePartsBreakdown(cfg.key);
+      const stock = items.reduce((sum, p) => sum + (p.stock || 0), 0);
+      const used = items.reduce((sum, p) => sum + (p.used || 0), 0);
+      return { label: `${cfg.title.replace(" (มี S/N)", "")} (${items.length} รายชื่อ)`, total: stock + used, stock, used };
+    }
+    return { label: cfg.title.replace(" (มี S/N)", ""), total: summary.total, stock: summary.stock, used: summary.used };
+  });
+}
+
+/** ข้อความ "ประเด็นที่ควรติดตาม" ของรายงานทางการ — ดึงจากข้อมูลจริงเท่านั้น (คำขอรออนุมัติ/อะไหล่ใกล้หมด/
+ * รายการรอเคลมจาก Supplier ค้างนานสุด) ถ้าไม่มีประเด็นอะไรเลยให้ขึ้นข้อความสรุปว่าปกติดีแทนกล่องว่างเปล่า */
+function computeFormalReportAttentionItems() {
+  const items = [];
+  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
+  if (pending > 0) items.push(`มีคำขอเบิกรออนุมัติ ${pending} รายการ — ควรตรวจสอบและอนุมัติโดยเร็ว`);
+
+  const allPartsLow = Object.keys(PART_CATEGORY_BY_VIEW)
+    .flatMap((viewKey) => computePartsBreakdown(viewKey))
+    .filter((p) => p.stock <= LOW_STOCK_THRESHOLD)
+    .sort((a, b) => a.stock - b.stock);
+  if (allPartsLow.length) {
+    items.push(`อะไหล่ใกล้หมด (≤ ${LOW_STOCK_THRESHOLD} ชิ้น): ${allPartsLow.map((p) => `${p.name} (เหลือ ${p.stock})`).join(", ")}`);
+  }
+
+  const claimRows = typeof getSupplierClaimRows === "function" ? getSupplierClaimRows() : [];
+  if (claimRows.length) {
+    const oldest = claimRows[0];
+    const days = oldest.row.ClaimedAt ? Math.max(0, Math.floor((Date.now() - new Date(oldest.row.ClaimedAt).getTime()) / 86400000)) : null;
+    items.push(`มีรายการรอเคลมจาก Supplier ${claimRows.length} รายการ${days !== null ? ` (ค้างนานสุด ${days} วัน — S/N ${oldest.serial})` : ""}`);
+  }
+
+  return items;
+}
+
+function buildFormalDashboardReportHtml(summaries) {
+  const now = new Date();
+  // อ้างอิงรายงานอิงจากวันที่สร้าง ไม่ใช่เลขทะเบียนเอกสารจริง (ระบบนี้ไม่ได้มีทะเบียนเอกสารแบบรันเลขต่อเนื่อง)
+  const docRef = `RPT-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const rows = computeFormalReportRows(summaries);
+  const totalAll = rows.reduce((s, r) => s + r.total, 0);
+  const stockAll = rows.reduce((s, r) => s + r.stock, 0);
+  const usedAll = rows.reduce((s, r) => s + r.used, 0);
+  const utilAll = totalAll > 0 ? Math.round((usedAll / totalAll) * 100) : 0;
+
+  const monthly = computeMonthlyIssuedComparison();
+  const monthlyDiff = monthly.current - monthly.previous;
+  const monthlyPct = monthly.previous > 0 ? Math.round((monthlyDiff / monthly.previous) * 100) : (monthly.current > 0 ? 100 : 0);
+  const monthlyTrendHtml = monthly.previous === 0 && monthly.current === 0
+    ? `เดือนก่อนไม่มีข้อมูล`
+    : `<b class="${monthlyDiff >= 0 ? "up" : "down"}">${monthlyDiff >= 0 ? "▲" : "▼"} ${Math.abs(monthlyPct)}%</b> จากเดือนก่อน`;
+
+  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
+  const attentionItems = computeFormalReportAttentionItems();
+
+  return `
+    <div class="rp-page">
+    <div class="rp-body">
+    <div class="rp-header">
+      <div class="rp-logo-col"><img src="assets/c2tech-logo.png" alt="C2TECH"></div>
+      <div class="rp-title-col">
+        <div class="rp-title-th">รายงานสรุปคลังอุปกรณ์และการเบิกจ่าย</div>
+        <div class="rp-title-en">Equipment Inventory &amp; Issuance Summary Report</div>
+      </div>
+    </div>
+    <div class="rp-metabar">
+      <div class="rp-meta-item">อ้างอิงรายงาน<b>${escapeHtml(docRef)}</b></div>
+      <div class="rp-meta-item">วันที่ออกรายงาน<b>${escapeHtml(formatDateTh(now.toISOString()))}</b></div>
+      <div class="rp-meta-item">นำเสนอ<b>ผู้บริหาร บริษัท ซีทูเทค จำกัด</b></div>
+      <div class="rp-meta-item">จัดทำโดย<b>ระบบ C2-Loop (อัตโนมัติ)</b></div>
+    </div>
+
+    <div class="rp-exec-title">สรุปภาพรวม (Executive Summary)</div>
+    <div class="rp-exec-grid">
+      <div class="rp-exec-cell">
+        <div class="rp-exec-label">อุปกรณ์ทั้งหมดในระบบ</div>
+        <div class="rp-exec-num">${totalAll} <small>ชิ้น</small></div>
+        <div class="rp-exec-sub">${rows.length} ประเภทหลัก</div>
+      </div>
+      <div class="rp-exec-cell">
+        <div class="rp-exec-label">อยู่ในคลัง พร้อมเบิก</div>
+        <div class="rp-exec-num">${stockAll} <small>ชิ้น</small></div>
+        <div class="rp-exec-sub">อัตราใช้งานรวม ${utilAll}%</div>
+      </div>
+      <div class="rp-exec-cell">
+        <div class="rp-exec-label">เบิกออกไปแล้ว (เดือนนี้)</div>
+        <div class="rp-exec-num">${monthly.current} <small>รายการ</small></div>
+        <div class="rp-exec-sub">${monthlyTrendHtml}</div>
+      </div>
+      <div class="rp-exec-cell">
+        <div class="rp-exec-label">ต้องติดตาม</div>
+        <div class="rp-exec-num">${attentionItems.length} <small>ประเด็น</small></div>
+        <div class="rp-exec-sub">${pending > 0 ? `<b class="warn">รออนุมัติ ${pending}</b>` : "ไม่มีคำขอค้างอนุมัติ"}</div>
+      </div>
+    </div>
+
+    <div class="rp-section-title"><i class="fas fa-table"></i> สรุปคงคลังแยกตามประเภท</div>
+    <table class="rp-table">
+      <thead><tr><th>ประเภทอุปกรณ์</th><th class="num">ทั้งหมด</th><th class="num">อยู่ในคลัง</th><th class="num">เบิกออกไปแล้ว</th><th>อัตราใช้งาน</th></tr></thead>
+      <tbody>
+        ${rows.map((r) => {
+          const pct = r.total > 0 ? Math.round((r.used / r.total) * 100) : 0;
+          return `<tr><td>${escapeHtml(r.label)}</td><td class="num">${r.total}</td><td class="num">${r.stock}</td><td class="num">${r.used}</td>
+            <td><div class="rp-util-cell"><span class="rp-util-bar"><span style="width:${pct}%"></span></span>${pct}%</div></td></tr>`;
+        }).join("")}
+      </tbody>
+      <tfoot>
+        <tr><td>รวมทั้งหมด</td><td class="num">${totalAll}</td><td class="num">${stockAll}</td><td class="num">${usedAll}</td><td>${utilAll}%</td></tr>
+      </tfoot>
+    </table>
+
+    <div class="rp-charts">
+      <div class="rp-chart-box">
+        <canvas id="formalChartTrend"></canvas>
+        <div class="rp-fig-caption">รูปที่ 1 — แนวโน้มการเบิกรายเดือน (ธุรกรรมที่อนุมัติแล้ว)</div>
+      </div>
+      <div class="rp-chart-box">
+        <canvas id="formalChartStock"></canvas>
+        <div class="rp-fig-caption">รูปที่ 2 — สัดส่วนคงคลัง ณ ปัจจุบัน</div>
+      </div>
+    </div>
+
+    <div class="rp-attn">
+      <div class="rp-attn-head"><i class="fas fa-triangle-exclamation"></i> ประเด็นที่ควรติดตาม</div>
+      ${attentionItems.length ? `<ul>${attentionItems.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>` : `<div>ไม่มีประเด็นเร่งด่วนที่ต้องติดตามในขณะนี้</div>`}
+    </div>
+
+    <div class="rp-sign">
+      <div class="rp-sign-cell"><div class="rp-sign-line"></div><div class="rp-sign-role">ผู้จัดทำรายงาน</div><div>ฝ่ายคลังอุปกรณ์</div></div>
+      <div class="rp-sign-cell"><div class="rp-sign-line"></div><div class="rp-sign-role">ผู้ตรวจสอบ</div><div>หัวหน้าฝ่ายปฏิบัติการ</div></div>
+      <div class="rp-sign-cell"><div class="rp-sign-line"></div><div class="rp-sign-role">รับทราบโดย</div><div>ผู้บริหาร</div></div>
+    </div>
+    </div>
+
+    <div class="rp-footer">
+      <div>บริษัท ซีทูเทค จำกัด (C2 Tech Company Limited) · 99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999 · www.c2tech.app</div>
+      <div class="rp-pageno">สร้างโดยระบบ C2-Loop อัตโนมัติ</div>
+    </div>
+    </div>
+  `;
+}
+
+/** Phase: แก้บั๊ก "กราฟไม่ขึ้นให้ปริ้น" (รอบ 2) — Chart.js โหมด responsive:true จะอาศัย ResizeObserver
+ * คอยจับขนาด container แล้ว "รีไซส์กราฟใหม่แบบ async" ทุกครั้งที่ container เปลี่ยนขนาด แต่ตอนเบราว์เซอร์
+ * เตรียมหน้าสำหรับพิมพ์จริง มันมักจะคำนวณเลย์เอาต์หน้ากระดาษซ้ำอีกรอบ (แยกจากตอนที่เราเรียก renderFormalReportCharts
+ * ใน beforeprint) ซึ่งจะไป trigger ResizeObserver ให้ "เคลียร์ canvas เพื่อรอวาดใหม่" แต่การวาดใหม่นั้นเป็น
+ * async (รอ animation frame) — ถ้าเบราว์เซอร์ capture หน้าสำหรับพิมพ์ก่อนที่การวาดใหม่รอบนั้นจะเสร็จ ก็จะได้
+ * กราฟว่างเปล่าในผลพิมพ์ แม้ว่าตอนดูบนจอปกติจะเห็นกราฟถูกต้องก็ตาม (ยืนยันด้วยการทดสอบ print-to-PDF จริง)
+ * ทางแก้: ปิด responsive/animation แล้วกำหนดขนาด canvas เป็นพิกเซลตายตัวเองก่อนวาด (อิงจากขนาดจริงบนจอตอนนั้น
+ * ซึ่งถูกต้องแล้วเพราะ container โชว์จริงตอนนี้ - ดู printDashboard) ตัดการพึ่งพา ResizeObserver ออกไปทั้งหมด
+ * สำหรับกราฟชุดนี้โดยเฉพาะ (กราฟบนจอปกติของ dashboard ไม่กระทบ ยังใช้ responsive:true ตามเดิม) */
+function fixCanvasSizeForPrint(canvas) {
+  if (!canvas) return;
+  const w = Math.max(1, Math.round(canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || 300));
+  const cs = getComputedStyle(canvas);
+  const maxH = parseFloat(cs.maxHeight) || 130;
+  canvas.width = w;
+  canvas.height = maxH;
+  canvas.style.width = w + "px";
+  canvas.style.height = maxH + "px";
+}
+
+/** วาดกราฟ 2 อันในรายงานทางการ (โทนสีสุภาพ เขียว/เทา เหมาะกับพิมพ์ขาวดำด้วย) — ข้อมูลรายเดือนใช้ชุดเดียวกับ
+ * กราฟบนจอปกติ (computeMonthlyTrend) ส่วนกราฟแท่งใช้ rows ที่คำนวณโดย computeFormalReportRows (ไม่ใช้ summaries
+ * ตรงๆ เพราะหมวดอะไหล่ต้องรวมยอด qty-part เข้าไปด้วย ไม่งั้นตัวเลขจะไม่ตรงกับตารางด้านบนในรายงานเดียวกัน) */
+function renderFormalReportCharts(rows) {
+  const trendCanvas = document.getElementById("formalChartTrend");
+  const stockCanvas = document.getElementById("formalChartStock");
+  if (typeof Chart === "undefined") return;
+  fixCanvasSizeForPrint(trendCanvas);
+  fixCanvasSizeForPrint(stockCanvas);
+
+  if (trendCanvas) {
+    const { months, monthly } = computeMonthlyTrend();
+    if (state.charts.formalTrend) state.charts.formalTrend.destroy();
+    if (months.length) {
+      const formalColors = ["#3F654D", "#63816F", "#9AA79E", "#0EA5A5"];
+      state.charts.formalTrend = new Chart(trendCanvas.getContext("2d"), {
+        type: "line",
+        data: {
+          labels: months,
+          datasets: ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer"].map((assetType, i) => ({
+            label: assetType, data: months.map((m) => monthly[m][assetType] || 0),
+            borderColor: formalColors[i], backgroundColor: formalColors[i] + "22",
+            tension: 0.35, fill: false, pointRadius: 2, borderWidth: 2,
+          })),
+        },
+        options: {
+          responsive: false, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 9 } } } },
+          scales: { x: { ticks: { font: { size: 9 } }, grid: { display: false } }, y: { beginAtZero: true, ticks: { font: { size: 9 }, precision: 0 }, grid: { color: "#eee" } } },
+        },
+      });
+    }
+  }
+  if (stockCanvas) {
+    if (state.charts.formalStock) state.charts.formalStock.destroy();
+    state.charts.formalStock = new Chart(stockCanvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: rows.map((r) => r.label),
+        datasets: [
+          { label: "ในคลัง", data: rows.map((r) => r.stock), backgroundColor: "#3F654D" },
+          { label: "เบิกแล้ว", data: rows.map((r) => r.used), backgroundColor: "#C9CFC9" },
+        ],
+      },
+      options: {
+        responsive: false, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 9 } } } },
+        scales: { x: { stacked: true, ticks: { font: { size: 8 } }, grid: { display: false } }, y: { stacked: true, ticks: { font: { size: 9 }, precision: 0 }, grid: { color: "#eee" } } },
+      },
+    });
+  }
+}
+
+// ============================================================
 // Phase 4: กราฟ Dashboard (Chart.js)
 // ============================================================
 const CHART_COLORS = {
   moisturlyzer: "#3F654D",
   gateway: "#2f6fb0",
   simcard: "#e08e0b",
+  panolyzer: "#0EA5A5",
 };
 
 function destroyAllCharts() {
@@ -1716,7 +2045,7 @@ function computeMonthlyTrend() {
     if (!approvedTxnIds.has(item.TransactionID)) return;
     const month = txnMonth[item.TransactionID];
     if (!month) return;
-    if (!monthly[month]) monthly[month] = { MoisturLyzer: 0, Gateway: 0, SimCard: 0 };
+    if (!monthly[month]) monthly[month] = { MoisturLyzer: 0, Gateway: 0, SimCard: 0, Panolyzer: 0 };
     monthly[month][item.AssetType] = (monthly[month][item.AssetType] || 0) + 1;
   });
 
@@ -1734,7 +2063,9 @@ function renderMonthlyTrendChart() {
     return;
   }
 
-  const datasets = ["MoisturLyzer", "Gateway", "SimCard"].map((assetType) => ({
+  // Phase: เพิ่ม Panolyzer เข้ามาในกราฟแนวโน้มรายเดือนด้วย (ให้สอดคล้องกับที่เพิ่งเพิ่ม Panolyzer เข้าการ์ด KPI
+  // และกราฟแท่งสัดส่วนคงคลังด้านล่าง — summaries — ไปแล้ว)
+  const datasets = ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer"].map((assetType) => ({
     label: assetType,
     data: months.map((m) => monthly[m][assetType] || 0),
     borderColor: CHART_COLORS[assetType.toLowerCase()],
@@ -1803,8 +2134,45 @@ function printDashboard() {
     printDashboardViaPopup();
     return;
   }
+  // Phase: แก้บั๊ก "พิมพ์รายงานแล้วไม่เหมือน preview" — เดิม window.print() ถูกเรียกทันทีหลังเปิดโชว์
+  // #formalReportArea ทำให้เกิด 2 ปัญหา: (1) กราฟ Chart.js ของรายงานฉบับทางการถูกวาดครั้งแรกตอน
+  // renderDashboard() ซึ่งตอนนั้น #formalReportArea ยังซ่อนอยู่ (display:none) ทำให้ Chart.js คำนวณขนาด
+  // canvas ผิด (มักได้ 0 หรือค่า default) ต้องวาดกราฟใหม่อีกครั้งตอนนี้ที่ container โชว์แล้วเท่านั้นถึงจะได้
+  // ขนาดที่ถูกต้อง (2) โลโก้ในหัวรายงาน (<img>) เพิ่งจะเริ่มโหลดตอนนี้เพราะอยู่ใน container ที่ display:none มา
+  // ตลอด ถ้าสั่งพิมพ์ทันทีโดยไม่รอให้โหลดเสร็จ เค้าโครง .rp-header อาจคำนวณผิดตอนพิมพ์จริง (เช่น หัวข้อรายงาน
+  // ถูกบีบจนตัดคำแปลกๆ) จึงต้องรอทั้งกราฟและรูปโลโก้ให้พร้อมก่อน ค่อยเรียก window.print()
   document.body.classList.add("print-dashboard-active");
-  window.print();
+  const area = document.getElementById("formalReportArea");
+  const logoImg = area ? area.querySelector(".rp-logo-col img") : null;
+  const waitLogo = logoImg && !logoImg.complete
+    ? new Promise((resolve) => {
+        logoImg.addEventListener("load", resolve, { once: true });
+        logoImg.addEventListener("error", resolve, { once: true });
+      })
+    : Promise.resolve();
+
+  // Phase: แก้บั๊ก "กราฟไม่ขึ้นตอนพิมพ์" — เดิมวาดกราฟ (renderFormalReportCharts) ทันทีตรงนี้หลังเติม class
+  // print-dashboard-active แต่ #formalReportArea จะโชว์จริง (display:block) ก็ต่อเมื่ออยู่ใน @media print
+  // เท่านั้น (ดู style.css) ซึ่งบราวเซอร์จะยังไม่สลับไปใช้สไตล์ print จนกว่า window.print() จะเริ่มทำงานจริงๆ
+  // แปลว่าตอนวาดกราฟ container ยังเป็น display:none อยู่บนจอ (ขนาด 0x0) ทำให้ Chart.js คำนวณขนาด canvas
+  // ผิดและวาดออกมาว่างเปล่า ต่อให้รอ requestAnimationFrame กี่รอบก็ไม่ช่วยเพราะปัญหาไม่ใช่เรื่องจังหวะเวลา
+  // แต่เป็นเรื่อง media ยังไม่เปลี่ยน — ทางแก้คือย้ายมาวาดกราฟตอน event "beforeprint" แทน เพราะเบราว์เซอร์จะ
+  // ยิง event นี้หลังจากสลับไปใช้สไตล์ @media print แล้ว (container โชว์จริง มีขนาดจริง) แต่ยังก่อนที่จะ
+  // capture หน้าสำหรับพิมพ์จริง จึงได้ขนาด canvas ที่ถูกต้องเสมอ
+  const onBeforePrint = () => {
+    renderFormalReportCharts(computeFormalReportRows(state.__dashboardSummaries || []));
+  };
+  const onAfterPrint = () => {
+    window.removeEventListener("beforeprint", onBeforePrint);
+    window.removeEventListener("afterprint", onAfterPrint);
+  };
+  window.addEventListener("beforeprint", onBeforePrint);
+  window.addEventListener("afterprint", onAfterPrint);
+
+  waitLogo.then(() => {
+    // รอ 2 เฟรมให้เลย์เอาต์ของโลโก้/หัวรายงานนิ่งตัวก่อนค่อยเปิดกล่องพิมพ์ของเบราว์เซอร์
+    requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+  });
 }
 
 /**
@@ -1824,8 +2192,19 @@ async function printDashboardViaPopup() {
   }
   popup.document.write('<!DOCTYPE html><html><head><title>C2 LOOP — พิมพ์ Dashboard</title><style>body{margin:0;padding:16px;text-align:center;background:#fff;}img{max-width:100%;}</style></head><body><p>กำลังเตรียมข้อมูลสำหรับพิมพ์...</p></body></html>');
   popup.document.close();
+  // Phase: ถ่ายภาพ "รายงานพิมพ์แบบทางการ" (#formalReportArea) แทน #dashboardReportArea เดิม เพื่อให้ทางเลือก
+  // สำรองนี้ (ตอนแอปถูกฝังใน iframe เช่น Google Sites) ได้ผลลัพธ์แบบเดียวกับ window.print() ปกติ — #formalReportArea
+  // ซ่อนอยู่บนจอปกติ (.formal-report-print-only) จึงต้องเปิดโชว์ชั่วคราวด้วย body.print-dashboard-active ก่อน
+  // ถ่ายภาพ แล้วปิดกลับทันทีหลังถ่ายเสร็จ (ไม่งั้น html2canvas จะได้ภาพว่างเปล่าจากอิลิเมนต์ที่ display:none อยู่)
+  document.body.classList.add("print-dashboard-active");
   try {
-    const area = document.getElementById("dashboardReportArea");
+    const area = document.getElementById("formalReportArea") || document.getElementById("dashboardReportArea");
+    // เหตุผลเดียวกับใน printDashboard(): ต้องวาดกราฟรายงานทางการใหม่หลังจากเปิดโชว์ container แล้วเท่านั้น
+    // ไม่งั้น Chart.js จะได้ขนาด canvas ผิดเพราะรอบแรกวาดตอน container ยัง display:none อยู่
+    if (area && area.id === "formalReportArea") {
+      renderFormalReportCharts(computeFormalReportRows(state.__dashboardSummaries || []));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
     const canvas = await html2canvas(area, { backgroundColor: "#ffffff", scale: 2 });
     const dataUrl = canvas.toDataURL("image/png");
     popup.document.body.innerHTML = `<img src="${dataUrl}" alt="C2 LOOP Dashboard">`;
@@ -1837,6 +2216,8 @@ async function printDashboardViaPopup() {
   } catch (err) {
     popup.close();
     await showAlert("สร้างรูปสำหรับพิมพ์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง", "error");
+  } finally {
+    document.body.classList.remove("print-dashboard-active");
   }
 }
 
@@ -2623,7 +3004,7 @@ function renderRows(cfg, rows, isAdmin) {
 
   const filtered = rows.filter((row) => {
     const matchesSearch = !search || cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(search));
-    const stock = isStockRow(row, cfg.stockField, cfg.stockRequiresField);
+    const stock = isPhysicalStockRow(row, cfg.stockField);
     const matchesStatus = statusFilter === "all" || (statusFilter === "stock" ? stock : !stock);
     return matchesSearch && matchesStatus;
   });
@@ -2730,8 +3111,11 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
         if (TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key) && isWrittenOffRow(row, cfg)) {
           return `<td><span class="badge-writeoff">ตัดจำหน่าย</span></td>`;
         }
-        const stock = isStockRow(row, cfg.stockField, cfg.stockRequiresField);
-        val = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(val || ""))}</span>`;
+        const stock = isPhysicalStockRow(row, cfg.stockField);
+        // Phase (ปรับปรุงตามคำขอผู้ใช้): ซิม (หรืออุปกรณ์ที่มี stockRequiresField อื่น) ที่อยู่ในคลังจริงแต่ยังไม่
+        // Activate — badge ยังโชว์เป็น "อยู่ในคลัง" (ไม่ใช่ "เบิกออกไปแล้ว") แต่เติมข้อความกำกับไว้ว่ายังเบิกไม่ได้
+        const pendingActivate = stock && cfg.stockRequiresField && !String(row[cfg.stockRequiresField] || "").trim();
+        val = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(val || ""))}</span>${pendingActivate ? `<div class="cell-sub">รอ Activate — ยังเบิกไม่ได้</div>` : ""}`;
         return `<td>${val}</td>`;
       }
       return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}</td>`;
@@ -2769,7 +3153,9 @@ function buildAssetRowActionButtonsHtml(cfg, row, isAdmin) {
   const isTransferClaimType = TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key);
   const claimed = isTransferClaimType && isClaimedRow(row, cfg);
   const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
-  const issued = isTransferClaimType && !claimed && !writtenOff && !isStockRow(row, cfg.stockField, cfg.stockRequiresField);
+  // ใช้ isPhysicalStockRow (ไม่ใช่ isStockRow) เพื่อไม่ให้ซิมที่อยู่ในคลังจริงแต่ยังไม่ Activate ถูกเข้าใจผิดว่า
+  // "เบิกออกไปแล้ว" จนโชว์ปุ่ม "ย้าย/เคลม" ซึ่งมีไว้สำหรับของที่เบิกไปหาลูกค้าแล้วเท่านั้น
+  const issued = isTransferClaimType && !claimed && !writtenOff && !isPhysicalStockRow(row, cfg.stockField);
   if (isAdmin && claimed) {
     return `<button class="btn-sm btn-primary" onclick="closeAssetDetailModal(); resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'toStock')">คืนเข้าสต็อก</button>
          <button class="btn-sm btn-remove" onclick="closeAssetDetailModal(); resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'writeOff')">ตัดจำหน่าย</button>`;
@@ -2820,7 +3206,10 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
 
   wrap.innerHTML = filtered.map((row) => {
     const serial = String(row[cfg.serialField] || "");
-    const stock = isStockRow(row, cfg.stockField, cfg.stockRequiresField);
+    // ใช้ isPhysicalStockRow เพื่อให้ของที่อยู่ในคลังจริงแต่ยังไม่ Activate (เช่น SimCard) แสดง/นับเป็น "อยู่ใน
+    // คลัง" ไม่ใช่ "เบิกออกแล้ว" (เหตุผลเดียวกับ buildAssetRowActionButtonsHtml ด้านบน)
+    const stock = isPhysicalStockRow(row, cfg.stockField);
+    const pendingActivate = stock && cfg.stockRequiresField && !String(row[cfg.stockRequiresField] || "").trim();
     const isTransferClaimType = TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key);
     const claimed = isTransferClaimType && isClaimedRow(row, cfg);
     const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
@@ -2881,7 +3270,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
       ? `<span class="mcard-pill claim">อยู่ระหว่างเคลม</span>`
       : writtenOff
         ? `<span class="mcard-pill writeoff">ตัดจำหน่าย</span>`
-        : `<span class="mcard-pill ${stock ? "stock" : "used"}">${stock ? "อยู่ในคลัง" : "เบิกออกแล้ว"}</span>`;
+        : `<div class="mcard-pill-group"><span class="mcard-pill ${stock ? "stock" : "used"}">${stock ? "อยู่ในคลัง" : "เบิกออกแล้ว"}</span>${pendingActivate ? `<span class="mcard-pill pending-activate">รอ Activate</span>` : ""}</div>`;
     const claimSubHtml = claimed
       ? (() => {
           const from = [row.ClaimedFromCustomer, row.ClaimedFromLocation].filter((v) => v && String(v).trim()).join(" · ");
@@ -5217,15 +5606,37 @@ function addOtherToBasket() {
   renderBasket();
 }
 
+/** Phase (ปรึกษาผู้ใช้แล้ว — กรณี "ข"): Panolyzer ที่อยู่ใน Stock บางเครื่องถูกประกอบ Gateway+SimCard เสียบไว้
+ * ล่วงหน้าตั้งแต่อยู่ในโกดังแล้ว (ไม่ใช่เครื่องที่เคยติดตั้งที่ลูกค้ามาก่อน) — เดิมตอนเบิกต้องเลือก Gateway/SimCard
+ * ใหม่เองทุกครั้งจากรายการ Stock (ซึ่งของที่เสียบอยู่แล้วจะไม่โผล่ในรายการ Stock ให้เลือกอยู่แล้วด้วยซ้ำ เพราะไม่ได้
+ * มีสถานะ Stock) ฟังก์ชันนี้ดึงข้อมูล Gateway/SimCard ที่ "เสียบอยู่กับ Panolyzer เครื่องนี้อยู่แล้วจริง" มาให้อัตโนมัติ:
+ * row.linkedGatewaySerial ของ Panolyzer มีอยู่แล้วในข้อมูลมิเรอร์ (เขียนมาจากฝั่ง Cloud Functions) ส่วน SimCard ไม่มี
+ * ฟิลด์แบบเดียวกันเก็บไว้ตรงๆ ต้องอ้อมไปดูที่ Gateway ตัวนั้นแทน (ฟิลด์ SimCard_SN บนแถว Gateway บอกว่าตอนนี้มี
+ * ซิมอะไรเสียบอยู่ — ดู GATEWAY_SIMCARD_FIELD) */
+function getExistingPanolyzerLinks(serial) {
+  const panoRow = (state.data.panolyzer || []).find((p) => String(p[PANOLYZER_SERIAL_FIELD] || "") === String(serial));
+  const linkedGatewaySerial = String((panoRow && panoRow.linkedGatewaySerial) || "").trim();
+  let linkedSimSerial = "";
+  if (linkedGatewaySerial) {
+    const gwRow = (state.data.gateway || []).find((g) => String(g[VIEW_CONFIG.gateway.serialField] || "") === linkedGatewaySerial);
+    linkedSimSerial = String((gwRow && gwRow[GATEWAY_SIMCARD_FIELD]) || "").trim();
+  }
+  return { linkedGatewaySerial, linkedSimSerial };
+}
+
 function addToBasket(assetKey, serial) {
   // Panolyzer: ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์) — สร้างรายการตะกร้ารูปแบบของตัวเอง
   // แยกจาก path ปกติด้านล่างทั้งหมด (linkedGatewaySerial/linkedSimSerial ใช้ชื่อเดียวกับ MoisturLyzer เพื่อ
   // ให้ renderBasket/renderBasketMobile/submitIssuanceRequest ขยายรายการ Gateway/SimCard คู่กันด้วย logic เดียวกัน)
+  // Phase (กรณี "ข"): ถ้า Panolyzer เครื่องนี้มี Gateway/SimCard เสียบอยู่แล้วจากโกดัง ดึงมาใส่ให้อัตโนมัติเลย
+  // ไม่ต้องให้ผู้ใช้เลือกซ้ำ (ดู getExistingPanolyzerLinks ด้านบน)
   if (assetKey === PANOLYZER_KEY) {
+    const existing = getExistingPanolyzerLinks(serial);
     issuanceForm.basket.push({
       assetType: PANOLYZER_ASSET_TYPE, assetKey, serialNo: serial,
       connectTo: "", connectSerial: "", location: "",
-      linkedGatewaySerial: "", linkedSimSerial: "",
+      linkedGatewaySerial: existing.linkedGatewaySerial, linkedSimSerial: existing.linkedSimSerial,
+      preLinked: !!existing.linkedGatewaySerial, // ใช้บอก UI ว่ารายการนี้ "มากับเครื่องอยู่แล้ว" ไม่ใช่เพิ่งเลือกจาก Stock
     });
     renderPickerList();
     renderBasket();
@@ -5366,6 +5777,8 @@ function updateLinkedGateway(index, value) {
 function updateLinkedGatewayForPanolyzer(index, value) {
   issuanceForm.basket[index].linkedGatewaySerial = value;
   if (!value) issuanceForm.basket[index].linkedSimSerial = "";
+  // เลือกเปลี่ยน/ถอด Gateway เองแล้ว ไม่ใช่ของที่มากับเครื่องอัตโนมัติอีกต่อไป (ดู getExistingPanolyzerLinks/preLinked)
+  issuanceForm.basket[index].preLinked = false;
   renderBasket();
 }
 
@@ -5493,29 +5906,44 @@ function renderBasket() {
           // เป๊ะ (เลือก Gateway EPG-001S คู่กันไม่บังคับ + SimCard คู่กันไม่บังคับถ้ามี Gateway แล้ว) แต่ไม่มี cfg
           // จาก VIEW_CONFIG ให้ใช้ จึงต้องเขียนแยกทั้งแถว แทนที่จะพึ่ง cfg.title/cfg.serialField ด้านล่าง
           if (item.assetType === "Panolyzer") {
-            let panoSimCell = `<span class="cache-note">ไม่ต้องใช้ (ไม่ได้เบิก Gateway คู่กัน)</span>`;
-            if (item.linkedGatewaySerial) {
-              const availableSim = getAvailableSimCards(idx);
-              const simCfg = VIEW_CONFIG.simcard;
-              if (!availableSim.length && !item.linkedSimSerial) {
-                panoSimCell = `<span class="cache-note">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
+            // Phase (กรณี "ข" — ปรึกษาผู้ใช้แล้ว): ถ้า Gateway/SimCard นี้ "มากับเครื่องอยู่แล้ว" (preLinked, ดู
+            // getExistingPanolyzerLinks) ให้โชว์เป็นค่าคงที่ ไม่ใช่ dropdown เพราะเครื่องพวกนี้ไม่ได้อยู่ในสถานะ
+            // Stock (กำลังเสียบอยู่กับ Panolyzer อยู่) จึงไม่โผล่ในตัวเลือก availableGw/availableSim อยู่แล้ว —
+            // ถ้าฝืนโชว์เป็น dropdown ตัว browser จะไม่มีตัวเลือกไหนตรงกับค่าที่เลือกไว้ แล้วเผลอเด้งไปโชว์
+            // "ไม่เบิกคู่กัน" ทั้งที่จริงๆ มีค่าอยู่ ทำให้ข้อมูลหายเงียบๆ ได้ — ปุ่ม "เปลี่ยน/ถอด" ให้กดสลับเป็น
+            // dropdown ปกติเองได้ถ้าต้องการแก้ไข
+            let panoSerialCell;
+            let panoSimCell;
+            if (item.preLinked && item.linkedGatewaySerial) {
+              panoSerialCell = `<span class="badge-linked">${escapeHtml(item.linkedGatewaySerial)}</span> <span class="cache-note">(มากับเครื่องอยู่แล้ว)</span>
+                <button type="button" class="btn-sm btn-secondary" style="margin-left:6px;" onclick="updateLinkedGatewayForPanolyzer(${idx}, '')">เปลี่ยน/ถอด</button>`;
+              panoSimCell = item.linkedSimSerial
+                ? `<span class="badge-linked">${escapeHtml(item.linkedSimSerial)}</span> <span class="cache-note">(มากับเครื่องอยู่แล้ว)</span>`
+                : `<span class="cache-note">ไม่พบ SimCard เสียบอยู่ใน Gateway นี้</span>`;
+            } else {
+              panoSimCell = `<span class="cache-note">ไม่ต้องใช้ (ไม่ได้เบิก Gateway คู่กัน)</span>`;
+              if (item.linkedGatewaySerial) {
+                const availableSim = getAvailableSimCards(idx);
+                const simCfg = VIEW_CONFIG.simcard;
+                if (!availableSim.length && !item.linkedSimSerial) {
+                  panoSimCell = `<span class="cache-note">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
+                } else {
+                  panoSimCell = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
+                    <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
+                    ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+                  </select>`;
+                }
+              }
+              const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, idx);
+              if (!availableGw.length && !item.linkedGatewaySerial) {
+                panoSerialCell = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_PANOLYZER)} ว่างในสต๊อก</span>`;
               } else {
-                panoSimCell = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
-                  <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
-                  ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+                const gwCfg = VIEW_CONFIG.gateway;
+                panoSerialCell = `<select class="searchable-select" onchange="updateLinkedGatewayForPanolyzer(${idx}, this.value)">
+                  <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
+                  ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
                 </select>`;
               }
-            }
-            const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, idx);
-            let panoSerialCell;
-            if (!availableGw.length && !item.linkedGatewaySerial) {
-              panoSerialCell = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_PANOLYZER)} ว่างในสต๊อก</span>`;
-            } else {
-              const gwCfg = VIEW_CONFIG.gateway;
-              panoSerialCell = `<select class="searchable-select" onchange="updateLinkedGatewayForPanolyzer(${idx}, this.value)">
-                <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
-                ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
-              </select>`;
             }
             const panoLocationCell = `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
                 value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">`;
@@ -5684,31 +6112,50 @@ function renderBasketMobile(area) {
     // Panolyzer: ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์) — การ์ดแบบเดียวกับ MoisturLyzer เป๊ะ
     // (เลือก Gateway EPG-001S คู่กันไม่บังคับ + SimCard คู่กันไม่บังคับถ้ามี Gateway แล้ว) เขียนแยกทั้งการ์ด
     if (item.assetType === "Panolyzer") {
-      const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, idx);
-      const gwCfg = VIEW_CONFIG.gateway;
-      let panoGwFieldHtml;
-      if (!availableGw.length && !item.linkedGatewaySerial) {
-        panoGwFieldHtml = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_PANOLYZER)} ว่างในสต๊อก</span>`;
+      // Phase (กรณี "ข"): เหตุผลเดียวกับใน renderBasket (เดสก์ท็อป) — ของที่ preLinked ไม่โผล่ในตัวเลือก Stock
+      // ให้เลือกอยู่แล้ว จึงต้องโชว์เป็นค่าคงที่แทน dropdown กันข้อมูลหายเงียบๆ
+      const panoFields = [];
+      if (item.preLinked && item.linkedGatewaySerial) {
+        panoFields.push({
+          label: `Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน`,
+          html: `<span class="badge-linked">${escapeHtml(item.linkedGatewaySerial)}</span> <span class="cache-note">(มากับเครื่องอยู่แล้ว)</span>
+            <button type="button" class="btn-sm btn-secondary" style="margin-left:6px;" onclick="updateLinkedGatewayForPanolyzer(${idx}, '')">เปลี่ยน/ถอด</button>`,
+          req: false,
+        });
+        panoFields.push({
+          label: "SimCard คู่กัน",
+          html: item.linkedSimSerial
+            ? `<span class="badge-linked">${escapeHtml(item.linkedSimSerial)}</span> <span class="cache-note">(มากับเครื่องอยู่แล้ว)</span>`
+            : `<span class="cache-note">ไม่พบ SimCard เสียบอยู่ใน Gateway นี้</span>`,
+          req: false,
+        });
       } else {
-        panoGwFieldHtml = `<select class="searchable-select" onchange="updateLinkedGatewayForPanolyzer(${idx}, this.value)">
-          <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
-          ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
-        </select>`;
-      }
-      const panoFields = [{ label: `Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน (ไม่บังคับ)`, html: panoGwFieldHtml, req: false }];
-      if (item.linkedGatewaySerial) {
-        const availableSim = getAvailableSimCards(idx);
-        const simCfg = VIEW_CONFIG.simcard;
-        let panoSimFieldHtml;
-        if (!availableSim.length && !item.linkedSimSerial) {
-          panoSimFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
+        const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, idx);
+        const gwCfg = VIEW_CONFIG.gateway;
+        let panoGwFieldHtml;
+        if (!availableGw.length && !item.linkedGatewaySerial) {
+          panoGwFieldHtml = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_PANOLYZER)} ว่างในสต๊อก</span>`;
         } else {
-          panoSimFieldHtml = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
-            <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
-            ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+          panoGwFieldHtml = `<select class="searchable-select" onchange="updateLinkedGatewayForPanolyzer(${idx}, this.value)">
+            <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
+            ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
           </select>`;
         }
-        panoFields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: panoSimFieldHtml, req: false });
+        panoFields.push({ label: `Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน (ไม่บังคับ)`, html: panoGwFieldHtml, req: false });
+        if (item.linkedGatewaySerial) {
+          const availableSim = getAvailableSimCards(idx);
+          const simCfg = VIEW_CONFIG.simcard;
+          let panoSimFieldHtml;
+          if (!availableSim.length && !item.linkedSimSerial) {
+            panoSimFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
+          } else {
+            panoSimFieldHtml = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
+              <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
+              ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+            </select>`;
+          }
+          panoFields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: panoSimFieldHtml, req: false });
+        }
       }
       panoFields.push({
         label: "สถานที่เฉพาะจุด (ไม่บังคับ)",
@@ -6295,7 +6742,9 @@ function getTransferClaimSearchableRows() {
   TRANSFER_CLAIM_ASSET_KEYS.forEach((assetKey) => {
     const cfg = VIEW_CONFIG[assetKey];
     (state.data[assetKey] || []).forEach((row) => {
-      if (isStockRow(row, cfg.stockField, cfg.stockRequiresField) || isClaimedRow(row, cfg) || isWrittenOffRow(row, cfg)) return;
+      // ใช้ isPhysicalStockRow เพื่อไม่ให้ซิมที่อยู่ในคลังจริงแต่ยังไม่ Activate โผล่มาเป็นตัวเลือกให้ย้าย/เคลม
+      // (ของที่ยังไม่เคยถูกเบิกไม่ควรอยู่ในรายการนี้เลย — เหตุผลเดียวกับ buildAssetRowActionButtonsHtml/renderRowsAsCards)
+      if (isPhysicalStockRow(row, cfg.stockField) || isClaimedRow(row, cfg) || isWrittenOffRow(row, cfg)) return;
       rows.push({ assetKey, cfg, row, serial: String(row[cfg.serialField] || "") });
     });
   });
