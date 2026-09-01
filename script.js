@@ -200,6 +200,23 @@ function normalizeGatewayModel(raw) {
 }
 
 // ============================================================
+// Panolyzer — เครื่องมิเรอร์มาจากแอป "Panolyzer Management" คนละระบบ (Google Apps Script Web App แยกต่างหาก,
+// ดู Panolyzer-main/Google script ที่ห้ามแก้ไข) เข้า collection "panolyzer" ผ่าน syncPanolyzerNow/
+// panolyzerScheduledSync ฝั่ง Cloud Functions — ไม่ใช่อุปกรณ์แบบ ASSET_CONFIG/VIEW_CONFIG ปกติ (C2-Loop ไม่ได้
+// เป็นเจ้าของข้อมูลหลัก แค่มิเรอร์มาให้เบิก/ดูสถานะได้) จึงไม่เพิ่มเข้า VIEW_CONFIG (จะทำให้ปุ่มแก้ไข/ลบ/ย้าย-เคลม
+// มาตรฐานโผล่ในตารางทั้งที่ backend ยังไม่รองรับอุปกรณ์ประเภทนี้) ใช้ค่าคงที่ชุดนี้ + ฟังก์ชันเฉพาะทางแทน
+// ============================================================
+const PANOLYZER_KEY = "panolyzer";
+const PANOLYZER_ASSET_TYPE = "Panolyzer";
+const PANOLYZER_SERIAL_FIELD = "S/N Analyzer";
+const PANOLYZER_STOCK_FIELD = "Status"; // ค่า "Stock" ตรงกับ isStockRow() เดิมได้พอดี (เทียบแบบ case-insensitive)
+
+/** เครื่อง Panolyzer แถวนี้อยู่ในสถานะ "Stock" (พร้อมเบิก) ตามข้อมูลมิเรอร์ล่าสุดหรือไม่ */
+function isPanolyzerStockRow(row) {
+  return String((row && row[PANOLYZER_STOCK_FIELD]) || "").trim().toLowerCase() === "stock";
+}
+
+// ============================================================
 // Phase 7: โมดัลยืนยัน/แจ้งเตือน C2TECH (แทน native confirm()/alert())
 // ใช้ Promise แทน blocking dialog — รองรับ Mobile (bottom sheet) + Desktop (card กลางจอ)
 // ============================================================
@@ -619,6 +636,7 @@ const MOBILE_HOME_TILES = [
   { key: "moisturlyzer", label: "MoisturLyzer", icon: "fa-tint", color: "mh-c2" },
   { key: "gateway", label: "Gateway", icon: "fa-broadcast-tower", color: "mh-c3" },
   { key: "simcard", label: "SimCard", icon: "fa-sim-card", color: "mh-c4" },
+  { key: "panolyzer", label: "Panolyzer", icon: "fa-microscope", color: "mh-c10" },
   { key: "colorSorterParts", label: "อะไหล่ Color Sorter", icon: "fa-cogs", color: "mh-c5" },
   { key: "panolyzerParts", label: "อะไหล่ Panolyzer", icon: "fa-cogs", color: "mh-c6" },
   { key: "issue", label: "เบิกอุปกรณ์", icon: "fa-dolly", color: "mh-c7" },
@@ -1016,6 +1034,10 @@ function attachFirestoreListeners() {
   bind("colorSorterPartUnits", "colorSorterParts", translatePartUnit);
   bind("panolyzerPartUnits", "panolyzerParts", translatePartUnit);
   bind("partsActivityLog", "partsActivityLog", translatePartsActivityLog);
+  // Panolyzer (เครื่อง — ไม่ใช่อะไหล่): มิเรอร์มาจากชีต "Panolyzer Management" คนละระบบผ่าน syncPanolyzerNow/
+  // panolyzerScheduledSync ฝั่ง Cloud Functions — เก็บชื่อคอลัมน์ดิบตามหัวชีตเป๊ะ (เช่น "S/N Analyzer",
+  // "Client name") บวกฟิลด์ที่เป็นของ C2-Loop เองเพิ่มมา (linkedGatewaySerial/pendingSheetSync/...) จึงไม่ต้องแปลง
+  bind("panolyzer", "panolyzer", translateRaw);
 }
 
 function detachFirestoreListeners() {
@@ -1158,6 +1180,33 @@ window.addEventListener("popstate", (e) => {
   _navRestoring = false;
 });
 
+/** ปุ่มลิงก์ในคอลัมน์ "เชื่อมต่อกับ"/badge อุปกรณ์เชื่อมโยง — พาไปหน้าของอุปกรณ์ปลายทางแล้วกรองรายการเหลือแค่
+ * ตัวนั้นตัวเดียวผ่านช่องค้นหาของหน้านั้น (ไม่ใช่การเปิดฟอร์มแก้ไขตรงๆ เพื่อให้เห็นบริบทแถวเต็มๆ ก่อน) — ต้อง
+ * สลับหน้าด้วย switchView ให้เสร็จก่อน (synchronous) ค่อยไปยุ่งกับช่องค้นหา เพราะ DOM ของหน้านั้นเพิ่งถูกสร้างตอน
+ * switchView เรียก renderCurrentView() ข้างใน */
+function goToLinkedAsset(viewKey, serial) {
+  switchView(viewKey);
+  if (viewKey === "panolyzer") {
+    const searchEl = document.getElementById("panoSearchBox");
+    const statusEl = document.getElementById("panoStatusFilter");
+    if (statusEl) statusEl.value = "all"; // กันแถวที่ไม่ใช่ Stock ถูกกรองซ่อนไปโดยไม่ได้ตั้งใจ
+    if (searchEl) {
+      searchEl.value = serial;
+      renderPanolyzerRows();
+    }
+  } else {
+    const searchEl = document.getElementById("searchBox");
+    const statusEl = document.getElementById("statusFilter");
+    if (statusEl) statusEl.value = "all";
+    if (searchEl) {
+      searchEl.value = serial;
+      // มี listener ผูก "input" ไว้อยู่แล้วที่ re-render ตาราง/การ์ดของหน้านั้น (ดู renderListView) — ใช้ dispatch
+      // แทนเรียก render ตรงๆ เพราะฟังก์ชัน render (renderRows) ต้องการ cfg/rows/isAdmin ที่ผูกไว้ใน closure ของ listener นั้นอยู่แล้ว
+      searchEl.dispatchEvent(new Event("input"));
+    }
+  }
+}
+
 function renderCurrentView() {
   const titleEl = document.getElementById("viewTitle");
   if (state.currentView === "dashboard") {
@@ -1184,6 +1233,9 @@ function renderCurrentView() {
   } else if (state.currentView === "supplierclaim") {
     titleEl.textContent = "รอเคลมจาก Supplier";
     renderSupplierClaimView();
+  } else if (state.currentView === "panolyzer") {
+    titleEl.textContent = "Panolyzer";
+    renderPanolyzerView();
   } else {
     const cfg = VIEW_CONFIG[state.currentView];
     titleEl.textContent = cfg.title.replace(" (มี S/N)", "");
@@ -2311,6 +2363,224 @@ function saveListViewFilterState(filterKey) {
   };
 }
 
+// ============================================================
+// Panolyzer — หน้ารายการ (read-mostly): มิเรอร์จากชีต Panolyzer Management ผ่าน Cloud Functions เท่านั้น
+// ไม่มีปุ่มแก้ไข/ลบ/ย้าย-เคลมแบบมาตรฐานเหมือนตาราง VIEW_CONFIG อื่น (backend ยังไม่รองรับอุปกรณ์ประเภทนี้ในทางนั้น
+// เพราะ C2-Loop ไม่ได้เป็นเจ้าของข้อมูลหลัก) มีแค่: ปุ่มรีเฟรชข้อมูลตอนนี้ (syncPanolyzerNow), ปุ่ม "กดลองใหม่"
+// ต่อแถวถ้า sync กลับไป Sheet ไม่สำเร็จตอนอนุมัติเบิก (retryPanolyzerSheetSync), และปุ่ม "ผูก Gateway เพิ่มทีหลัง"
+// (Admin เท่านั้น — attachGatewayToPanolyzer)
+// ============================================================
+function renderPanolyzerView() {
+  const content = document.getElementById("viewContent");
+  const mobile = isMobileViewport();
+  content.innerHTML = `
+    <div class="controls-row">
+      <input type="text" id="panoSearchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานที่, Model, Mode...)">
+      <select id="panoStatusFilter">
+        <option value="all">-- สถานะทั้งหมด --</option>
+        <option value="stock">อยู่ใน Stock พร้อมเบิก</option>
+        <option value="used">เบิกไปแล้ว</option>
+      </select>
+      <button class="btn-sm btn-secondary" id="panoRefreshBtn">🔄 รีเฟรชข้อมูลตอนนี้</button>
+    </div>
+    <div class="cache-note" style="margin-bottom:10px;">ข้อมูลเครื่อง Panolyzer มิเรอร์มาจากระบบ "Panolyzer Management" (คนละระบบ) — ซิงค์อัตโนมัติทุก 15 นาที หรือกดรีเฟรชเองได้ทันที ระบบนี้ใช้เบิกส่งมอบ (Status เปลี่ยนเป็น "Complete") เท่านั้น การบันทึกประวัติทดลองเครื่องยังต้องทำในระบบ Panolyzer Management เดิม</div>
+    ${mobile
+      ? `<div id="panoCards" class="mcard-list"></div>`
+      : `<div class="table-card">
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>S/N Analyzer</th><th>ลูกค้า</th><th>สถานที่</th><th>สถานะ</th><th>ประเภท</th><th>Model</th><th>Mode</th><th>S/N Edge server (ในชีต)</th><th>Gateway ที่ผูกไว้ (C2-Loop)</th><th></th>
+          </tr></thead>
+          <tbody id="panoTbody"></tbody>
+        </table>
+      </div>
+    </div>`}
+  `;
+  document.getElementById("panoRefreshBtn").addEventListener("click", refreshPanolyzerNow);
+  document.getElementById("panoSearchBox").addEventListener("input", renderPanolyzerRows);
+  document.getElementById("panoStatusFilter").addEventListener("change", renderPanolyzerRows);
+  renderPanolyzerRows();
+}
+
+function getFilteredPanolyzerRows() {
+  const searchEl = document.getElementById("panoSearchBox");
+  const statusEl = document.getElementById("panoStatusFilter");
+  const search = (searchEl ? searchEl.value : "").toLowerCase();
+  const statusFilter = statusEl ? statusEl.value : "all";
+  return (state.data.panolyzer || []).filter((row) => {
+    const stock = isPanolyzerStockRow(row);
+    if (statusFilter === "stock" && !stock) return false;
+    if (statusFilter === "used" && stock) return false;
+    if (!search) return true;
+    return [PANOLYZER_SERIAL_FIELD, "Client name", "Location", "Type", "Model", "Mode", "S/N Edge server"]
+      .some((f) => String(row[f] || "").toLowerCase().includes(search));
+  });
+}
+
+function renderPanolyzerRows() {
+  if (isMobileViewport()) {
+    renderPanolyzerRowsAsCards();
+  } else {
+    renderPanolyzerRowsAsTable();
+  }
+}
+
+function renderPanolyzerRowsAsTable() {
+  const tbody = document.getElementById("panoTbody");
+  if (!tbody) return;
+  const isAdmin = state.user.role === "Admin";
+  const rows = getFilteredPanolyzerRows();
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">ไม่พบข้อมูล — ลองกดรีเฟรชข้อมูลตอนนี้</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const serial = String(row[PANOLYZER_SERIAL_FIELD] || "");
+    const stock = isPanolyzerStockRow(row);
+    const statusCell = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(row["Status"] || ""))}</span>`;
+    const syncBadge = row.pendingSheetSync
+      ? `<div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="retryPanolyzerSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}`
+      : "";
+    const attachBtn = isAdmin
+      ? `<button class="btn-sm btn-secondary" onclick="openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">ผูก Gateway เพิ่มทีหลัง</button>`
+      : "";
+    // Phase 2 (ดูรายละเอียด): เปลี่ยนจากปุ่มแยกมาเป็นกดที่แถวได้เลยทั้งแถว (เหมือนตารางอุปกรณ์อื่น) — เซลล์ที่มี
+    // ปุ่ม/ลิงก์ของตัวเอง (Gateway ที่ผูกไว้, ผูก Gateway เพิ่ม, กดลองใหม่) กัน propagation ไว้ไม่ให้ชนกัน
+    return `<tr class="row-clickable" onclick="openPanolyzerDetailModal('${escapeAttr(serial)}')">
+      <td>${escapeHtml(serial)}</td>
+      <td>${escapeHtml(String(row["Client name"] || ""))}</td>
+      <td>${escapeHtml(String(row["Location"] || ""))}</td>
+      <td onclick="event.stopPropagation()">${statusCell}${syncBadge}</td>
+      <td>${escapeHtml(String(row["Type"] || ""))}</td>
+      <td>${escapeHtml(String(row["Model"] || ""))}</td>
+      <td>${escapeHtml(String(row["Mode"] || ""))}</td>
+      <td>${escapeHtml(String(row["S/N Edge server"] || ""))}</td>
+      <td onclick="event.stopPropagation()">${row.linkedGatewaySerial ? `<span class="badge-linkable" onclick="goToLinkedAsset('gateway', '${escapeAttr(String(row.linkedGatewaySerial))}')" title="คลิกเพื่อไปดูรายการนี้">${escapeHtml(String(row.linkedGatewaySerial))}</span>` : `<span class="cache-note">-</span>`}</td>
+      <td class="no-wrap" onclick="event.stopPropagation()">${attachBtn}</td>
+    </tr>`;
+  }).join("");
+}
+
+/** เวอร์ชันมือถือของหน้า Panolyzer — การ์ดแนวตั้งแทนตารางกว้างที่ต้องเลื่อนซ้าย-ขวา (ข้อมูล/ปุ่มเหมือนเวอร์ชันตาราง
+ * ทุกประการ ต่างแค่การจัดวาง — ใช้คลาส .mcard/.mcard-list ชุดเดียวกับหน้ารายการอุปกรณ์อื่นๆ เพื่อความสม่ำเสมอ) */
+function renderPanolyzerRowsAsCards() {
+  const wrap = document.getElementById("panoCards");
+  if (!wrap) return;
+  const isAdmin = state.user.role === "Admin";
+  const rows = getFilteredPanolyzerRows();
+
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="mcard-empty">ไม่พบข้อมูล — ลองกดรีเฟรชข้อมูลตอนนี้</div>`;
+    return;
+  }
+
+  wrap.innerHTML = rows.map((row) => {
+    const serial = String(row[PANOLYZER_SERIAL_FIELD] || "");
+    const stock = isPanolyzerStockRow(row);
+    const pillHtml = `<span class="mcard-pill ${stock ? "stock" : "used"}">${escapeHtml(String(row["Status"] || ""))}</span>`;
+    const syncBadge = row.pendingSheetSync
+      ? `<div class="mcard-row"><div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="retryPanolyzerSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}</div>`
+      : "";
+    const attachBtn = isAdmin
+      ? `<button class="btn-sm btn-secondary" onclick="openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">ผูก Gateway เพิ่มทีหลัง</button>`
+      : "";
+    const rowsHtml = [
+      ["ลูกค้า", row["Client name"]],
+      ["สถานที่", row["Location"]],
+      ["ประเภท", row["Type"]],
+      ["Model", row["Model"]],
+      ["Mode", row["Mode"]],
+      ["S/N Edge server (ในชีต)", row["S/N Edge server"]],
+      ["Gateway ที่ผูกไว้ (C2-Loop)", row.linkedGatewaySerial, true],
+    ].filter(([, v]) => v !== undefined && v !== null && String(v) !== "")
+      .map(([label, v, linkToGateway]) => `<div class="mcard-row"><div class="mcard-label">${escapeHtml(label)}</div><div class="mcard-val">${linkToGateway ? `<span class="badge-linkable" onclick="goToLinkedAsset('gateway', '${escapeAttr(String(v))}')" title="คลิกเพื่อไปดูรายการนี้">${escapeHtml(String(v))}</span>` : escapeHtml(String(v))}</div></div>`)
+      .join("");
+
+    return `
+      <div class="mcard">
+        <div class="mcard-head">
+          <div class="mcard-title">${escapeHtml(serial || "-")}</div>
+          ${pillHtml}
+        </div>
+        ${rowsHtml}
+        ${syncBadge}
+        ${attachBtn ? `<div class="mcard-actions">${attachBtn}</div>` : ""}
+      </div>`;
+  }).join("");
+}
+
+/** ปุ่ม "รีเฟรชข้อมูลตอนนี้" — เรียก syncPanolyzerNow แล้วปล่อยให้ real-time listener (bind("panolyzer", ...))
+ * อัปเดตตารางให้เองอัตโนมัติ (ไม่ต้อง manual re-render ผลลัพธ์ตรงนี้) */
+async function refreshPanolyzerNow() {
+  const btn = document.getElementById("panoRefreshBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "กำลังรีเฟรช..."; }
+  try {
+    const res = await apiPost({ action: "syncPanolyzerNow", token: state.token });
+    if (!res.ok) {
+      if (res.error === "unauthorized") return handleUnauthorized();
+      await showAlert("รีเฟรชข้อมูล Panolyzer ไม่สำเร็จ: " + (res.error || "unknown_error"), "error");
+      return;
+    }
+    await showAlert(`ซิงค์ข้อมูล Panolyzer สำเร็จ (${res.count || 0} เครื่อง)`, "success");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 รีเฟรชข้อมูลตอนนี้"; }
+  }
+}
+
+/** ปุ่ม "กดลองใหม่" ของแถวที่ sync กลับไป Sheet ไม่สำเร็จตอนอนุมัติเบิก (Admin เท่านั้น) */
+async function retryPanolyzerSync(serial) {
+  const confirmed = await showConfirm(`ลองส่งข้อมูลเครื่อง Panolyzer S/N ${serial} ไปที่ Sheet Panolyzer Management ใหม่อีกครั้ง?`);
+  if (!confirmed) return;
+  const res = await apiPost({ action: "retryPanolyzerSheetSync", token: state.token, serial });
+  if (!res.ok) {
+    if (res.error === "unauthorized") return handleUnauthorized();
+    await showAlert("ลองใหม่ไม่สำเร็จ: " + (res.detail || res.error || "unknown_error"), "error");
+    return;
+  }
+  await showAlert("ส่งข้อมูลไปที่ Sheet สำเร็จแล้ว", "success");
+  renderCurrentView();
+}
+
+/** โมดัล "ผูก Gateway เพิ่มทีหลัง" — Admin เลือก Gateway รุ่น EPG-001S ว่างในสต๊อกมาผูกกับเครื่อง Panolyzer นี้
+ * (ทั้ง Lab/Real-time ใช้ปุ่มนี้ได้เหมือนกันหมด — ไม่มีรุ่นไหนมากับ Gateway ติดตั้งสำเร็จรูปเลย ตามที่ผู้ใช้ยืนยัน)
+ * มีผลทันที ไม่ต้องผ่านคำขอ/อนุมัติ (ดูเหตุผลที่คอมเมนต์ exports.attachGatewayToPanolyzer ฝั่ง backend) และไม่เรียก
+ * Sheet API เลย (ชีตไม่มีฟิลด์ที่มีความหมายสำหรับข้อมูลนี้ ตามที่ผู้ใช้ยืนยันชัดเจน) */
+function openAttachGatewayToPanolyzerModal(panolyzerSerial) {
+  const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, -1);
+  if (!availableGw.length) {
+    showAlert(`ไม่มี Gateway รุ่น ${GATEWAY_MODEL_PANOLYZER} ว่างในสต๊อกตอนนี้`, "error");
+    return;
+  }
+  const gwCfg = VIEW_CONFIG.gateway;
+  const fields = [{
+    key: "gatewaySerial",
+    label: "เลือก Gateway (ว่างในสต๊อก)",
+    type: "select",
+    value: String(availableGw[0][gwCfg.serialField]),
+    options: availableGw.map((g) => ({ value: String(g[gwCfg.serialField]), label: String(g[gwCfg.serialField]) })),
+  }];
+  openGenericFormModal(`ผูก Gateway เพิ่มทีหลัง — Panolyzer ${panolyzerSerial}`, fields, async (values) => {
+    const gatewaySerial = values[0];
+    const msg = document.getElementById("genericFormModalMsg");
+    try {
+      const res = await apiPost({ action: "attachGatewayToPanolyzer", token: state.token, panolyzerSerial, gatewaySerial });
+      if (!res.ok) {
+        if (res.error === "unauthorized") return handleUnauthorized();
+        throw new Error(res.error || "internal_error");
+      }
+      await refreshInBackground(true);
+      closeGenericFormModal();
+      renderCurrentView();
+    } catch (err) {
+      msg.className = "form-msg error";
+      msg.textContent = err.message;
+    }
+  });
+}
+
 function renderListView(cfg) {
   const content = document.getElementById("viewContent");
   const rows = state.data[cfg.key] || [];
@@ -2334,7 +2604,7 @@ function renderListView(cfg) {
       : `<div class="table-card">
       <div class="table-scroll">
         <table>
-          <thead><tr>${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>จัดการ</th>" : ""}</tr></thead>
+          <thead><tr>${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
           <tbody id="listTbody"></tbody>
         </table>
       </div>
@@ -2426,9 +2696,10 @@ function hasPartPhotoByPartId(partId) {
 function renderRowsAsTable(cfg, filtered, isAdmin) {
   const tbody = document.getElementById("listTbody");
   if (!tbody) return;
-  const hasExtraCol = isAdmin || cfg.partCategory;
+  // Phase: ตัดคอลัมน์ "จัดการ" ออกจากตารางสรุปแล้ว (ตามคำขอผู้ใช้) เพราะปุ่มจัดการชุดเดียวกันไปอยู่ในโมดัล
+  // "ดูรายละเอียด" (เปิดได้จากการกดที่แถว) หมดแล้ว — ไม่ต้องมีคอลัมน์นี้ในตารางสรุปอีกต่อไป
   const hasThumbCol = !!cfg.partCategory;
-  const colspan = cfg.columns.length + (hasExtraCol ? 1 : 0) + (hasThumbCol ? 1 : 0);
+  const colspan = cfg.columns.length + (hasThumbCol ? 1 : 0);
 
   if (!filtered.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${colspan}">ไม่พบข้อมูล</td></tr>`;
@@ -2446,7 +2717,9 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
     const cells = cfg.columns.map((c) => {
       if (c.computed) {
         const linked = (c.compute || computeLinkedAccessories)(row);
-        return `<td>${linked.length ? linked.map(renderLinkedBadge).join(" ") : `<span class="cache-note">-</span>`}</td>`;
+        // onclick="event.stopPropagation()" กันไม่ให้กด badge ที่ลิงก์ไปเมนูอื่น (goToLinkedAsset) แล้วไปโดน
+        // onclick ของทั้งแถว (เปิดโมดัลดูรายละเอียด) ทำงานซ้อนด้วย
+        return `<td onclick="event.stopPropagation()">${linked.length ? linked.map(renderLinkedBadge).join(" ") : `<span class="cache-note">-</span>`}</td>`;
       }
       let val = row[c.field];
       if (c.field === cfg.stockField) {
@@ -2464,46 +2737,74 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
       return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}</td>`;
     }).join("");
     const serial = String(row[cfg.serialField] || "");
-    // Phase 10: อะไหล่แบบมี S/N มีปุ่ม "ประวัติ" เพิ่ม เพื่อดู timeline ของอะไหล่ชิ้นนี้ (เพิ่ม/เติม/แก้ชื่อ/ลบ/เบิก/คืน)
-    const historyBtn = cfg.partCategory
-      ? `<button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
-      : "";
-    const photoBtn = cfg.partCategory
-      ? `<button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', ${hasPartPhotoByPartId(row.PartID)})">เพิ่ม/เปลี่ยนรูป</button>`
-      : "";
-    // Phase 21: ปุ่มพิมพ์ป้ายติดเครื่อง Gateway — เฉพาะตาราง Gateway เท่านั้น (ป้ายมีไว้แปะตัวเครื่อง Gateway โชว์
-    // S/N ตัวเอง + S/N อุปกรณ์/ซิมที่เชื่อมต่ออยู่ — ดู printGatewayLabel)
-    const printLabelBtn = cfg.key === "gateway"
-      ? `<button class="btn-sm btn-secondary" onclick="printGatewayLabel('${escapeAttr(serial)}')">🏷️ พิมพ์ป้าย</button>`
-      : "";
-    const isTransferClaimType = TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key);
-    const claimed = isTransferClaimType && isClaimedRow(row, cfg);
-    const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
-    const issued = isTransferClaimType && !claimed && !writtenOff && !isStockRow(row, cfg.stockField, cfg.stockRequiresField);
-    let actionsCell;
-    if (isAdmin && claimed) {
-      actionsCell = `<td class="no-wrap">
-           <button class="btn-sm btn-primary" onclick="resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'toStock')">คืนเข้าสต็อก</button>
-           <button class="btn-sm btn-remove" onclick="resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'writeOff')">ตัดจำหน่าย</button>
-         </td>`;
-    } else if (isAdmin && writtenOff) {
-      actionsCell = `<td class="no-wrap">
-           <button class="btn-sm btn-primary" onclick="restoreWrittenOffAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">คืนเข้าสต็อก</button>
-           <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
-         </td>`;
-    } else if (isAdmin) {
-      actionsCell = `<td class="no-wrap">
-           <button class="btn-sm btn-secondary" onclick="openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
-           ${issued ? `<button class="btn-sm btn-transfer" onclick="openTransferClaimModal('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ย้าย/เคลม</button>` : ""}
-           <button class="btn-sm btn-remove" onclick="deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
-           ${printLabelBtn}
-           ${historyBtn}
-           ${photoBtn}
-         </td>`;
+    // Phase 2 (ดูรายละเอียด): เปลี่ยนจากปุ่มแยกมาเป็นกดที่แถวได้เลยทั้งแถว (ง่ายกว่า) ทุก role กดได้ (แค่เปิด
+    // โมดัลดูข้อมูล ไม่มีผลแก้ไขอะไร) เซลล์ที่มีปุ่ม/ลิงก์ของตัวเองด้านบนกัน propagation ไว้แล้วไม่ให้ชนกัน
+    // Phase: ปุ่มจัดการ (แก้ไข/ย้าย-เคลม/ลบ ฯลฯ) ย้ายไปอยู่ในโมดัลดูรายละเอียดล้วนๆ แล้ว (ตัดคอลัมน์ "จัดการ"
+    // ออกจากตารางสรุปตามคำขอผู้ใช้) — buildAssetRowActionButtonsHtml ยังใช้ร่วมกับโมดัลอยู่เหมือนเดิม
+    return `<tr class="row-clickable" onclick="openAssetDetailModal('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">${thumbCell}${cells}</tr>`;
+  }).join("");
+}
+
+/** ปุ่มจัดการของแถวอุปกรณ์ 1 แถว (แก้ไข/ย้าย-เคลม/ลบ/พิมพ์ป้าย/ประวัติ/เพิ่มรูป ฯลฯ) — เดิมอยู่ในตัว
+ * renderRowsAsTable ตรงๆ แยกออกมาเป็นฟังก์ชันนี้เพื่อใช้ซ้ำกับโมดัล "ดูรายละเอียด" (openAssetDetailModal, Part 2)
+ * ได้โดยไม่ต้องเขียนซ้ำ — คืนแค่ HTML ปุ่ม (ไม่มี wrapper td/div) ผู้เรียกห่อ container เอาเอง เฉพาะ Admin
+ * เท่านั้นที่มีปุ่มเหล่านี้ (ยกเว้นอะไหล่มี S/N ที่ role อื่นเห็นปุ่ม "ประวัติ" ได้ด้วย) */
+function buildAssetRowActionButtonsHtml(cfg, row, isAdmin) {
+  const serial = String(row[cfg.serialField] || "");
+  // Phase: หลังตัดคอลัมน์ "จัดการ" ออกจากตารางแล้ว ฟังก์ชันนี้ถูกเรียกใช้จากโมดัล "ดูรายละเอียด" เท่านั้น (ไม่มี
+  // ผู้เรียกอื่นเหลืออยู่) — ทุกปุ่มจึงต้องปิดโมดัลรายละเอียดก่อนเปิดโมดัลถัดไปเสมอ (closeAssetDetailModal())
+  // ไม่งั้นโมดัลใหม่ (เช่นฟอร์มแก้ไข) จะซ้อนอยู่ "หลัง" โมดัลรายละเอียดเพราะ z-index เท่ากันและ assetDetailModal
+  // มาทีหลังใน DOM — ผู้ใช้กดแก้ไขแล้วมองไม่เห็นฟอร์มที่เพิ่งเปิด
+  const historyBtn = cfg.partCategory
+    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
+    : "";
+  const photoBtn = cfg.partCategory
+    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', ${hasPartPhotoByPartId(row.PartID)})">เพิ่ม/เปลี่ยนรูป</button>`
+    : "";
+  // Phase 21: ปุ่มพิมพ์ป้ายติดเครื่อง Gateway — เฉพาะตาราง Gateway เท่านั้น (ป้ายมีไว้แปะตัวเครื่อง Gateway โชว์
+  // S/N ตัวเอง + S/N อุปกรณ์/ซิมที่เชื่อมต่ออยู่ — ดู printGatewayLabel)
+  const printLabelBtn = cfg.key === "gateway"
+    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); printGatewayLabel('${escapeAttr(serial)}')">🏷️ พิมพ์ป้าย</button>`
+    : "";
+  const isTransferClaimType = TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key);
+  const claimed = isTransferClaimType && isClaimedRow(row, cfg);
+  const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
+  const issued = isTransferClaimType && !claimed && !writtenOff && !isStockRow(row, cfg.stockField, cfg.stockRequiresField);
+  if (isAdmin && claimed) {
+    return `<button class="btn-sm btn-primary" onclick="closeAssetDetailModal(); resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'toStock')">คืนเข้าสต็อก</button>
+         <button class="btn-sm btn-remove" onclick="closeAssetDetailModal(); resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'writeOff')">ตัดจำหน่าย</button>`;
+  } else if (isAdmin && writtenOff) {
+    return `<button class="btn-sm btn-primary" onclick="closeAssetDetailModal(); restoreWrittenOffAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">คืนเข้าสต็อก</button>
+         <button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>`;
+  } else if (isAdmin) {
+    return `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openEditAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">แก้ไข</button>
+         ${issued ? `<button class="btn-sm btn-transfer" onclick="closeAssetDetailModal(); openTransferClaimModal('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ย้าย/เคลม</button>` : ""}
+         <button class="btn-sm btn-remove" onclick="closeAssetDetailModal(); deleteAsset('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}')">ลบ</button>
+         ${printLabelBtn}
+         ${historyBtn}
+         ${photoBtn}`;
+  }
+  return cfg.partCategory ? historyBtn : "";
+}
+
+/** สร้าง HTML รายการ label:value ของ "ทุก" คอลัมน์ตาม cfg.columns สำหรับแถวอุปกรณ์ 1 แถว — ใช้ในโมดัล
+ * "ดูรายละเอียด" (openAssetDetailModal, Part 2) เท่านั้น ต่างจากการ์ดมือถือ (renderRowsAsCards) ตรงที่ "ไม่ข้าม"
+ * คอลัมน์ serial/สถานะ ออก เพราะโมดัลนี้ตั้งใจให้เห็นข้อมูลครบทุกฟิลด์จริงๆ ไม่ใช่แค่สรุปย่อ */
+function buildAssetDetailFieldsHtml(cfg, row) {
+  return cfg.columns.map((c) => {
+    let valHtml;
+    if (c.computed) {
+      const linked = (c.compute || computeLinkedAccessories)(row);
+      valHtml = linked.length ? linked.map(renderLinkedBadge).join(" ") : `<span class="cache-note">-</span>`;
+    } else if (c.field === cfg.stockField) {
+      const val = row[c.field];
+      const stock = isStockRow(row, cfg.stockField, cfg.stockRequiresField);
+      valHtml = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(val === undefined || val === null ? "" : val))}</span>`;
     } else {
-      actionsCell = cfg.partCategory ? `<td class="no-wrap">${historyBtn}</td>` : "";
+      const val = row[c.field];
+      valHtml = escapeHtml(String(val === undefined || val === null ? "" : val));
     }
-    return `<tr>${thumbCell}${cells}${actionsCell}</tr>`;
+    return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${valHtml}</div></div>`;
   }).join("");
 }
 
@@ -2865,6 +3166,84 @@ const PART_HISTORY_ACTION_ICONS = {
 
 function closePartHistoryModal() {
   document.getElementById("partHistoryModal").style.display = "none";
+}
+
+function closeAssetDetailModal() {
+  document.getElementById("assetDetailModal").style.display = "none";
+}
+
+/** โมดัล "ดูรายละเอียด" (Part 2, PC เท่านั้น) — โชว์ทุกฟิลด์ของแถวอุปกรณ์ 1 แถว (moisturlyzer/gateway/simcard)
+ * แบบ label:value พร้อมปุ่มจัดการชุดเดียวกับคอลัมน์ "จัดการ" ในตาราง (ใช้ buildAssetRowActionButtonsHtml ร่วมกัน)
+ * กันต้องเลื่อนตารางไปมาดูข้อมูล/ปุ่มที่ล้นจอเวลาข้อมูลยาว */
+function openAssetDetailModal(assetKey, serial) {
+  const cfg = VIEW_CONFIG[assetKey];
+  if (!cfg) return;
+  const row = (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField] || "") === serial);
+  if (!row) {
+    showAlert("ไม่พบข้อมูลอุปกรณ์นี้ (อาจถูกลบ/ย้ายไปแล้ว)", "error");
+    return;
+  }
+  const isAdmin = state.user.role === "Admin";
+  document.getElementById("assetDetailModalTitle").textContent = `${cfg.title} — ${serial}`;
+  const fieldsHtml = buildAssetDetailFieldsHtml(cfg, row);
+  const actionsHtml = buildAssetRowActionButtonsHtml(cfg, row, isAdmin);
+  document.getElementById("assetDetailModalBody").innerHTML = `
+    ${fieldsHtml}
+    ${actionsHtml ? `<div class="mcard-actions" style="margin-top:14px;">${actionsHtml}</div>` : ""}
+  `;
+  document.getElementById("assetDetailModal").style.display = "flex";
+}
+
+/** เวอร์ชัน Panolyzer ของโมดัล "ดูรายละเอียด" — Panolyzer ไม่ได้อยู่ใน VIEW_CONFIG (โครงสร้างข้อมูล/ปุ่มต่างจาก
+ * อุปกรณ์อื่น) จึงแยกฟังก์ชันเฉพาะ ดึงข้อมูล/ปุ่มจาก state.data.panolyzer ตรงๆ (อิงตาม renderPanolyzerRowsAsTable) */
+function openPanolyzerDetailModal(serial) {
+  const row = (state.data.panolyzer || []).find((r) => String(r[PANOLYZER_SERIAL_FIELD] || "") === serial);
+  if (!row) {
+    showAlert("ไม่พบข้อมูลเครื่อง Panolyzer นี้ (อาจถูกลบ/ย้ายไปแล้ว)", "error");
+    return;
+  }
+  const isAdmin = state.user.role === "Admin";
+  const stock = isPanolyzerStockRow(row);
+  document.getElementById("assetDetailModalTitle").textContent = `Panolyzer — ${serial}`;
+
+  const fieldsHtml = [
+    [PANOLYZER_SERIAL_FIELD, row[PANOLYZER_SERIAL_FIELD], "text"],
+    ["ลูกค้า", row["Client name"], "text"],
+    ["สถานที่", row["Location"], "text"],
+    ["สถานะ", row["Status"], "status"],
+    ["ประเภท", row["Type"], "text"],
+    ["Model", row["Model"], "text"],
+    ["Mode", row["Mode"], "text"],
+    ["S/N Edge server (ในชีต)", row["S/N Edge server"], "text"],
+    ["Gateway ที่ผูกไว้ (C2-Loop)", row.linkedGatewaySerial, "gateway"],
+  ].map(([label, v, kind]) => {
+    let valHtml;
+    if (kind === "status") {
+      valHtml = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(v || ""))}</span>`;
+    } else if (kind === "gateway" && v) {
+      valHtml = `<span class="badge-linkable" onclick="goToLinkedAsset('gateway', '${escapeAttr(String(v))}')" title="คลิกเพื่อไปดูรายการนี้">${escapeHtml(String(v))}</span>`;
+    } else {
+      valHtml = v ? escapeHtml(String(v)) : `<span class="cache-note">-</span>`;
+    }
+    return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(label)}</div><div class="mcard-val">${valHtml}</div></div>`;
+  }).join("");
+
+  // หมายเหตุ: ปุ่ม "กดลองใหม่"/"ผูก Gateway เพิ่มทีหลัง" ต้องปิดโมดัลรายละเอียดนี้ก่อน (closeAssetDetailModal())
+  // ไม่งั้นโมดัลฟอร์มที่เปิดต่อ (openAttachGatewayToPanolyzerModal → openGenericFormModal) จะซ้อนอยู่หลังโมดัล
+  // รายละเอียดนี้เพราะ z-index เท่ากันและ #assetDetailModal มาทีหลังใน DOM
+  const syncHtml = row.pendingSheetSync
+    ? `<div class="mcard-row"><div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="closeAssetDetailModal(); retryPanolyzerSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}</div>`
+    : "";
+  const attachBtn = isAdmin
+    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">ผูก Gateway เพิ่มทีหลัง</button>`
+    : "";
+
+  document.getElementById("assetDetailModalBody").innerHTML = `
+    ${fieldsHtml}
+    ${syncHtml}
+    ${attachBtn ? `<div class="mcard-actions" style="margin-top:14px;">${attachBtn}</div>` : ""}
+  `;
+  document.getElementById("assetDetailModal").style.display = "flex";
 }
 
 /** แสดงประวัติทั้งหมดของอะไหล่ 1 ชิ้น (partId) เรียงจากล่าสุดไปเก่าสุด */
@@ -3732,7 +4111,24 @@ function renderTransferClaimModalBody() {
   if (tab === "transfer") {
     submitLabel = isAdmin ? "ยืนยันย้าย" : "ส่งคำขอย้าย";
     let connectFieldHtml = "";
-    if (assetKey === "gateway") {
+    if (assetKey === "gateway" && normalizeGatewayModel(row[GATEWAY_MODEL_FIELD]) === GATEWAY_MODEL_PANOLYZER) {
+      // Gateway รุ่น EPG-001S ใช้กับ Panolyzer เท่านั้น — ให้เลือกเชื่อมกับเครื่อง Panolyzer ที่ "ยังไม่มี Gateway
+      // ผูกอยู่" เท่านั้น (กันเลือกซ้ำเครื่องที่ผูกไปแล้ว) แทนที่จะโชว์ตัวเลือก MoisturLyzer แบบเดิม
+      const options = (state.data.panolyzer || []).filter((p) => !p.linkedGatewaySerial);
+      connectFieldHtml = `
+        <div class="form-field">
+          <label>เชื่อมต่อกับเครื่อง Panolyzer เครื่องไหน (ไม่บังคับ)</label>
+          <select id="tc-connect" class="searchable-select">
+            <option value="">ยังไม่ระบุตอนนี้</option>
+            ${options.map((o) => {
+              const s = String(o[PANOLYZER_SERIAL_FIELD] || "");
+              const client = String(o["Client name"] || "").trim();
+              return `<option value="${escapeAttr(s)}">${escapeHtml(s)}${client ? " — " + escapeHtml(client) : ""}</option>`;
+            }).join("")}
+          </select>
+          ${!options.length ? `<div class="hint">ไม่มีเครื่อง Panolyzer ที่ยังไม่มี Gateway ผูกอยู่ในระบบตอนนี้</div>` : ""}
+        </div>`;
+    } else if (assetKey === "gateway") {
       const options = getLinkableIssuedMoisturlyzers();
       connectFieldHtml = `
         <div class="form-field">
@@ -4534,6 +4930,25 @@ function getAvailableItems(cfg, search) {
   });
 }
 
+/** เหมือน getAvailableItems() แต่เฉพาะ Panolyzer (ไม่ได้อยู่ใน VIEW_CONFIG — ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์)
+ * กรองเฉพาะ Status="Stock" ตามข้อมูลมิเรอร์ล่าสุด และไม่ซ้ำกับที่มีคำขออื่นค้างอยู่/อยู่ในตะกร้าแล้ว */
+function getAvailablePanolyzerItems(search) {
+  const pendingKeys = getPendingKeys();
+  const basketKeys = new Set(issuanceForm.basket.map((b) => b.assetType + "||" + b.serialNo));
+  const rows = state.data.panolyzer || [];
+  return rows.filter((row) => {
+    if (!isPanolyzerStockRow(row)) return false;
+    const serial = String(row[PANOLYZER_SERIAL_FIELD] || "");
+    const key = PANOLYZER_ASSET_TYPE + "||" + serial;
+    if (pendingKeys.has(key) || basketKeys.has(key)) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      return [PANOLYZER_SERIAL_FIELD, "Client name", "Location", "Type", "Model", "Mode"].some((f) => String(row[f] || "").toLowerCase().includes(s));
+    }
+    return true;
+  });
+}
+
 function renderIssueView() {
   const content = document.getElementById("viewContent");
   content.innerHTML = `
@@ -4572,6 +4987,7 @@ function renderIssueView() {
           <option value="moisturlyzer">MoisturLyzer</option>
           <option value="gateway">Gateway</option>
           <option value="simcard">SimCard</option>
+          <option value="panolyzer">Panolyzer</option>
           <option value="colorSorterParts">อะไหล่ Color Sorter</option>
           <option value="panolyzerParts">อะไหล่ Panolyzer</option>
           <option value="other">อื่นๆ (พิมพ์เอง)</option>
@@ -4647,6 +5063,28 @@ function renderPickerList() {
     return;
   }
   searchInput.disabled = false;
+
+  // Panolyzer (เครื่อง — ไม่ใช่อะไหล่): ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุหัวไฟล์ตรง PANOLYZER_KEY) จึงต้องแยก
+  // สาขาเฉพาะทาง ก่อนจะไปถึงจุดที่ดึง cfg จาก VIEW_CONFIG (จะได้ undefined ถ้าไม่ดักไว้ก่อน)
+  if (assetKey === PANOLYZER_KEY) {
+    const search = searchInput.value;
+    const items = getAvailablePanolyzerItems(search);
+    if (!items.length) {
+      listEl.innerHTML = `<div class="picker-empty">ไม่พบเครื่อง Panolyzer ที่พร้อมเบิก (สถานะ Stock)</div>`;
+      return;
+    }
+    listEl.innerHTML = items.slice(0, 50).map((row) => {
+      const serial = String(row[PANOLYZER_SERIAL_FIELD] || "");
+      const detailParts = [row.Type, row.Model, row.Mode].filter((v) => v && String(v).trim()).map((v) => escapeHtml(String(v)));
+      const label = `Panolyzer — ${escapeHtml(serial)}${detailParts.length ? " (" + detailParts.join(" · ") + ")" : ""}`;
+      return `
+        <div class="picker-list-item">
+          <span>${label}</span>
+          <button class="btn-sm btn-add" onclick="addToBasket('${PANOLYZER_KEY}', '${escapeAttr(serial)}')">+ เพิ่ม</button>
+        </div>`;
+    }).join("");
+    return;
+  }
 
   const cfg = VIEW_CONFIG[assetKey];
   const search = searchInput.value;
@@ -4780,6 +5218,20 @@ function addOtherToBasket() {
 }
 
 function addToBasket(assetKey, serial) {
+  // Panolyzer: ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์) — สร้างรายการตะกร้ารูปแบบของตัวเอง
+  // แยกจาก path ปกติด้านล่างทั้งหมด (linkedGatewaySerial/linkedSimSerial ใช้ชื่อเดียวกับ MoisturLyzer เพื่อ
+  // ให้ renderBasket/renderBasketMobile/submitIssuanceRequest ขยายรายการ Gateway/SimCard คู่กันด้วย logic เดียวกัน)
+  if (assetKey === PANOLYZER_KEY) {
+    issuanceForm.basket.push({
+      assetType: PANOLYZER_ASSET_TYPE, assetKey, serialNo: serial,
+      connectTo: "", connectSerial: "", location: "",
+      linkedGatewaySerial: "", linkedSimSerial: "",
+    });
+    renderPickerList();
+    renderBasket();
+    return;
+  }
+
   const cfg = VIEW_CONFIG[assetKey];
   const item = {
     assetType: cfg.assetType, assetKey, serialNo: serial,
@@ -4909,6 +5361,14 @@ function updateLinkedGateway(index, value) {
   renderBasket();
 }
 
+/** เหมือน updateLinkedGateway() เป๊ะ แต่ใช้กับรายการ Panolyzer ในตะกร้า (แยกฟังก์ชันเพราะ item.assetType ต่างกัน
+ * เอาไว้ให้ HTML onchange handler เรียกตรงๆ อ่านง่ายกว่าเช็ค assetType ข้างในฟังก์ชันเดียวรวมกัน) */
+function updateLinkedGatewayForPanolyzer(index, value) {
+  issuanceForm.basket[index].linkedGatewaySerial = value;
+  if (!value) issuanceForm.basket[index].linkedSimSerial = "";
+  renderBasket();
+}
+
 /** Phase 6: ชุด Serial ของ Gateway ที่ "ถูกใช้ไปแล้ว" ในตะกร้าปัจจุบัน (ทั้งที่เพิ่มเป็นรายการของตัวเอง
  * และที่ถูกเลือกเป็น Gateway คู่กันของ MoisturLyzer แถวอื่น) เพื่อไม่ให้เลือกเครื่องเดียวกันซ้ำ */
 function getUsedGatewaySerialsInBasket(excludeIndex) {
@@ -4916,7 +5376,7 @@ function getUsedGatewaySerialsInBasket(excludeIndex) {
   issuanceForm.basket.forEach((it, idx) => {
     if (idx === excludeIndex) return;
     if (it.assetType === "Gateway") used.add(it.serialNo);
-    if (it.assetType === "MoisturLyzer" && it.linkedGatewaySerial) used.add(it.linkedGatewaySerial);
+    if ((it.assetType === "MoisturLyzer" || it.assetType === "Panolyzer") && it.linkedGatewaySerial) used.add(it.linkedGatewaySerial);
   });
   return used;
 }
@@ -4948,7 +5408,7 @@ function getUsedSimSerialsInBasket(excludeIndex) {
   issuanceForm.basket.forEach((it, idx) => {
     if (idx === excludeIndex) return;
     if (it.assetType === "SimCard") used.add(it.serialNo);
-    if ((it.assetType === "MoisturLyzer" || it.assetType === "Gateway") && it.linkedSimSerial) used.add(it.linkedSimSerial);
+    if ((it.assetType === "MoisturLyzer" || it.assetType === "Gateway" || it.assetType === "Panolyzer") && it.linkedSimSerial) used.add(it.linkedSimSerial);
   });
   return used;
 }
@@ -5025,6 +5485,47 @@ function renderBasket() {
               <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
+              <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
+            </tr>`;
+          }
+
+          // Panolyzer: ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์) — แสดงแถวแบบเดียวกับ MoisturLyzer
+          // เป๊ะ (เลือก Gateway EPG-001S คู่กันไม่บังคับ + SimCard คู่กันไม่บังคับถ้ามี Gateway แล้ว) แต่ไม่มี cfg
+          // จาก VIEW_CONFIG ให้ใช้ จึงต้องเขียนแยกทั้งแถว แทนที่จะพึ่ง cfg.title/cfg.serialField ด้านล่าง
+          if (item.assetType === "Panolyzer") {
+            let panoSimCell = `<span class="cache-note">ไม่ต้องใช้ (ไม่ได้เบิก Gateway คู่กัน)</span>`;
+            if (item.linkedGatewaySerial) {
+              const availableSim = getAvailableSimCards(idx);
+              const simCfg = VIEW_CONFIG.simcard;
+              if (!availableSim.length && !item.linkedSimSerial) {
+                panoSimCell = `<span class="cache-note">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
+              } else {
+                panoSimCell = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
+                  <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
+                  ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+                </select>`;
+              }
+            }
+            const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, idx);
+            let panoSerialCell;
+            if (!availableGw.length && !item.linkedGatewaySerial) {
+              panoSerialCell = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_PANOLYZER)} ว่างในสต๊อก</span>`;
+            } else {
+              const gwCfg = VIEW_CONFIG.gateway;
+              panoSerialCell = `<select class="searchable-select" onchange="updateLinkedGatewayForPanolyzer(${idx}, this.value)">
+                <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
+                ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
+              </select>`;
+            }
+            const panoLocationCell = `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
+                value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">`;
+            return `<tr>
+              <td>Panolyzer</td>
+              <td>${escapeHtml(item.serialNo)}</td>
+              <td><span class="cache-note">Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน (ไม่บังคับ)</span></td>
+              <td>${panoSerialCell}</td>
+              <td>${panoSimCell}</td>
+              <td>${panoLocationCell}</td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
             </tr>`;
           }
@@ -5177,6 +5678,59 @@ function renderBasketMobile(area) {
             <label>จำนวนที่จะเบิก</label>
             <input type="number" min="1" value="${escapeAttr(String(item.quantity))}" onchange="updateBasketQuantity(${idx}, this.value)">
           </div>
+        </div>`;
+    }
+
+    // Panolyzer: ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์) — การ์ดแบบเดียวกับ MoisturLyzer เป๊ะ
+    // (เลือก Gateway EPG-001S คู่กันไม่บังคับ + SimCard คู่กันไม่บังคับถ้ามี Gateway แล้ว) เขียนแยกทั้งการ์ด
+    if (item.assetType === "Panolyzer") {
+      const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, idx);
+      const gwCfg = VIEW_CONFIG.gateway;
+      let panoGwFieldHtml;
+      if (!availableGw.length && !item.linkedGatewaySerial) {
+        panoGwFieldHtml = `<span class="cache-note">ไม่มี Gateway ${escapeHtml(GATEWAY_MODEL_PANOLYZER)} ว่างในสต๊อก</span>`;
+      } else {
+        panoGwFieldHtml = `<select class="searchable-select" onchange="updateLinkedGatewayForPanolyzer(${idx}, this.value)">
+          <option value="">-- ไม่เบิก Gateway คู่กัน (ไม่บังคับ) --</option>
+          ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
+        </select>`;
+      }
+      const panoFields = [{ label: `Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน (ไม่บังคับ)`, html: panoGwFieldHtml, req: false }];
+      if (item.linkedGatewaySerial) {
+        const availableSim = getAvailableSimCards(idx);
+        const simCfg = VIEW_CONFIG.simcard;
+        let panoSimFieldHtml;
+        if (!availableSim.length && !item.linkedSimSerial) {
+          panoSimFieldHtml = `<span class="warn-text">ไม่มี SimCard ว่างในสต๊อก (ไม่บังคับ)</span>`;
+        } else {
+          panoSimFieldHtml = `<select class="searchable-select" onchange="updateLinkedSim(${idx}, this.value)">
+            <option value="">-- ไม่เบิก SimCard คู่กัน (ไม่บังคับ) --</option>
+            ${availableSim.map((s) => `<option value="${escapeAttr(String(s[simCfg.serialField]))}" ${String(s[simCfg.serialField]) === item.linkedSimSerial ? "selected" : ""}>${escapeHtml(String(s[simCfg.serialField]))}</option>`).join("")}
+          </select>`;
+        }
+        panoFields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: panoSimFieldHtml, req: false });
+      }
+      panoFields.push({
+        label: "สถานที่เฉพาะจุด (ไม่บังคับ)",
+        html: `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
+          value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">`,
+        req: false,
+      });
+      const panoFieldsHtml = panoFields.map((f) => `
+        <div class="basket-field">
+          <label class="${f.req ? "req" : ""}">${f.label}</label>
+          ${f.html}
+        </div>`).join("");
+      return `
+        <div class="basket-card">
+          <div class="basket-card-head">
+            <div>
+              <div class="basket-card-title">Panolyzer</div>
+              <div class="basket-card-serial">S/N ${escapeHtml(item.serialNo)}</div>
+            </div>
+            <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
+          </div>
+          ${panoFieldsHtml}
         </div>`;
     }
 
@@ -5353,6 +5907,20 @@ async function submitIssuanceRequest() {
     // Phase 8: อะไหล่แบบนับจำนวน (ไม่มี S/N) — ส่ง quantity ไปด้วย ไม่มีเรื่อง Gateway/SimCard คู่กัน
     if (b.quantity !== undefined) {
       items.push({ assetType: b.assetType, serialNo: b.serialNo, quantity: b.quantity, connectTo: "", connectSerial: "" });
+      return;
+    }
+    // Panolyzer: ไม่มี connectTo/connectSerial/รุ่นเกี่ยวข้อง (ดูหมายเหตุ PANOLYZER_KEY หัวไฟล์) — ส่งแค่ serial
+    // + สถานที่เฉพาะจุด (ถ้ามี) แล้วขยาย Gateway/SimCard คู่กัน (ถ้าเลือกไว้) เป็นรายการพี่น้องด้วย logic เดียวกับ
+    // MoisturLyzer ทุกประการ (ดูด้านล่าง — เพิ่ม "Panolyzer" เข้าเงื่อนไขเดิมแทนที่จะก็อปโค้ดซ้ำ)
+    if (b.assetType === "Panolyzer") {
+      const panoLocation = String(b.location || "").trim() || undefined;
+      items.push({ assetType: "Panolyzer", serialNo: b.serialNo, newLocation: panoLocation });
+      if (b.linkedGatewaySerial) {
+        items.push({ assetType: "Gateway", serialNo: b.linkedGatewaySerial, connectTo: "Panolyzer", connectSerial: b.serialNo, newLocation: panoLocation });
+      }
+      if (b.linkedSimSerial) {
+        items.push({ assetType: "SimCard", serialNo: b.linkedSimSerial, connectTo: "Panolyzer", connectSerial: b.serialNo, installedGatewaySerial: b.linkedGatewaySerial, newLocation: panoLocation });
+      }
       return;
     }
     // installedGatewaySerial: แยกต่างหากจาก connectTo/connectSerial (ซึ่งใช้แสดงประวัติ "ใส่ในอุปกรณ์ปลายทางไหน"
@@ -5558,14 +6126,23 @@ function formatConnectColumn(item) {
  * { text, guessed: true } (ค่าที่ระบบเดาให้จากข้อมูลอื่น เช่น ลูกค้า/สถานที่ตรงกัน ยังไม่ได้ยืนยันจริง) —
  * แบบหลังจะได้ badge สีส้มขอบเส้นประ + เครื่องหมาย ? กำกับไว้ให้เห็นชัดว่าต่างจากค่าที่ยืนยันแล้ว */
 function renderLinkedBadge(l) {
-  const guessed = l && typeof l === "object" && l.guessed;
-  const text = guessed ? l.text : l;
-  const title = guessed ? ` title="เดาจากลูกค้า/สถานที่ที่ตรงกัน — ยังไม่ยืนยัน กดปุ่มแก้ไขเพื่อระบุให้ชัดเจน"` : "";
-  return `<span class="badge-linked${guessed ? " badge-guess" : ""}"${title}>${escapeHtml(text)}${guessed ? " ?" : ""}</span>`;
+  const isObj = l && typeof l === "object";
+  const guessed = isObj && l.guessed;
+  const text = isObj ? l.text : l;
+  // ลิงก์คลิกได้เฉพาะรายการที่รู้ viewKey/serial ปลายทางจริงๆ (ไม่ใช่ note ที่พิมพ์เอง หรือ Gateway ที่เชื่อมกับ "Other")
+  const linkable = isObj && l.viewKey && l.serial;
+  const guessTitle = guessed ? "เดาจากลูกค้า/สถานที่ที่ตรงกัน — ยังไม่ยืนยัน กดปุ่มแก้ไขเพื่อระบุให้ชัดเจน" : "";
+  const clickTitle = linkable ? "คลิกเพื่อไปดูรายการนี้" : "";
+  const titleText = guessTitle || clickTitle;
+  const title = titleText ? ` title="${escapeAttr(titleText)}"` : "";
+  const onclick = linkable ? ` onclick="goToLinkedAsset('${escapeAttr(l.viewKey)}', '${escapeAttr(l.serial)}')"` : "";
+  const cls = `badge-linked${guessed ? " badge-guess" : ""}${linkable ? " badge-linkable" : ""}`;
+  return `<span class="${cls}"${title}${onclick}>${escapeHtml(text)}${guessed ? " ?" : ""}</span>`;
 }
 function linkedItemToText(l) {
-  const guessed = l && typeof l === "object" && l.guessed;
-  const text = guessed ? l.text : l;
+  const isObj = l && typeof l === "object";
+  const guessed = isObj && l.guessed;
+  const text = isObj ? l.text : l;
   return guessed ? `${text} (ยังไม่ยืนยัน)` : text;
 }
 
@@ -5574,11 +6151,14 @@ function computeLinkedAccessories(row) {
   const issuedTxnIds = new Set(
     (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "Issued").map((r) => r.TransactionID)
   );
+  // แปลง AssetType (จากประวัติการเบิก) เป็น viewKey ของหน้ารายการที่ตรงกัน เพื่อให้กดคลิกลิงก์ไปหน้านั้นได้เลย
+  const assetTypeToViewKey = { Gateway: "gateway", SimCard: "simcard", MoisturLyzer: "moisturlyzer", Panolyzer: "panolyzer" };
   const fromHistory = (state.data.issuanceItems || [])
     .filter((i) => i.ConnectSerial === serial && issuedTxnIds.has(i.TransactionID))
-    .map((i) => `${i.AssetType} ${i.SerialNo}`);
+    .map((i) => ({ text: `${i.AssetType} ${i.SerialNo}`, viewKey: assetTypeToViewKey[i.AssetType] || null, serial: i.SerialNo }));
   const manual = String(row.Linked_Accessories_Note || "").trim();
-  return manual ? [...fromHistory, manual] : fromHistory;
+  // manual เป็นข้อความที่ Admin พิมพ์เอง ไม่ใช่อุปกรณ์ที่ระบบติดตามจริง — ไม่มี viewKey จึงกดไม่ได้ (ตั้งใจ)
+  return manual ? [...fromHistory, { text: manual }] : fromHistory;
 }
 
 /** หา Gateway ที่ซิมตัวนี้เสียบอยู่จริง "ตอนนี้" — reverse lookup จากฟิลด์ SimCard_SN ที่เก็บไว้บนตัวเอกสาร Gateway
@@ -5591,7 +6171,9 @@ function computeSimInstalledGateway(row) {
   if (!simSerial) return [];
   const gwCfg = VIEW_CONFIG.gateway;
   const gw = (state.data.gateway || []).find((g) => String(g[GATEWAY_SIMCARD_FIELD] || "").trim() === simSerial);
-  return gw ? [String(gw[gwCfg.serialField] || "")] : [];
+  if (!gw) return [];
+  const gwSerial = String(gw[gwCfg.serialField] || "");
+  return gwSerial ? [{ text: gwSerial, viewKey: "gateway", serial: gwSerial }] : [];
 }
 
 /** S/N ของ MoisturLyzer ปลายทางของ Gateway แถวนี้ — ถ้าฟิลด์ "S/N Device" มีค่าอยู่แล้ว (ยืนยันแล้ว ไม่ว่าจะพิมพ์
@@ -5603,7 +6185,15 @@ function computeSimInstalledGateway(row) {
 function computeGatewayLinkedMoisturlyzer(row) {
   const cfg = VIEW_CONFIG.gateway;
   const confirmed = String(row[cfg.deviceSerialField] || "").trim();
-  if (confirmed) return [confirmed];
+  if (confirmed) {
+    // "S/N Device" เป็นฟิลด์ text อิสระใช้ร่วมกันทั้ง MoisturLyzer/Panolyzer — ดู Install_device ถึงจะรู้ว่าเป็น
+    // อุปกรณ์ประเภทไหน จะได้ลิงก์ไปหน้าที่ถูกต้อง ("Other"/ว่าง = ไม่มีปลายทางที่ระบบรู้จัก กดไม่ได้)
+    const connectVal = String(row[cfg.connectField] || "").trim();
+    const viewKey =
+      connectVal === "Panolyzer (L)" || connectVal === "Panolyzer (RT)" ? "panolyzer" :
+      connectVal === LINKABLE_TARGET_ASSET_TYPE ? "moisturlyzer" : null;
+    return [{ text: confirmed, viewKey, serial: confirmed }];
+  }
 
   if (String(row[cfg.connectField] || "").trim() !== LINKABLE_TARGET_ASSET_TYPE) return [];
   const customer = String(row.Customer_name || "").trim();
@@ -5618,7 +6208,7 @@ function computeGatewayLinkedMoisturlyzer(row) {
   );
   if (candidates.length !== 1) return [];
   const serial = String(candidates[0][moistCfg.serialField] || "").trim();
-  return serial ? [{ text: serial, guessed: true }] : [];
+  return serial ? [{ text: serial, viewKey: "moisturlyzer", serial, guessed: true }] : [];
 }
 
 function renderApprovalsView() {

@@ -81,6 +81,9 @@
       <div class="nav-item" data-view="simcard" onclick="switchView('simcard')">
         <span class="nav-icon-chip" style="background:#8B5CF6;"><i class="fas fa-sim-card"></i></span> <span>SimCard</span>
       </div>
+      <div class="nav-item" data-view="panolyzer" onclick="switchView('panolyzer')">
+        <span class="nav-icon-chip" style="background:#EC6BAA;"><i class="fas fa-vial"></i></span> <span>Panolyzer</span>
+      </div>
       <div class="nav-item" data-view="colorSorterParts" onclick="switchView('colorSorterParts')">
         <span class="nav-icon-chip" style="background:#e08e0b;"><i class="fas fa-cogs"></i></span> <span>อะไหล่ Color Sorter</span>
       </div>
@@ -240,6 +243,17 @@
         <button class="btn-sm" onclick="closePartHistoryModal()">✕ ปิด</button>
       </div>
       <div class="image-modal-body" id="partHistoryModalBody" style="text-align:left;"></div>
+    </div>
+  </div>
+
+  <!-- โมดัลดูรายละเอียดอุปกรณ์ครบทุกฟิลด์ (PC เท่านั้น — ปุ่ม "ดูรายละเอียด" ในตาราง) -->
+  <div id="assetDetailModal" class="image-modal-overlay no-print" style="display:none;">
+    <div class="image-modal">
+      <div class="image-modal-head">
+        <h3 id="assetDetailModalTitle">รายละเอียดอุปกรณ์</h3>
+        <button class="btn-sm" onclick="closeAssetDetailModal()">✕ ปิด</button>
+      </div>
+      <div class="image-modal-body" id="assetDetailModalBody" style="text-align:left;"></div>
     </div>
   </div>
 

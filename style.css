@@ -76,12 +76,12 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
   background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 36px 32px; width: 340px; max-width: 90vw;
 }
-.login-logo { width: 56px; height: 56px; display: block; margin: 0 auto 14px; }
+.login-logo { width: 96px; height: 96px; display: block; margin: 0 auto 16px; }
 .login-card h1 {
-  font-size: 15px; color: var(--green); letter-spacing: 1px; margin: 0 0 4px;
+  font-size: 18px; color: var(--green); letter-spacing: 1.2px; margin: 0 0 6px;
   text-transform: uppercase; font-weight: 700; text-align: center;
 }
-.login-card h2 { margin: 0 0 22px; font-size: 20px; color: var(--green-dark); text-align: center; }
+.login-card h2 { margin: 0 0 24px; font-size: 26px; font-weight: 700; color: var(--green-dark); text-align: center; }
 .login-card label { font-size: 13px; color: var(--gray); display: block; margin-bottom: 6px; }
 .login-card input {
   width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
@@ -107,14 +107,16 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
   width: 230px; flex-shrink: 0; background: var(--green-dark); color: #fff;
   display: flex; flex-direction: column; padding: 22px 16px;
 }
-.brand-block { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+/* โลโก้ขนาด "D" (ใหญ่สุด) — สลับเป็นเรียงแนวตั้ง (โลโก้กลาง ชื่อ/แท็กไลน์อยู่ใต้ กึ่งกลาง) แทนแนวนอนเดิม เพราะแถบ
+   เมนูซ้ายกว้างแค่ 230px แนวนอนแบบเดิมจะล้นถ้าโลโก้ใหญ่ขนาดนี้ */
+.brand-block { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; margin-bottom: 26px; }
 .brand-badge {
-  width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.14);
+  width: 90px; height: 90px; border-radius: 50%; background: rgba(255,255,255,.14);
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.brand-badge img { width: 24px; height: 24px; display: block; }
-.brand-name { font-weight: 700; font-size: 18px; line-height: 1.15; letter-spacing: .3px; }
-.brand-tagline { font-size: 10.5px; opacity: .7; margin-top: 2px; }
+.brand-badge img { width: 54px; height: 54px; display: block; }
+.brand-name { font-weight: 700; font-size: 25px; line-height: 1.15; letter-spacing: .5px; }
+.brand-tagline { font-size: 11.5px; opacity: .7; margin-top: 3px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
   color: rgba(255,255,255,.85); cursor: pointer; font-size: 14px; margin-bottom: 4px;
@@ -301,6 +303,9 @@ thead th {
 tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 tbody tr:nth-child(even) { background: var(--green-light); }
 tbody tr:hover { background: #dbe9e0; }
+/* Phase 2 (ดูรายละเอียด): กดที่แถวได้เลยเพื่อเปิดโมดัลดูรายละเอียด — เซลล์ที่มีปุ่ม/ลิงก์ของตัวเอง (จัดการ,
+   ลิงก์ข้ามเมนู) กัน propagation ไว้แล้วในโค้ด JS ไม่ให้ชนกับการเปิดโมดัลนี้ */
+tbody tr.row-clickable { cursor: pointer; }
 
 /* ปักหมุดคอลัมน์ "จัดการ" (คอลัมน์สุดท้าย) ไว้ขวาสุดเสมอ — กันปัญหาตารางกว้างเกินจอแล้วต้องเลื่อนไปสุดขวา
    กว่าจะกดปุ่มแก้ไข/ลบได้ ต้องกำหนดพื้นหลังของเซลล์ปักหมุดเองแยกตามแถวคู่/คี่/hover เพราะ position:sticky
@@ -329,6 +334,14 @@ tbody tr:hover { background: #dbe9e0; }
   padding: 2px 9px; border-radius: 10px;
 }
 .cell-sub { font-size: 11px; color: var(--gray); margin-top: 3px; }
+
+/* Panolyzer — ป้าย "sync ไป Sheet ไม่สำเร็จ" (ดูตัวอย่าง .badge-claim/.badge-writeoff ด้านบน ใช้โทนสีเดียวกับ
+   .basket-field .warn-text ที่มีอยู่แล้วสำหรับข้อความเตือน) พร้อมปุ่ม "ลองใหม่" ขนาดเล็กติดกัน */
+.badge-sync-failed {
+  display: inline-block; background: #fdeceb; color: var(--danger); font-size: 11.5px; font-weight: 600;
+  padding: 2px 9px; border-radius: 10px;
+}
+.sync-retry-btn { margin-left: 6px; }
 
 /* ---------- Phase 2: forms, basket, transaction cards ---------- */
 .form-card {
@@ -798,6 +811,12 @@ tbody tr:hover { background: #dbe9e0; }
    badge-linked ปกติด้วยสีส้ม+ขอบเส้นประ ให้เห็นชัดว่าต่างกัน — ต้องอยู่หลัง .badge-linked ใน cascade เพราะ
    ใช้คู่กันเป็น "badge-linked badge-guess" (specificity เท่ากัน ลำดับประกาศจึงเป็นตัวตัดสิน) */
 .badge-guess { background: #FFF4E5; color: #b25b09; border: 1px dashed #e0ab5c; }
+/* Phase: badge-linkable — คลิกได้ พาไปหน้ารายการของอุปกรณ์ปลายทางแล้วกรองให้เหลือแถวนั้นแถวเดียว (goToLinkedAsset)
+   เดิมใช้สีเดียวกับ .badge-linked (เขียวอ่อน/เขียวเข้ม) ทำให้กลืนกับพื้นหลังแถวคู่ (tbody tr:nth-child(even))
+   ที่เป็นสีเขียวอ่อนเดียวกันพอดี จึงเปลี่ยนมาใช้โทนน้ำเงินแทน ให้ตัดกับสีเขียวของธีมและมองเห็นชัดว่าคลิกได้
+   ทุกพื้นหลัง (ทั้งแถวคู่/แถวคี่) */
+.badge-linkable { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; background: #DCEAFB; color: #1B5FA8; }
+.badge-linkable:hover { opacity: 0.75; }
 .no-wrap { white-space: nowrap; }
 
 /* ---------- Phase 5: โมดัลรหัสผ่านใหม่ ---------- */
@@ -935,13 +954,13 @@ tbody tr:hover { background: #dbe9e0; }
   background: linear-gradient(135deg, var(--green), var(--green-dark));
   color: #fff; padding: 22px 18px 20px; border-radius: 0 0 24px 24px; flex-shrink: 0;
 }
-.mh-brand-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.mh-brand-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .mh-brand-row .mh-brand-badge {
-  width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,.16);
+  width: 62px; height: 62px; border-radius: 50%; background: rgba(255,255,255,.16);
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.mh-brand-row .mh-brand-badge img { width: 15px; height: 15px; display: block; }
-.mh-brand-row .mh-brand-txt { font-size: 13px; font-weight: 700; letter-spacing: .3px; opacity: .95; }
+.mh-brand-row .mh-brand-badge img { width: 40px; height: 40px; display: block; }
+.mh-brand-row .mh-brand-txt { font-size: 21px; font-weight: 700; letter-spacing: .4px; opacity: .95; }
 .mh-header-top { display: flex; justify-content: space-between; align-items: flex-start; }
 .mh-greeting { font-size: 12px; opacity: .85; }
 .mh-username { font-size: 18px; font-weight: 700; margin-top: 2px; }
@@ -1006,6 +1025,7 @@ tbody tr:hover { background: #dbe9e0; }
 .mh-c1 { background: #4F7FE0; } .mh-c2 { background: #17A672; } .mh-c3 { background: #2f6fb0; }
 .mh-c4 { background: #8B5CF6; } .mh-c5 { background: #e08e0b; } .mh-c6 { background: #EC6BAA; }
 .mh-c7 { background: var(--green); } .mh-c8 { background: var(--danger); } .mh-c9 { background: var(--gray); }
+.mh-c10 { background: #0EA5A5; }
 
 .mh-tabbar {
   position: fixed; bottom: 0; left: 0; right: 0; background: #fff; display: flex; padding: 8px 4px calc(10px + env(safe-area-inset-bottom, 0px));
