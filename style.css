@@ -100,12 +100,19 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 }
 
 /* ---------- App shell ---------- */
+/* Phase (ตามคำขอผู้ใช้): แยก scroll ของ sidebar ออกจากเนื้อหาหลัก — เดิม #app-shell สูงแค่ min-height:100vh แล้วปล่อย
+ * ให้หน้าเว็บ (body) ยืดสูงเกิน viewport เองเวลาข้อมูลเยอะ ทำให้ sidebar เลื่อนตามเนื้อหาไปด้วย (เพราะเป็นแค่ flex
+ * item ธรรมดา ไม่ได้ fixed อยู่กับที่) ตอนนี้ให้ #app-shell สูงเท่า viewport เป๊ะ (height:100vh) แล้วให้ .main เป็น
+ * ตัวเดียวที่ scroll เอง (overflow-y:auto) ส่วน sidebar จะ "ล็อค" อยู่กับที่เสมอไม่ขยับตาม — เฉพาะจอเดสก์ท็อป
+ * (>760px) เท่านั้น จอมือถือยังคง scroll ทั้งหน้าปกติเหมือนเดิม (ดู @media (max-width:760px) ด้านล่างที่ override
+ * กลับ) เพราะมือถือซ่อน sidebar อยู่แล้วและผู้ใช้คาดหวัง native scroll ทั้งจอตามปกติ */
 #app-shell { display: none; }
-#app-shell.visible { display: flex; min-height: 100vh; }
+#app-shell.visible { display: flex; height: 100vh; overflow: hidden; }
 
 .sidebar {
   width: 230px; flex-shrink: 0; background: var(--green-dark); color: #fff;
   display: flex; flex-direction: column; padding: 22px 16px;
+  height: 100vh; overflow-y: auto;
 }
 /* โลโก้ขนาด "D" (ใหญ่สุด) — สลับเป็นเรียงแนวตั้ง (โลโก้กลาง ชื่อ/แท็กไลน์อยู่ใต้ กึ่งกลาง) แทนแนวนอนเดิม เพราะแถบ
    เมนูซ้ายกว้างแค่ 230px แนวนอนแบบเดิมจะล้นถ้าโลโก้ใหญ่ขนาดนี้ */
@@ -162,6 +169,7 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 
 .main {
   flex: 1; padding: 26px 30px; overflow-x: hidden;
+  height: 100vh; overflow-y: auto;
 }
 .main-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
 .main-header h2 { margin: 0; color: var(--green-dark); font-size: 21px; }
@@ -180,7 +188,15 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .kpi-card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .kpi-icon-badge {
   width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0; color: #fff; font-size: 17px;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+/* Phase (ตามคำขอผู้ใช้): จุดแจ้งเตือน "ใกล้หมด" มุมขวาบนของไอคอนหมวด — แทนที่ป้ายข้อความเดิมที่หลุดกรอบการ์ดตอนชื่อ
+ * หมวดยาว/การ์ดแคบ (เช่น "อะไหล่ Color Sorter") ใช้เลขจำนวนรายการ/รุ่นที่ใกล้หมดในการ์ดนั้น ไม่กินพื้นที่แถวหัวข้อ
+ * เลย ใช้ร่วมกันทั้งการ์ดอะไหล่และการ์ด Gateway ให้ดูเหมือนกันทั้งแอป (ผู้ใช้เลือกแบบนี้จาก 3 แบบที่ทำ preview ให้ดู) */
+.icon-badge-dot {
+  position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 999px; background: var(--warning); color: #fff; font-size: 9.5px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-sizing: content-box;
 }
 .kpi-card-title-plain { font-size: 14px; font-weight: 700; color: var(--green-dark); flex: 1; min-width: 0; }
 .kpi-card-title-plain.with-count { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -203,10 +219,25 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .kpi-stat-value.danger { color: var(--danger); }
 .kpi-stat-sub { font-size: 11px; color: var(--gray); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
 
+/* Phase: แยกยอดคงคลัง Gateway ตามรุ่น (EPG-001B/EPG-001S) ในการ์ด Dashboard — preview ให้ผู้ใช้ดูก่อนแล้วอนุมัติ
+ * ตามที่ขอ (ดู computeGatewayModelBreakdown ใน script.js) ใช้สีเตือน --warning เดียวกับจุดอื่นในระบบเมื่อรุ่นไหน
+ * เหลือน้อยกว่าเกณฑ์ "ใกล้หมด" (LOW_STOCK_THRESHOLD) ให้ความหมายของคำเตือนตรงกันทั้งแอป */
+.kpi-model-split { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 10px; }
+.kpi-model-row { display: flex; flex-direction: column; gap: 5px; }
+.kpi-model-row.is-low { background: #FBEFE6; margin: 0 -10px; padding: 7px 10px; border-radius: 8px; }
+.kpi-model-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kpi-model-name { font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kpi-model-name small { font-size: 10.5px; font-weight: 500; color: var(--gray); }
+.kpi-model-nums { font-size: 11.5px; color: var(--gray); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi-model-nums b { color: var(--green-dark); font-size: 13px; }
+.kpi-model-nums b.stock-num { color: var(--warning); }
+.kpi-model-bar { width: 100%; height: 5px; border-radius: 3px; background: var(--sub2, #D2DCD8); overflow: hidden; }
+.kpi-model-bar span { display: block; height: 100%; border-radius: 3px; }
+
 /* Phase 17: การ์ดอะไหล่บน Dashboard — แสดงรายชื่ออะไหล่ทุกชื่อในการ์ดเดียว (แทนตัวเลขรวมก้อนเดียว) */
 .parts-count-pill { font-size: 11px; font-weight: 700; color: var(--green); background: var(--green-light); padding: 2px 9px; border-radius: 999px; flex-shrink: 0; }
 .parts-list { max-height: 260px; overflow-y: auto; margin: 2px -20px -6px; padding: 0 20px; }
-.part-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.part-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
 .part-row:last-child { border-bottom: none; }
 .part-name { flex: 1; min-width: 0; }
 .part-name-text { font-size: 13px; color: var(--green-dark); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
@@ -216,6 +247,11 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .part-stock-num.low { color: var(--danger); }
 .part-stock-sub { font-size: 10.5px; color: var(--gray); }
 .parts-empty-note { font-size: 12px; color: var(--gray); padding: 10px 0; }
+
+/* Phase (ตามคำขอผู้ใช้): หลอดสัดส่วนต่อแถวอะไหล่ (ดูคำอธิบายความหมายหลอดที่ partRowBarPct ใน script.js) — ป้าย
+ * "ใกล้หมด" ของหัวการ์ดย้ายไปเป็นจุดแจ้งเตือนมุมไอคอนแทนแล้ว (ดู .icon-badge-dot ด้านบน) */
+.part-row-bar { width: 100%; height: 5px; border-radius: 3px; background: var(--sub2, #D2DCD8); overflow: hidden; order: 3; }
+.part-row-bar span { display: block; height: 100%; border-radius: 3px; }
 
 .lowstock-strip {
   display: flex; align-items: flex-start; gap: 12px; background: #FFF4E5; border: 1px solid #F3D9A8;
@@ -589,9 +625,11 @@ tbody tr.row-clickable { cursor: pointer; }
 /* จอมือถือจริง (ตรงกับเกณฑ์ isMobileViewport() ฝั่ง JS) — ซ่อนเมนูด้านข้างทั้งหมด ใช้แถบเมนูด้านล่างแบบถาวรแทน
    (เดิมแปลงเป็นแถบไอคอนแนวนอนด้านบน แต่ซ้ำซ้อนกับแถบเมนูด้านล่างและต้องเลื่อนซ้าย-ขวา จึงตัดออก) */
 @media (max-width: 760px) {
-  #app-shell.visible { flex-direction: column; }
+  /* มือถือซ่อน sidebar อยู่แล้ว — ยกเลิก layout "ล็อค sidebar/scroll เฉพาะ .main" ของเดสก์ท็อป กลับไปใช้ scroll
+     ทั้งหน้าแบบ native ตามปกติ (คาดหวังบนมือถือ ต่างจากเดสก์ท็อปที่อยากล็อค sidebar ไว้กับที่) */
+  #app-shell.visible { flex-direction: column; height: auto; overflow: visible; }
   .sidebar { display: none; }
-  .main { padding-bottom: 90px; } /* กันเนื้อหาถูกแถบเมนูด้านล่างบัง */
+  .main { height: auto; overflow-y: visible; padding-bottom: 90px; } /* กันเนื้อหาถูกแถบเมนูด้านล่างบัง */
 
   /* กัน iOS Safari ซูมจอเองอัตโนมัติตอนแตะช่อง input (เกิดเมื่อ font-size < 16px) */
   input, select, textarea {
@@ -980,6 +1018,98 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
   font-size: 13px; color: var(--text); padding: 10px 14px; min-height: 20px;
   border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
   font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+
+/* ---------- Phase: จัดฟอร์ม "ใบเบิกอุปกรณ์" ใหม่สำหรับพิมพ์ (ตามที่ผู้ใช้ขอ — ดูสวยงามเป็นทางการขึ้น) ----------
+ * ใช้เฉพาะ printIssuanceSlip() เท่านั้น — ไม่แตะ .formal-doc/.formal-header/.formal-toprow/.formal-docinfo เดิม
+ * ด้านบนเลย เพราะ printTransferSlip()/printClaimSlip() (ใบย้าย/ใบเคลม) ยังใช้คลาสชุดเดิมอยู่ กันไม่ให้กระทบ
+ * ฟอร์มพิมพ์อื่นโดยไม่ตั้งใจ ถ้าจะเอาไปใช้กับใบย้าย/ใบเคลมด้วยค่อยว่ากันทีหลัง */
+.formal-doc2 {
+  position: relative;
+  font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif;
+  color: var(--text);
+}
+.formal-letterhead {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;
+  padding-bottom: 16px; margin-bottom: 22px; border-bottom: 2.5px solid var(--green);
+}
+/* Phase: แก้บั๊ก "ที่อยู่/ชื่อบริษัทตัดคำเพี้ยน" ตอนพิมพ์จริง — สาเหตุเดิมคือให้โลโก้กับคอลัมน์ข้อความอยู่แถว
+ * เดียวกันทั้งหมด (โลโก้กว้างมากเพราะเป็น wordmark แนวนอน) ทำให้คอลัมน์ข้อความเหลือพื้นที่แคบมากตอนพิมพ์จริง
+ * (กระดาษ A4 หักขอบเหลือ ~673px และต้องแบ่งพื้นที่กับกล่องเลขที่เอกสารด้านขวาอีก) ภาษาไทยไม่มีช่องว่างระหว่างคำ
+ * เบราว์เซอร์เลยตัดคำกลางพยางค์ดูเพี้ยน — แก้โดยลดขนาดโลโก้ลง และแยกที่อยู่ออกมาเป็นบรรทัดเต็มความกว้างของ
+ * .formal-brand ต่างหาก (ไม่ต้องแบ่งพื้นที่กับโลโก้อีกต่อไป) ให้มีที่พอสำหรับขึ้นบรรทัดที่คำ ไม่ใช่กลางพยางค์ */
+.formal-brand { display: flex; flex-direction: column; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.formal-brand-top { display: flex; align-items: center; gap: 10px; }
+.formal-brand .formal-logo { height: 28px; width: auto; object-fit: contain; flex-shrink: 0; }
+.formal-brand .formal-company { text-align: left; min-width: 0; }
+.formal-brand .formal-company-name { font-size: 15px; font-weight: 700; color: var(--green); line-height: 1.3; }
+.formal-brand .formal-company-sub { font-size: 9px; color: var(--gray); letter-spacing: .06em; text-transform: uppercase; margin-top: 1px; }
+.formal-brand .formal-company-addr { font-size: 10.5px; color: var(--gray); line-height: 1.6; max-width: none; }
+
+.formal-docbox { text-align: right; flex-shrink: 0; }
+.formal-docbox-title { font-size: 16px; font-weight: 700; color: var(--text); }
+.formal-docbox-title-en { display: block; font-size: 9.5px; font-weight: 400; color: var(--gray); text-transform: uppercase; letter-spacing: .08em; margin: 2px 0 10px; }
+.formal-docbox table { margin-left: auto; border-collapse: collapse; font-size: 11px; }
+.formal-docbox th, .formal-docbox td { padding: 5px 11px; border: 1px solid var(--border); text-align: left; }
+.formal-docbox th { background: var(--green-light); color: var(--gray); font-weight: 700; white-space: nowrap; }
+.formal-docbox td { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+
+.formal-infogrid {
+  display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; margin-bottom: 22px;
+}
+.formal-infocell { padding: 11px 18px; border-left: 1px solid var(--border); background: var(--green-light); }
+.formal-infocell:first-child { border-left: none; }
+.formal-infolabel { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--gray); font-weight: 700; margin-bottom: 4px; }
+.formal-infovalue { font-size: 14px; font-weight: 700; color: var(--text); }
+
+.slip-table-wrap { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 8px; }
+.slip-table2 { width: 100%; border-collapse: collapse; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.slip-table2 th { background: var(--green); color: #fff; font-weight: 600; font-size: 12px; text-align: left; padding: 10px 14px; text-transform: uppercase; letter-spacing: .03em; }
+.slip-table2 td { padding: 11px 14px; font-size: 13.5px; border-top: 1px solid var(--border); }
+.slip-table2 tbody tr:nth-child(even) { background: var(--green-light); }
+.slip-table2 th:first-child, .slip-table2 td:first-child { text-align: center; width: 6%; color: var(--gray); }
+.slip-table2 th:last-child, .slip-table2 td:last-child { text-align: center; width: 14%; font-weight: 700; }
+.slip-table-summary2 { text-align: right; font-size: 11.5px; color: var(--gray); margin: 8px 2px 24px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+
+.formal-remark-box2 {
+  border: 1px dashed var(--border); border-radius: 8px; padding: 11px 16px; margin-bottom: 30px;
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+.formal-remark-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--gray); font-weight: 700; margin-bottom: 4px; }
+.formal-remark-text { font-size: 13px; color: var(--text); min-height: 16px; }
+
+.signature-row-3b { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
+.signature-box2 {
+  flex: 1; text-align: center; border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 12px 16px; font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+.signature-role2 { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--green-dark); font-weight: 700; margin-bottom: 22px; }
+.signature-name2 { font-size: 13px; font-weight: 700; color: var(--text); min-height: 17px; }
+.signature-delegated-note { font-size: 9.5px; color: var(--gray); font-style: italic; margin-top: 2px; }
+.signature-line2 { border-top: 1px dashed var(--border); margin: 18px 0 8px; }
+.signature-date2 { font-size: 10.5px; color: var(--gray); }
+
+.formal-footer {
+  border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px;
+  display: flex; justify-content: space-between; font-size: 9.5px; color: var(--gray);
+  font-family: "Segoe UI", "Sarabun", Tahoma, sans-serif;
+}
+/* สำคัญ: ต้องใช้ "screen and" กำกับไว้เสมอ — ถ้าเป็น (max-width:700px) เฉยๆ กติกานี้จะไปโดนใช้ตอนพิมพ์จริงด้วย
+   เพราะพื้นที่กระดาษ A4 หลังหักระยะขอบ (@page margin 15mm/16mm) เหลือกว้างแค่ ~673px ซึ่งน้อยกว่า 700px ทำให้
+   หัวกระดาษ/กล่องข้อมูล/กล่องลายเซ็นที่ควรเรียงแนวนอนบนกระดาษ พังกลับไปเรียงแนวตั้งแบบมือถือโดยไม่ตั้งใจ
+   (ตรวจพบตอนเรนเดอร์ PDF จริงทดสอบ — ใบเบิกจริงจะเพี้ยนถ้าไม่ใส่ "screen and" ตรงนี้) */
+@media screen and (max-width: 700px) {
+  .formal-letterhead { flex-direction: column; }
+  .formal-docbox { text-align: left; }
+  .formal-docbox table { margin-left: 0; }
+  .formal-infogrid { grid-template-columns: 1fr; }
+  .formal-infocell { border-left: none; border-top: 1px solid var(--border); }
+  .formal-infocell:first-child { border-top: none; }
+  .signature-row-3b { flex-direction: column; }
+}
+@media print {
+  @page { size: A4; margin: 15mm 16mm; }
 }
 
 /* ---------- ใบย้าย/ใบเคลม — ฟอร์มพิมพ์แยกเฉพาะ ออกแบบใหม่ไม่ใช้โครงใบเบิกเดิม (Phase: ย้าย/เคลม) ---------- */

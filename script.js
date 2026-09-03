@@ -40,7 +40,7 @@ let state = {
 };
 
 // ตะกร้าเบิกที่กำลังกรอกอยู่ (อยู่ใน memory เท่านั้น ไม่ persist — เคลียร์เมื่อส่งสำเร็จ)
-let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
+let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
 
 // Phase 5: เลขที่ธุรกรรมที่เลือกไว้สำหรับดำเนินการแบบกลุ่ม (bulk) ในหน้าอนุมัติ/ประวัติ — เคลียร์ทุกครั้งที่เปลี่ยนหน้า
 let bulkSelection = new Set();
@@ -528,7 +528,7 @@ function logout() {
     offlineQueue: loadOfflineQueue(), charts: {},
     mobileHomeVisible: true,
   };
-  issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
+  issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
   document.getElementById("login-username").value = "";
   document.getElementById("login-password").value = "";
   showLogin();
@@ -931,7 +931,16 @@ function translateIssuanceLog(doc) {
     // ฟีเจอร์ "ยกเลิกรายการ" — Admin ยกเลิกรายการที่ทำไปแล้ว (เบิก/ย้าย/เคลม) ระบบคืน status ให้อุปกรณ์อัตโนมัติ
     CancelledBy: d.cancelledBy || "",
     CancelledAt: d.cancelledAt || "",
+    // ฟีเจอร์ "เลือกผู้เบิกแทน" — Admin สามารถระบุว่าเบิก/ย้าย/เคลมแทนพนักงานคนอื่นได้ IssuedBy = ชื่อผู้เบิกที่แสดงผลจริง
+    // (คนที่ถูกเลือก) ส่วน SubmittedBy = ชื่อคนที่ล็อกอินและกดส่งจริง ใช้แสดง note "ดำเนินการแทนโดย..." เท่านั้น
+    SubmittedBy: d.submittedBy || "",
   };
+}
+
+/** สร้างข้อความ "ดำเนินการแทนโดย..." เมื่อผู้ส่งจริง (SubmittedBy) ไม่ใช่คนเดียวกับผู้เบิกที่เลือก (IssuedBy) */
+function delegatedByText(txn) {
+  if (!txn || !txn.SubmittedBy || txn.SubmittedBy === txn.IssuedBy) return "";
+  return `ดำเนินการแทนโดย ${txn.SubmittedBy}`;
 }
 
 function translateIssuanceItem(doc) {
@@ -1217,6 +1226,12 @@ function goToLinkedAsset(viewKey, serial) {
 let _lastRenderedView = null;
 function renderCurrentView() {
   const isSameViewRefresh = _lastRenderedView === state.currentView;
+  // Phase (ตามคำขอผู้ใช้ — ล็อค sidebar ไม่ให้เลื่อนตาม เลื่อนเฉพาะฝั่ง .main): เดิมหน้าเว็บทั้งหน้า (body) เป็นตัว
+  // scroll เอง จึงจำตำแหน่งด้วย window.scrollY — ตอนนี้ .main เป็นคอนเทนเนอร์เดียวที่ scroll เอง (บนเดสก์ท็อป)
+  // window.scrollY จะค้างที่ 0 เสมอ ต้องจำ/คืนค่า .main.scrollTop แทน — มือถือยังคง scroll ทั้งหน้าตามปกติ (ดู
+  // @media (max-width:760px) ใน style.css) จึงจำ window.scrollY ไว้เป็นค่าสำรองด้วยเผื่อกรณีนั้น
+  const mainEl = document.querySelector(".main");
+  const mainScrollTop = isSameViewRefresh && mainEl ? mainEl.scrollTop : null;
   const pageScrollY = isSameViewRefresh ? window.scrollY : null;
   const prevTableScroll = isSameViewRefresh ? document.querySelector(".table-scroll") : null;
   const tableScrollTop = prevTableScroll ? prevTableScroll.scrollTop : null;
@@ -1228,6 +1243,8 @@ function renderCurrentView() {
     const newTableScroll = document.querySelector(".table-scroll");
     if (newTableScroll) newTableScroll.scrollTop = tableScrollTop;
   }
+  const newMainEl = document.querySelector(".main");
+  if (mainScrollTop !== null && newMainEl) newMainEl.scrollTop = mainScrollTop;
   if (pageScrollY !== null) window.scrollTo(window.scrollX, pageScrollY);
 }
 
@@ -1328,6 +1345,26 @@ function computeSummary(rows, cfg) {
   return { total, stock, used, activated, notActivated, activatedUsed, stockPendingActivate };
 }
 
+/** Phase: แยกยอดคงคลัง Gateway ตามรุ่น (EPG-001B ใช้กับ MoisturLyzer / EPG-001S ใช้กับ Panolyzer) สำหรับการ์ด
+ * Dashboard — ผู้ใช้ขอเพราะสองรุ่นสั่งซื้อจากคนละแหล่ง/ใช้กับอุปกรณ์คนละชนิด ยอดรวมเดียวไม่พอให้ Admin รู้ว่ารุ่น
+ * ไหนใกล้หมดจนต้องรีบสั่งเพิ่ม ใช้เกณฑ์ "ใกล้หมด" เดียวกับ LOW_STOCK_THRESHOLD ที่ระบบใช้กับอะไหล่หมวดอื่นอยู่แล้ว
+ * เพื่อให้ความหมายของคำว่า "ใกล้หมด" ตรงกันทั้งแอป ไม่ใช่เลขคนละมาตรฐาน */
+const GATEWAY_MODEL_BREAKDOWN_META = [
+  { model: GATEWAY_MODEL_MOISTURLYZER, label: "EPG-001B", sub: "ใช้กับ MoisturLyzer" },
+  { model: GATEWAY_MODEL_PANOLYZER, label: "EPG-001S", sub: "ใช้กับ Panolyzer" },
+];
+function computeGatewayModelBreakdown(rows) {
+  const cfg = VIEW_CONFIG.gateway;
+  return GATEWAY_MODEL_BREAKDOWN_META.map((meta) => {
+    const modelRows = rows.filter((r) => normalizeGatewayModel(r[GATEWAY_MODEL_FIELD]) === meta.model);
+    const total = modelRows.length;
+    const stock = modelRows.filter((r) => isPhysicalStockRow(r, cfg.stockField)).length;
+    const used = total - stock;
+    const isLow = total > 0 && stock <= LOW_STOCK_THRESHOLD;
+    return { ...meta, total, stock, used, isLow };
+  }).filter((m) => m.total > 0); // ไม่โชว์รุ่นที่ยังไม่เคยมีในระบบเลย (total = 0) กันการ์ดรกเปล่าๆ
+}
+
 // สีประจำแต่ละหมวดอุปกรณ์บนหน้า Dashboard มือถือ — ใช้สีเดียวกับไอคอนหน้าแรกมือถือ (mh-c2..mh-c6) เพื่อให้สื่อความหมายตรงกันทั้งแอป
 // หมายเหตุ (ข้อควรระวังจากผู้ใช้): ไอคอน/สีของแต่ละหมวดในตารางนี้ต้อง "เหมือนกันทุกจุด" ทั้งเดสก์ท็อปและมือถือ
 // เสมอ (ใช้สื่อสารกันในทีมด้วย) — ห้ามไปกำหนดไอคอนแยกซ้ำที่อื่นแล้วให้ค่าไม่ตรงกับตารางนี้ ทุกจุดที่ต้องโชว์
@@ -1370,20 +1407,35 @@ function computePartsBreakdown(viewKey) {
   return [...qtyItems, ...serialItems].sort((a, b) => a.stock - b.stock);
 }
 
-/** สร้าง HTML ของรายการอะไหล่ทุกชื่อในหมวดหนึ่ง สำหรับใส่ในการ์ด Dashboard (แทนตัวเลขรวมก้อนเดียว) */
-function partsBreakdownListHtml(items) {
+// Phase (ตามคำขอผู้ใช้ "ทำให้มีหลอดแบบ gateway"): หลอดสัดส่วนต่อแถวอะไหล่ — ตั้งใจไม่ใช้สูตรเดียวกับ Gateway ตรงๆ
+// (stock/total ที่เคยเบิกทั้งหมด) เพราะอะไหล่บางชื่อมียอดรวมน้อยมาก (เช่น 2 ชิ้น ยังไม่เคยเบิกเลย) จะทำให้หลอดเต็ม
+// 100% ทั้งที่ใกล้หมดจริง ขัดกับตัวเลข/ป้ายเตือนสีแดงข้างๆ กัน — ใช้ "ระดับสต็อกเทียบเกณฑ์ใกล้หมด" แทน (เต็มหลอด
+// เมื่อมีของ ≥ 3 เท่าของเกณฑ์ใกล้หมด แล้วค่อยๆ สั้นลงเมื่อของเหลือน้อย) ผู้ใช้ดู preview แล้วอนุมัติแนวทางนี้ก่อนทำจริง
+const PART_ROW_BAR_HEALTHY_MULTIPLIER = 3;
+function partRowBarPct(stock) {
+  const cap = LOW_STOCK_THRESHOLD * PART_ROW_BAR_HEALTHY_MULTIPLIER;
+  return cap > 0 ? Math.max(0, Math.min(100, Math.round((stock / cap) * 100))) : 0;
+}
+
+/** สร้าง HTML ของรายการอะไหล่ทุกชื่อในหมวดหนึ่ง สำหรับใส่ในการ์ด Dashboard (แทนตัวเลขรวมก้อนเดียว)
+ * accentColor = สีหลักของการ์ด (ใช้ระบายหลอดตอนสต็อกยังปกติ — ไม่ใกล้หมด) */
+function partsBreakdownListHtml(items, accentColor) {
   if (!items.length) return `<div class="parts-empty-note">ยังไม่มีอะไหล่ในหมวดนี้</div>`;
-  return `<div class="parts-list">${items.map((p) => `
+  return `<div class="parts-list">${items.map((p) => {
+    const isLow = p.stock <= LOW_STOCK_THRESHOLD;
+    return `
     <div class="part-row">
       <div class="part-name">
         <span class="part-name-text">${escapeHtml(p.name)}</span>
         <span class="part-type-tag">${p.type === "serial" ? "มี S/N" : "นับจำนวน"}</span>
       </div>
       <div class="part-stock">
-        <span class="part-stock-num ${p.stock <= LOW_STOCK_THRESHOLD ? "low" : ""}">${p.stock}</span>
+        <span class="part-stock-num ${isLow ? "low" : ""}">${p.stock}</span>
         <div class="part-stock-sub">${p.type === "serial" ? "คงเหลือ · เบิกแล้ว " + p.used : "คงเหลือ"}</div>
       </div>
-    </div>`).join("")}</div>`;
+      <div class="part-row-bar"><span style="width:${partRowBarPct(p.stock)}%; background:${isLow ? "var(--danger)" : accentColor}"></span></div>
+    </div>`;
+  }).join("")}</div>`;
 }
 
 /** นับจำนวนธุรกรรมที่ "เบิกแล้ว/คืนแล้ว" (นับเป็นการเบิกจริง) ในเดือนปัจจุบันเทียบกับเดือนก่อนหน้า */
@@ -1520,15 +1572,23 @@ function renderDashboard() {
     // ใช้ร่วมกันทั้ง 2 จอ — ผู้ใช้ย้ำว่าไอคอน PC/มือถือต้องตรงกันเพราะใช้สื่อสารกันในทีมด้วย)
     const meta = DASHBOARD_CATEGORY_META[cfg.key] || { icon: "fa-box", color: "#3F654D" };
     const cardTitle = escapeHtml(cfg.title.replace(" (มี S/N)", ""));
-    const cardHead = `<div class="kpi-card-top"><div class="kpi-icon-badge" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div><div class="kpi-card-title-plain${PART_CATEGORY_BY_VIEW[cfg.key] ? " with-count" : ""}">${PART_CATEGORY_BY_VIEW[cfg.key] ? `<span>${cardTitle}</span>` : cardTitle}`;
+    // Phase (ตามคำขอผู้ใช้ — ทดลองใส่เป็นข้อความ "N ใกล้หมด" ก่อนแล้วพบว่าหลุดกรอบการ์ดตอนชื่อหมวดยาว/การ์ดแคบ
+    // เช่น "อะไหล่ Color Sorter" ที่ขึ้น 2 บรรทัด — ดู preview 3 แบบที่ผู้ใช้เลือกแบบ "จุดแจ้งเตือนมุมไอคอน" ในที่สุด):
+    // จุดกลมเล็กๆ มุมขวาบนของไอคอนหมวด แสดงจำนวนรายการที่ใกล้หมดในการ์ดนั้น ไม่กินพื้นที่แถวหัวข้อเลยไม่ว่าชื่อจะยาว
+    // แค่ไหน ใช้ร่วมกันทั้งการ์ดอะไหล่ (นับรายชื่ออะไหล่ใกล้หมด) และการ์ด Gateway (นับรุ่นที่ใกล้หมด) ให้ดูเหมือนกันทั้งแอป
+    const buildCardHead = (dotCount) => {
+      const dotHtml = dotCount > 0 ? `<span class="icon-badge-dot">${dotCount}</span>` : "";
+      return `<div class="kpi-card-top"><div class="kpi-icon-badge" style="background:${meta.color}"><i class="fas ${meta.icon}"></i>${dotHtml}</div><div class="kpi-card-title-plain${PART_CATEGORY_BY_VIEW[cfg.key] ? " with-count" : ""}">${PART_CATEGORY_BY_VIEW[cfg.key] ? `<span>${cardTitle}</span>` : cardTitle}`;
+    };
 
     // Phase 17: หมวดอะไหล่ (Color Sorter / Panolyzer) — แสดงรายชื่ออะไหล่ทุกชื่อในการ์ด แทนตัวเลขรวมก้อนเดียว
     if (PART_CATEGORY_BY_VIEW[cfg.key]) {
       const items = computePartsBreakdown(cfg.key);
+      const lowCount = items.filter((p) => p.stock <= LOW_STOCK_THRESHOLD).length;
       html += `
       <div class="kpi-card" style="--kpi-accent:${meta.color}">
-        ${cardHead}<span class="parts-count-pill">${items.length} รายชื่อ</span></div></div>
-        ${partsBreakdownListHtml(items)}
+        ${buildCardHead(lowCount)}<span class="parts-count-pill">${items.length} รายชื่อ</span></div></div>
+        ${partsBreakdownListHtml(items, meta.color)}
       </div>`;
       return;
     }
@@ -1538,7 +1598,7 @@ function renderDashboard() {
       const stockReady = summary.stock - summary.stockPendingActivate;
       html += `
       <div class="kpi-card" style="--kpi-accent:${meta.color}">
-        ${cardHead}</div></div>
+        ${buildCardHead(0)}</div></div>
         <div class="kpi-num">${summary.total} <small>ทั้งหมด</small></div>
         <div class="kpi-stat-row">
           <span class="kpi-stat-dot dot-info"></span>
@@ -1561,15 +1621,34 @@ function renderDashboard() {
     // การ์ดปกติ (MoisturLyzer/Gateway/Panolyzer) — เพิ่มแถบ "อัตราใช้งาน" (สัดส่วน Stock เทียบเบิกแล้ว) แทน
     // แถวตัวเลขล้วนๆ เดิม ให้เห็นสัดส่วนได้ในสายตาแรกโดยไม่ต้องอ่านตัวเลข 2 บรรทัดเทียบกันเอง
     const utilPct = summary.total > 0 ? Math.round((summary.stock / summary.total) * 100) : 0;
+    // Phase: การ์ด Gateway โดยเฉพาะ — เพิ่มแยกยอดคงคลังตามรุ่น (EPG-001B/EPG-001S) ต่อท้ายยอดรวม เพราะสองรุ่นนี้
+    // ใช้กับอุปกรณ์คนละชนิดและสั่งซื้อแยกกัน ยอดรวมเดียวไม่พอให้ Admin รู้ว่ารุ่นไหนใกล้หมดจนต้องรีบสั่งเพิ่ม
+    // (ดู computeGatewayModelBreakdown ด้านบน — preview ให้ผู้ใช้ดูก่อนแล้วจึงลงมือทำจริงตามที่ขอ)
+    const gatewayModels = cfg.key === "gateway" ? computeGatewayModelBreakdown(state.data.gateway || []) : [];
+    const lowModelCount = gatewayModels.filter((m) => m.isLow).length;
+    const modelBreakdownHtml = gatewayModels.length
+      ? `
+        <div class="kpi-model-split">
+          ${gatewayModels.map((m) => `
+          <div class="kpi-model-row${m.isLow ? " is-low" : ""}">
+            <div class="kpi-model-head">
+              <span class="kpi-model-name">${escapeHtml(m.label)} <small>${escapeHtml(m.sub)}</small></span>
+              <span class="kpi-model-nums"><b${m.isLow ? ` class="stock-num"` : ""}>${m.stock}</b> ในคลัง</span>
+            </div>
+            <div class="kpi-model-bar"><span style="width:${m.total > 0 ? Math.round((m.stock / m.total) * 100) : 0}%; background:${m.isLow ? "#e08e0b" : meta.color}"></span></div>
+          </div>`).join("")}
+        </div>`
+      : "";
     html += `
       <div class="kpi-card" style="--kpi-accent:${meta.color}">
-        ${cardHead}</div></div>
+        ${buildCardHead(lowModelCount)}</div></div>
         <div class="kpi-num">${summary.total} <small>ทั้งหมด</small></div>
         <div class="kpi-util-bar"><span style="width:${utilPct}%; background:${meta.color}"></span></div>
         <div class="kpi-util-legend">
           <span><i class="kpi-dot" style="background:${meta.color}"></i>ในคลัง ${summary.stock}</span>
           <span><i class="kpi-dot" style="background:var(--sub2, #D2DCD8)"></i>เบิกแล้ว ${summary.used}</span>
         </div>
+        ${modelBreakdownHtml}
         ${summary.activated !== null ? `<div class="kpi-stat-sub">เปิดใช้งานแล้ว (Activated): ${summary.activated}</div>` : ""}
       </div>`;
   });
@@ -2267,11 +2346,13 @@ function buildIssuanceSlipTable(items) {
   }).join("");
 
   return `
-    <table class="slip-table">
-      <colgroup>${colgroup}</colgroup>
-      <thead><tr>${thead}</tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <div class="slip-table-wrap">
+      <table class="slip-table2">
+        <colgroup>${colgroup}</colgroup>
+        <thead><tr>${thead}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -2281,54 +2362,79 @@ function printIssuanceSlip(transactionId) {
   const items = getItemsForTransaction(transactionId);
   const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว", Cancelled: "ยกเลิกแล้ว" };
 
+  // Phase: จัดฟอร์มใบเบิกใหม่สำหรับพิมพ์ (ตามที่ผู้ใช้ขอ) — ใช้คลาสชุดใหม่ .formal-doc2/.formal-letterhead/ฯลฯ
+  // (ดูคอมเมนต์อธิบายที่ style.css) เฉพาะใบเบิกเท่านั้น ใบย้าย/ใบเคลม (printTransferSlip/printClaimSlip) ยังใช้
+  // โครงเดิม (.formal-doc/.formal-header) อยู่ ไม่ได้แก้ไปด้วยในรอบนี้
+  const printedAt = formatDateTh(new Date().toISOString());
   const html = `
-    <div class="print-slip report-doc formal-doc">
-      <div class="formal-page-tag">C2-LOOP</div>
-      <div class="formal-header">
-        <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
-        <div class="formal-company">
-          <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
-          <div class="formal-company-sub">C2 Tech Company Limited</div>
-          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999, 064-654-5636</div>
+    <div class="print-slip report-doc formal-doc2">
+
+      <div class="formal-letterhead">
+        <div class="formal-brand">
+          <div class="formal-brand-top">
+            <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
+            <div class="formal-company">
+              <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
+              <div class="formal-company-sub">C2 Tech Company Limited</div>
+            </div>
+          </div>
+          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · <span style="white-space:nowrap">063-929-1999</span>, <span style="white-space:nowrap">064-654-5636</span></div>
+        </div>
+        <div class="formal-docbox">
+          <div class="formal-docbox-title">ใบเบิกอุปกรณ์</div>
+          <span class="formal-docbox-title-en">Equipment Issuance Form</span>
+          <table>
+            <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
+            <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
+            <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}${txn.IssuanceType === "ยืม" ? ` <span class="status-badge status-loan" style="margin-left:6px;">ยืม</span>` : ""}</td></tr>
+          </table>
         </div>
       </div>
-      <div class="formal-doctitle">ใบเบิกอุปกรณ์ <span class="formal-doctitle-en">Equipment Issuance Form</span></div>
 
-      <div class="formal-toprow">
-        <div class="formal-toprow-left">
-          <div class="formal-field"><span class="formal-field-label">ลูกค้า</span><span class="formal-field-value">${escapeHtml(txn.CustomerName)}</span></div>
-          <div class="formal-field"><span class="formal-field-label">สถานที่ติดตั้ง</span><span class="formal-field-value">${escapeHtml(txn.SiteLocation || "-")}</span></div>
+      <div class="formal-infogrid">
+        <div class="formal-infocell">
+          <div class="formal-infolabel">ลูกค้า · Customer</div>
+          <div class="formal-infovalue">${escapeHtml(txn.CustomerName)}</div>
         </div>
-        <table class="formal-docinfo">
-          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
-          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
-          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}${txn.IssuanceType === "ยืม" ? ` <span class="status-badge status-loan" style="margin-left:6px;">ยืม</span>` : ""}</td></tr>
-        </table>
+        <div class="formal-infocell">
+          <div class="formal-infolabel">สถานที่ติดตั้ง · Site Location</div>
+          <div class="formal-infovalue">${escapeHtml(txn.SiteLocation || "-")}</div>
+        </div>
       </div>
 
       ${buildIssuanceSlipTable(items)}
-      <div class="slip-table-summary">รวมทั้งหมด ${items.length} รายการ</div>
+      <div class="slip-table-summary2">รวมทั้งหมด ${items.length} รายการ</div>
 
-      <div class="formal-remark-box"><strong>หมายเหตุ:</strong> ${txn.Details ? escapeHtml(txn.Details) : ""}</div>
+      <div class="formal-remark-box2">
+        <div class="formal-remark-label">หมายเหตุ · Remark</div>
+        <div class="formal-remark-text">${txn.Details ? escapeHtml(txn.Details) : "&nbsp;"}</div>
+      </div>
 
-      <div class="signature-row-3">
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ผู้เบิก / ผู้ส่งมอบ</div>
-          <div class="signature-name">${escapeHtml(txn.IssuedBy || "")}</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
+      <div class="signature-row-3b">
+        <div class="signature-box2">
+          <div class="signature-role2">ผู้เบิก / ผู้ส่งมอบ</div>
+          <div class="signature-name2">${escapeHtml(txn.IssuedBy || "")}</div>
+          ${delegatedByText(txn) ? `<div class="signature-delegated-note">${escapeHtml(delegatedByText(txn))}</div>` : ""}
+          <div class="signature-line2"></div>
+          <div class="signature-date2">วันที่ ______ / ______ / ________</div>
         </div>
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ผู้อนุมัติ (Approved by)</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
+        <div class="signature-box2">
+          <div class="signature-role2">ผู้อนุมัติ · Approved by</div>
+          <div class="signature-name2">&nbsp;</div>
+          <div class="signature-line2"></div>
+          <div class="signature-date2">วันที่ ______ / ______ / ________</div>
         </div>
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ผู้รับของ</div>
-          <div class="signature-name">&nbsp;</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
+        <div class="signature-box2">
+          <div class="signature-role2">ผู้รับของ · Received by</div>
+          <div class="signature-name2">&nbsp;</div>
+          <div class="signature-line2"></div>
+          <div class="signature-date2">วันที่ ______ / ______ / ________</div>
         </div>
+      </div>
+
+      <div class="formal-footer">
+        <span>เอกสารสร้างโดยระบบ C2-Loop · c2tech.app</span>
+        <span>พิมพ์เมื่อ ${escapeHtml(printedAt)}</span>
       </div>
     </div>
   `;
@@ -2401,7 +2507,7 @@ function printTransferSlip(transactionId) {
       </div>
 
       ${txn.Details ? `<div class="formal-reason-box"><b>หมายเหตุ:</b> ${escapeHtml(txn.Details)}</div>` : ""}
-      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span></div>
+      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span>${delegatedByText(txn) ? `<div class="signature-delegated-note">${escapeHtml(delegatedByText(txn))}</div>` : ""}</div>
 
       <div class="signature-row">
         <div class="signature-box">
@@ -2472,7 +2578,7 @@ function printClaimSlip(transactionId) {
       </div>
 
       ${txn.Details ? `<div class="formal-reason-box"><b>เหตุผลที่เคลม:</b> ${escapeHtml(txn.Details)}</div>` : ""}
-      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span></div>
+      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span>${delegatedByText(txn) ? `<div class="signature-delegated-note">${escapeHtml(delegatedByText(txn))}</div>` : ""}</div>
 
       <div class="signature-row">
         <div class="signature-box">
@@ -4442,13 +4548,13 @@ function openEditAsset(assetKey, serial) {
 // (ลูกค้าแจ้งเครื่องมีปัญหา ถอดออกจากลูกค้า เข้าสถานะ "อยู่ระหว่างเคลม" แล้วเบิกเครื่องทดแทนให้ทันที) ใช้เมนู/โมดัล
 // เดียวกัน เปิดจากปุ่ม "ย้าย/เคลม" ในตารางอุปกรณ์ (Admin เท่านั้น เฉพาะแถวที่เบิกออกไปแล้ว)
 // ============================================================
-let transferClaimState = { assetKey: null, cfg: null, serial: null, row: null, tab: "transfer" };
+let transferClaimState = { assetKey: null, cfg: null, serial: null, row: null, tab: "transfer", issuedByOverride: "" };
 
 function openTransferClaimModal(assetKey, serial) {
   const cfg = VIEW_CONFIG[assetKey];
   const row = (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField]) === String(serial));
   if (!row) return;
-  transferClaimState = { assetKey, cfg, serial, row, tab: "transfer" };
+  transferClaimState = { assetKey, cfg, serial, row, tab: "transfer", issuedByOverride: "" };
   document.getElementById("transferClaimModalTitle").textContent = `ย้าย/เคลม — ${cfg.title} ${serial}`;
   renderTransferClaimModalBody();
   document.getElementById("transferClaimModal").style.display = "flex";
@@ -4579,8 +4685,13 @@ function renderTransferClaimModalBody() {
     `;
   }
 
-  body.innerHTML = tabsHtml + fieldsHtml;
+  const issuedByFieldHtml = renderIssuedByFieldHtml("tc-issuedBy", transferClaimState.issuedByOverride);
+
+  body.innerHTML = tabsHtml + issuedByFieldHtml + fieldsHtml;
   enhanceSearchableSelects(body);
+
+  const issuedByEl = document.getElementById("tc-issuedBy");
+  if (issuedByEl) issuedByEl.addEventListener("change", (e) => { transferClaimState.issuedByOverride = e.target.value; });
 
   const submitBtn = document.getElementById("transferClaimSubmitBtn");
   submitBtn.textContent = submitLabel;
@@ -4605,6 +4716,7 @@ async function submitTransferAsset() {
 
   const isAdmin = state.user.role === "Admin";
   const action = isAdmin ? "transferAsset" : "requestTransfer";
+  const issuedByOverride = transferClaimState.issuedByOverride || "";
   const confirmed = await showConfirm(
     isAdmin
       ? `ยืนยันย้าย ${cfg.title} ${serial} ไปที่ลูกค้า "${newCustomer}"?`
@@ -4612,13 +4724,20 @@ async function submitTransferAsset() {
   );
   if (!confirmed) return;
 
+  if (issuedByOverride) {
+    const issuedByEl = document.getElementById("tc-issuedBy");
+    const issuedByLabel = issuedByEl ? issuedByEl.options[issuedByEl.selectedIndex].textContent : "";
+    const confirmedDelegate = await showConfirm(`ยืนยันดำเนินการแทน?\nรายการนี้จะบันทึกว่า "${issuedByLabel}" เป็นผู้ดำเนินการ\nดำเนินการโดย: ${state.user.name} (Admin)`);
+    if (!confirmedDelegate) return;
+  }
+
   const submitBtn = document.getElementById("transferClaimSubmitBtn");
   const originalText = submitBtn.textContent;
   submitBtn.disabled = true; submitBtn.textContent = isAdmin ? "กำลังย้าย..." : "กำลังส่งคำขอ...";
   try {
     const res = await apiPost({
       action, token: state.token, assetType: cfg.assetType, serialNo: serial,
-      newCustomer, newLocation, connectSerial, moveLinkedSimCard,
+      newCustomer, newLocation, connectSerial, moveLinkedSimCard, issuedByOverride,
     });
     if (!res.ok) {
       if (res.error === "unauthorized") return handleUnauthorized();
@@ -4645,6 +4764,7 @@ async function submitClaimAsset() {
 
   const isAdmin = state.user.role === "Admin";
   const action = isAdmin ? "claimAsset" : "requestClaim";
+  const issuedByOverride = transferClaimState.issuedByOverride || "";
   const confirmMsg = isAdmin
     ? (replacementSerialNo
         ? `ยืนยันเคลม ${cfg.title} ${serial}? ระบบจะถอดเครื่องนี้ออก และเบิกเครื่องทดแทน ${replacementSerialNo} ให้ลูกค้าเดิมทันที`
@@ -4653,13 +4773,20 @@ async function submitClaimAsset() {
   const confirmed = await showConfirm(confirmMsg);
   if (!confirmed) return;
 
+  if (issuedByOverride) {
+    const issuedByEl = document.getElementById("tc-issuedBy");
+    const issuedByLabel = issuedByEl ? issuedByEl.options[issuedByEl.selectedIndex].textContent : "";
+    const confirmedDelegate = await showConfirm(`ยืนยันดำเนินการแทน?\nรายการนี้จะบันทึกว่า "${issuedByLabel}" เป็นผู้ดำเนินการ\nดำเนินการโดย: ${state.user.name} (Admin)`);
+    if (!confirmedDelegate) return;
+  }
+
   const submitBtn = document.getElementById("transferClaimSubmitBtn");
   const originalText = submitBtn.textContent;
   submitBtn.disabled = true; submitBtn.textContent = isAdmin ? "กำลังเคลม..." : "กำลังส่งคำขอ...";
   try {
     const res = await apiPost({
       action, token: state.token, assetType: cfg.assetType, serialNo: serial,
-      reason, replacementSerialNo,
+      reason, replacementSerialNo, issuedByOverride,
     });
     if (!res.ok) {
       if (res.error === "unauthorized") return handleUnauthorized();
@@ -5338,11 +5465,37 @@ function getAvailablePanolyzerItems(search) {
   });
 }
 
+/** รายชื่อ user ที่ยัง active อยู่ (เรียงตามชื่อภาษาไทย) — ใช้เป็นตัวเลือกในฟีเจอร์ "เลือกผู้เบิกแทน" */
+function getIssuedByOptions() {
+  return (state.data.users || [])
+    .filter((u) => u.Active !== false)
+    .slice()
+    .sort((a, b) => String(a.Name || "").localeCompare(String(b.Name || ""), "th"));
+}
+
+/** ฟิลด์ dropdown "ผู้เบิก" — โชว์เฉพาะ Admin เท่านั้น (Staff เบิกได้แค่ในนามตัวเองเสมอ) ให้ Admin เลือกเบิก/ย้าย/
+ * เคลมแทนพนักงานคนอื่นได้ โดยไม่ต้องขอรหัสผ่านหรือให้เขาล็อกอินเอง — ค่าที่เลือกจะถูกส่งเป็น issuedByOverride ไป
+ * ตรวจสอบสิทธิ์และ resolve ชื่อจริงที่ฝั่งเซิร์ฟเวอร์อีกที (ดู resolveIssuedBy ใน functions/index.js) */
+function renderIssuedByFieldHtml(fieldId, currentValue) {
+  if (!state.user || state.user.role !== "Admin") return "";
+  const options = getIssuedByOptions();
+  return `
+    <div class="form-field">
+      <label>ผู้เบิก *</label>
+      <select id="${fieldId}">
+        <option value="">${escapeHtml(state.user.name)} (ตัวเอง)</option>
+        ${options.filter((u) => u.UserID !== state.user.uid).map((u) => `<option value="${escapeAttr(u.UserID)}" ${u.UserID === currentValue ? "selected" : ""}>${escapeHtml(u.Name)}${u.Role === "Admin" ? " — Admin" : ""}</option>`).join("")}
+      </select>
+      <div class="hint">เลือกคนอื่นได้ถ้าเบิก/ย้าย/เคลมแทนเขา — ไม่ต้องขอรหัสผ่านหรือให้เขาล็อกอินเอง</div>
+    </div>`;
+}
+
 function renderIssueView() {
   const content = document.getElementById("viewContent");
   content.innerHTML = `
     <div class="form-card">
       <h3>1. ข้อมูลการเบิก</h3>
+      ${renderIssuedByFieldHtml("f-issuedBy", issuanceForm.issuedByOverride)}
       <div class="form-grid">
         <div class="form-field">
           <label>ชื่อลูกค้า *</label>
@@ -5394,6 +5547,8 @@ function renderIssueView() {
     </div>
   `;
 
+  const issuedByEl = document.getElementById("f-issuedBy");
+  if (issuedByEl) issuedByEl.addEventListener("change", (e) => { issuanceForm.issuedByOverride = e.target.value; });
   document.getElementById("f-customerName").addEventListener("input", (e) => { issuanceForm.customerName = e.target.value; });
   document.getElementById("f-siteLocation").addEventListener("input", (e) => { issuanceForm.siteLocation = e.target.value; });
   document.getElementById("f-details").addEventListener("input", (e) => { issuanceForm.details = e.target.value; });
@@ -6402,7 +6557,16 @@ async function submitIssuanceRequest() {
     details: issuanceForm.details.trim(),
     items: items,
     isLoan: !!issuanceForm.isLoan,
+    issuedByOverride: issuanceForm.issuedByOverride || "",
   };
+
+  // ฟีเจอร์ "เลือกผู้เบิกแทน" — ถ้า Admin เลือกคนอื่นเป็นผู้เบิก ให้ยืนยันอีกครั้งก่อนส่งจริง กันกดเลือกผิดคน
+  if (payload.issuedByOverride) {
+    const issuedByEl = document.getElementById("f-issuedBy");
+    const issuedByLabel = issuedByEl ? issuedByEl.options[issuedByEl.selectedIndex].textContent : "";
+    const confirmed = await showConfirm(`ยืนยันส่งคำขอเบิกแทน?\nคำขอนี้จะบันทึกว่า "${issuedByLabel}" เป็นผู้เบิก\nดำเนินการโดย: ${state.user.name} (Admin)`);
+    if (!confirmed) return;
+  }
 
   // ---- ออฟไลน์: บันทึกลง Local cache แบบ Optimistic ทันที + เข้าคิวรอส่งเมื่อกลับมาออนไลน์ ----
   if (!navigator.onLine) {
@@ -6411,7 +6575,7 @@ async function submitIssuanceRequest() {
     state.offlineQueue.push({ label: `เบิก ${payload.customerName}`, body: { action: "requestIssuance", token: state.token, payload } });
     saveOfflineQueue();
     persistCache();
-    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
+    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
     renderIssueView();
     const freshMsg = document.getElementById("issueMsg");
     freshMsg.className = "form-msg success";
@@ -6429,7 +6593,7 @@ async function submitIssuanceRequest() {
       throw new Error(issuanceErrorMessage(res.error) + conflictMsg);
     }
 
-    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false };
+    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
     const successText = "ส่งคำขอเบิกสำเร็จ (เลขที่ธุรกรรม " + res.transactionId + ") — รอ Admin อนุมัติ";
     await refreshInBackground(true);
     renderIssueView(); // สร้างฟอร์มใหม่ (ว่างเปล่า) ก่อน แล้วค่อยแปะข้อความสำเร็จทับ #issueMsg ของฟอร์มใหม่
@@ -6694,7 +6858,7 @@ function renderApprovalsView() {
           ? `<span class="status-badge status-claim">คำขอเคลม</span>`
           : "";
       const requesterLine = (isTransfer || isClaim)
-        ? `<div class="txn-meta">ผู้ขอ: ${escapeHtml(txn.IssuedBy)}${txn.FromCustomer ? ` · ลูกค้าเดิม: ${escapeHtml(txn.FromCustomer)}${txn.FromLocation ? " — " + escapeHtml(txn.FromLocation) : ""}` : ""}</div>`
+        ? `<div class="txn-meta">ผู้ขอ: ${escapeHtml(txn.IssuedBy)}${delegatedByText(txn) ? ` (${escapeHtml(delegatedByText(txn))})` : ""}${txn.FromCustomer ? ` · ลูกค้าเดิม: ${escapeHtml(txn.FromCustomer)}${txn.FromLocation ? " — " + escapeHtml(txn.FromLocation) : ""}` : ""}</div>`
         : "";
       // เคลม: โชว์ "เครื่องเดิม ⇄ เครื่องทดแทน" ให้ Admin เห็นชัดว่ากำลังจะเปลี่ยนเครื่องอะไรให้อะไร ก่อนกดอนุมัติ
       const claimSwapLine = isClaim
@@ -7091,7 +7255,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
           ${canBulkReturn ? `<label class="txn-select"><input type="checkbox" class="bulk-return-cb" data-txn-id="${escapeAttr(txn.TransactionID)}" onchange="toggleBulkSelect('${escapeAttr(txn.TransactionID)}', this.checked)"></label>` : ""}
           <div>
             <div class="txn-title">${escapeHtml(txn.CustomerName)} — ${escapeHtml(txn.SiteLocation || "")}</div>
-            <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ผู้เบิก: ${escapeHtml(txn.IssuedBy)} · ${formatDateTh(txn.Timestamp)}</div>
+            <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ผู้เบิก: ${escapeHtml(txn.IssuedBy)}${delegatedByText(txn) ? ` (${escapeHtml(delegatedByText(txn))})` : ""} · ${formatDateTh(txn.Timestamp)}</div>
             ${txn.ApprovedBy ? `<div class="txn-meta">ดำเนินการโดย: ${escapeHtml(txn.ApprovedBy)} เมื่อ ${formatDateTh(txn.ApprovedAt)}</div>` : ""}
             ${txn.ReturnedAt ? `<div class="txn-meta">คืนของเมื่อ: ${formatDateTh(txn.ReturnedAt)}</div>` : ""}
             ${txn.CancelledAt ? `<div class="txn-meta">ยกเลิกโดย: ${escapeHtml(txn.CancelledBy)} เมื่อ ${formatDateTh(txn.CancelledAt)}</div>` : ""}
