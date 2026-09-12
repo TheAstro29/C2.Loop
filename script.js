@@ -218,6 +218,23 @@ function isPanolyzerStockRow(row) {
 }
 
 // ============================================================
+// Color Sorter (เครื่อง — ไม่ใช่อะไหล่ "อะไหล่ Color Sorter" ที่มีอยู่แล้ว) — มิเรอร์มาจากแท็บ "Sorter_Data" ใน
+// Google Sheet เดียวกับ Panolyzer Management ผ่าน Web App ตัวเดียวกัน (ต่อ query "?app=colorsorter") เข้า
+// collection "colorSorter" ผ่าน syncColorSorterNow/colorSorterScheduledSync ฝั่ง Cloud Functions — เหมือน
+// Panolyzer ทุกประการ (ไม่อยู่ใน VIEW_CONFIG ด้วยเหตุผลเดียวกัน) ต่างกันแค่จุดเดียว: เบิกแบบเดี่ยวล้วนๆ ไม่มีการ
+// ผูก Gateway/SimCard คู่กันเลยแม้แต่กรณีเดียว (ตามที่ผู้ใช้ยืนยัน — ต่างจาก Panolyzer ที่มีกรณีผูก Gateway ได้)
+// ============================================================
+const COLORSORTER_KEY = "colorSorter";
+const COLORSORTER_ASSET_TYPE = "ColorSorter";
+const COLORSORTER_SERIAL_FIELD = "S/N Sorter";
+const COLORSORTER_STOCK_FIELD = "Status";
+
+/** เครื่อง Color Sorter แถวนี้อยู่ในสถานะ "Stock" (พร้อมเบิก) ตามข้อมูลมิเรอร์ล่าสุดหรือไม่ */
+function isColorSorterStockRow(row) {
+  return String((row && row[COLORSORTER_STOCK_FIELD]) || "").trim().toLowerCase() === "stock";
+}
+
+// ============================================================
 // Phase 7: โมดัลยืนยัน/แจ้งเตือน C2TECH (แทน native confirm()/alert())
 // ใช้ Promise แทน blocking dialog — รองรับ Mobile (bottom sheet) + Desktop (card กลางจอ)
 // ============================================================
@@ -637,7 +654,8 @@ const MOBILE_HOME_TILES = [
   { key: "moisturlyzer", label: "MoisturLyzer", icon: "fa-tint", color: "mh-c2" },
   { key: "gateway", label: "Gateway", icon: "fa-broadcast-tower", color: "mh-c3" },
   { key: "simcard", label: "SimCard", icon: "fa-sim-card", color: "mh-c4" },
-  { key: "panolyzer", label: "Panolyzer", icon: "fa-microscope", color: "mh-c10" },
+  { key: "panolyzer", label: "Panolyzer", icon: "fa-magnifying-glass-chart", color: "mh-c10" },
+  { key: "colorSorter", label: "Color Sorter", icon: "fa-sliders", color: "mh-c11" },
   { key: "colorSorterParts", label: "อะไหล่ Color Sorter", icon: "fa-cogs", color: "mh-c5" },
   { key: "panolyzerParts", label: "อะไหล่ Panolyzer", icon: "fa-cogs", color: "mh-c6" },
   { key: "issue", label: "เบิกอุปกรณ์", icon: "fa-dolly", color: "mh-c7" },
@@ -676,9 +694,22 @@ function mobileHomeSearch(term) {
   }
 }
 
+// ถ้า user กำลังโฟกัส/พิมพ์อยู่ในช่องค้นหาของหน้าแรกมือถือตอนที่ renderMobileHome() ถูกเรียกซ้ำ
+// (เช่น จาก Firestore real-time listener ที่ยิง updatePendingBadge() ทุกครั้งที่ข้อมูลเปลี่ยน — ดู
+// attachFirestoreListeners/refreshInBackground) ห้าม render ทับตอนนั้นเด็ดขาด เพราะ renderMobileHome()
+// เขียน wrap.innerHTML ใหม่ทั้งหมด ซึ่งจะทำลาย <input id="mhSearchInput"> ตัวเดิมทิ้งแล้วสร้างใหม่ ทำให้
+// คีย์บอร์ดของมือถือปิดตัวเองทันทีที่ผู้ใช้เริ่มพิมพ์ (โฟกัสหลุดเพราะ element เดิมถูกลบไปแล้ว) — แก้โดยพัก
+// การ render ไว้ก่อน แล้วค่อย render จริงตอน blur (เลิกโฟกัสช่องค้นหา) แทน
+let mobileHomeRerenderPending = false;
+
 function renderMobileHome() {
   const wrap = document.getElementById("mobileHomeScreen");
   if (!wrap || !state.user) return;
+  const activeEl = document.activeElement;
+  if (activeEl && activeEl.id === "mhSearchInput") {
+    mobileHomeRerenderPending = true;
+    return;
+  }
   const isAdmin = state.user.role === "Admin";
   const stats = computeMobileHomeStats();
   const pending = stats.pending;
@@ -744,6 +775,14 @@ function renderMobileHome() {
   if (searchInput) {
     searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") mobileHomeSearch(searchInput.value.trim());
+    });
+    // ถ้ามีการเปลี่ยนแปลงข้อมูลเกิดขึ้นระหว่างที่ผู้ใช้กำลังพิมพ์ค้นหาอยู่ (ถูกพักการ render ไว้ตามด้านบน)
+    // ให้ค่อย render หน้าแรกใหม่ทันทีที่ผู้ใช้เลิกโฟกัสช่องนี้ (blur) เพื่อให้ตัวเลข/badge อัปเดตตามจริง
+    searchInput.addEventListener("blur", () => {
+      if (mobileHomeRerenderPending) {
+        mobileHomeRerenderPending = false;
+        renderMobileHome();
+      }
     });
   }
 }
@@ -1048,6 +1087,10 @@ function attachFirestoreListeners() {
   // panolyzerScheduledSync ฝั่ง Cloud Functions — เก็บชื่อคอลัมน์ดิบตามหัวชีตเป๊ะ (เช่น "S/N Analyzer",
   // "Client name") บวกฟิลด์ที่เป็นของ C2-Loop เองเพิ่มมา (linkedGatewaySerial/pendingSheetSync/...) จึงไม่ต้องแปลง
   bind("panolyzer", "panolyzer", translateRaw);
+
+  // Color Sorter (เครื่อง): มิเรอร์มาจากแท็บ "Sorter_Data" ผ่าน syncColorSorterNow/colorSorterScheduledSync
+  // ฝั่ง Cloud Functions — เก็บชื่อคอลัมน์ดิบตามหัวชีตเป๊ะ (เช่น "S/N Sorter", "Client name") เหมือน Panolyzer ทุกประการ
+  bind("colorSorter", "colorSorter", translateRaw);
 }
 
 function detachFirestoreListeners() {
@@ -1277,6 +1320,9 @@ function renderCurrentViewInner() {
   } else if (state.currentView === "panolyzer") {
     titleEl.textContent = "Panolyzer";
     renderPanolyzerView();
+  } else if (state.currentView === COLORSORTER_KEY) {
+    titleEl.textContent = "Color Sorter";
+    renderColorSorterView();
   } else {
     const cfg = VIEW_CONFIG[state.currentView];
     titleEl.textContent = cfg.title.replace(" (มี S/N)", "");
@@ -1365,6 +1411,69 @@ function computeGatewayModelBreakdown(rows) {
   }).filter((m) => m.total > 0); // ไม่โชว์รุ่นที่ยังไม่เคยมีในระบบเลย (total = 0) กันการ์ดรกเปล่าๆ
 }
 
+/** Phase: แยกยอดคงคลัง MoisturLyzer ตามรุ่น (คอลัมน์ "Model" เช่น "DGM-8002 (DC 24V)") สำหรับการ์ด Dashboard —
+ * ผู้ใช้ขอให้การ์ด MoisturLyzer เด่นขึ้นแบบเดียวกับ Gateway โดยเสนอเอง (นำชื่อรุ่นมาโชว์ + เลขคงคลังแบบเดียวกัน)
+ * ต่างจาก Gateway ตรงที่ MoisturLyzer ไม่มีรุ่นตายตัวที่รู้ล่วงหน้า (ไม่มี GATEWAY_MODEL_BREAKDOWN_META แบบ hardcode)
+ * จึงอ่านค่า "Model" ที่มีจริงในข้อมูลมาแบ่งกลุ่มเองแบบ dynamic เหมือนแนวทางที่ผู้ใช้เลือกไว้กับ Color Sorter
+ * (ถ้าในอนาคตมีรุ่นใหม่เพิ่มเข้ามาในชีต การ์ดนี้จะแยกแสดงให้เองโดยไม่ต้องแก้โค้ด) เกณฑ์ "ใกล้หมด" ใช้
+ * LOW_STOCK_THRESHOLD ตัวเดียวกับที่ระบบใช้ทั้งแอป เรียงรุ่นที่มีจำนวนมากสุดขึ้นก่อนเพื่อให้อ่านง่าย */
+const MOISTURLYZER_MODEL_FIELD = "Model";
+function computeMoisturlyzerModelBreakdown(rows) {
+  const cfg = VIEW_CONFIG.moisturlyzer;
+  const groups = {};
+  rows.forEach((r) => {
+    const name = String(r[MOISTURLYZER_MODEL_FIELD] || "").trim() || "ไม่ระบุรุ่น";
+    (groups[name] = groups[name] || []).push(r);
+  });
+  return Object.keys(groups).map((name) => {
+    const modelRows = groups[name];
+    const total = modelRows.length;
+    const stock = modelRows.filter((r) => isPhysicalStockRow(r, cfg.stockField)).length;
+    const used = total - stock;
+    const isLow = total > 0 && stock <= LOW_STOCK_THRESHOLD;
+    return { label: name, total, stock, used, isLow };
+  }).filter((m) => m.total > 0).sort((a, b) => b.total - a.total);
+}
+
+/** Phase: แยกยอดคงคลัง Panolyzer ตามประเภท (Real-time ติดตั้งหน้าไลน์ / Lab ตั้งโต๊ะ) สำหรับการ์ด Dashboard —
+ * ผู้ใช้ขอเพราะอยากรู้ทันทีว่ารุ่นไหนเหลือเท่าไรโดยไม่ต้องเข้าไปเปิดหน้ารายการ Panolyzer เอง ใช้ค่าคอลัมน์ "Type"
+ * ที่มิเรอร์มาจากระบบ Panolyzer Management ตรงๆ (ค่าที่พบคือ "Real-time" กับ "Lab") เทียบแบบไม่สนตัวพิมพ์ใหญ่เล็ก
+ * เกณฑ์ "ใกล้หมด" ใช้ LOW_STOCK_THRESHOLD ตัวเดียวกับที่ระบบใช้ทั้งแอป (Gateway/อะไหล่) เพื่อให้ความหมายตรงกัน */
+const PANOLYZER_TYPE_FIELD = "Type";
+const PANOLYZER_TYPE_BREAKDOWN_META = [
+  { type: "Real-time", label: "Real-time" },
+  { type: "Lab", label: "Lab" },
+];
+function computePanolyzerTypeBreakdown(rows) {
+  return PANOLYZER_TYPE_BREAKDOWN_META.map((meta) => {
+    const typeRows = rows.filter((r) => String(r[PANOLYZER_TYPE_FIELD] || "").trim().toLowerCase() === meta.type.toLowerCase());
+    const total = typeRows.length;
+    const stock = typeRows.filter(isPanolyzerStockRow).length;
+    const used = total - stock;
+    const isLow = total > 0 && stock <= LOW_STOCK_THRESHOLD;
+    return { ...meta, total, stock, used, isLow };
+  }).filter((m) => m.total > 0); // ไม่โชว์ประเภทที่ยังไม่เคยมีในระบบเลย (total = 0) กันการ์ดรกเปล่าๆ
+}
+
+/** Phase: แยกยอดคงคลัง Color Sorter ตามรุ่น (คอลัมน์ "Model" ในชีต Sorter_Data — ค่าไม่ตายตัวเหมือน Gateway จึง
+ * อ่านค่าจริงมาแบ่งกลุ่มเองแบบ dynamic เหมือนแนวทางที่ทำให้ MoisturLyzer) เรียงรุ่นที่มีจำนวนมากสุดขึ้นก่อน */
+const COLORSORTER_MODEL_FIELD = "Model";
+function computeColorSorterModelBreakdown(rows) {
+  const groups = {};
+  rows.forEach((r) => {
+    const name = String(r[COLORSORTER_MODEL_FIELD] || "").trim() || "ไม่ระบุรุ่น";
+    (groups[name] = groups[name] || []).push(r);
+  });
+  return Object.keys(groups).map((name) => {
+    const modelRows = groups[name];
+    const total = modelRows.length;
+    const stock = modelRows.filter(isColorSorterStockRow).length;
+    const used = total - stock;
+    const isLow = total > 0 && stock <= LOW_STOCK_THRESHOLD;
+    return { label: name, total, stock, used, isLow };
+  }).filter((m) => m.total > 0).sort((a, b) => b.total - a.total);
+}
+
 // สีประจำแต่ละหมวดอุปกรณ์บนหน้า Dashboard มือถือ — ใช้สีเดียวกับไอคอนหน้าแรกมือถือ (mh-c2..mh-c6) เพื่อให้สื่อความหมายตรงกันทั้งแอป
 // หมายเหตุ (ข้อควรระวังจากผู้ใช้): ไอคอน/สีของแต่ละหมวดในตารางนี้ต้อง "เหมือนกันทุกจุด" ทั้งเดสก์ท็อปและมือถือ
 // เสมอ (ใช้สื่อสารกันในทีมด้วย) — ห้ามไปกำหนดไอคอนแยกซ้ำที่อื่นแล้วให้ค่าไม่ตรงกับตารางนี้ ทุกจุดที่ต้องโชว์
@@ -1374,7 +1483,8 @@ const DASHBOARD_CATEGORY_META = {
   moisturlyzer: { icon: "fa-tint", color: "#17A672" },
   gateway: { icon: "fa-broadcast-tower", color: "#2f6fb0" },
   simcard: { icon: "fa-sim-card", color: "#8B5CF6" },
-  panolyzer: { icon: "fa-microscope", color: "#0EA5A5" },
+  panolyzer: { icon: "fa-magnifying-glass-chart", color: "#0EA5A5" },
+  colorSorter: { icon: "fa-sliders", color: "#475569" },
   colorSorterParts: { icon: "fa-cogs", color: "#e08e0b" },
   panolyzerParts: { icon: "fa-cogs", color: "#EC6BAA" },
 };
@@ -1535,6 +1645,18 @@ function renderDashboard() {
     },
   });
 
+  // Color Sorter (เครื่อง) — ดันเข้า summaries เหมือน Panolyzer ทุกประการ (ไม่ได้อยู่ใน VIEW_CONFIG ดูหมายเหตุ
+  // COLORSORTER_KEY หัวไฟล์) ให้ทั้งการ์ด KPI เดสก์ท็อปและ Dashboard มือถือเห็นตรงกัน
+  const colorSorterRows = state.data.colorSorter || [];
+  const colorSorterStockCount = colorSorterRows.filter(isColorSorterStockRow).length;
+  summaries.push({
+    cfg: { key: COLORSORTER_KEY, title: "Color Sorter" },
+    summary: {
+      total: colorSorterRows.length, stock: colorSorterStockCount, used: colorSorterRows.length - colorSorterStockCount,
+      activated: null, notActivated: null, activatedUsed: null,
+    },
+  });
+
   if (isMobileViewport()) { renderDashboardMobile(content, summaries); return; }
 
   // Phase: แผง "ต้องดำเนินการ"/"กิจกรรมล่าสุด" ใหม่ท้าย Dashboard เดสก์ท็อป — เดิมมีแค่ในเวอร์ชันมือถือ
@@ -1621,21 +1743,32 @@ function renderDashboard() {
     // การ์ดปกติ (MoisturLyzer/Gateway/Panolyzer) — เพิ่มแถบ "อัตราใช้งาน" (สัดส่วน Stock เทียบเบิกแล้ว) แทน
     // แถวตัวเลขล้วนๆ เดิม ให้เห็นสัดส่วนได้ในสายตาแรกโดยไม่ต้องอ่านตัวเลข 2 บรรทัดเทียบกันเอง
     const utilPct = summary.total > 0 ? Math.round((summary.stock / summary.total) * 100) : 0;
-    // Phase: การ์ด Gateway โดยเฉพาะ — เพิ่มแยกยอดคงคลังตามรุ่น (EPG-001B/EPG-001S) ต่อท้ายยอดรวม เพราะสองรุ่นนี้
-    // ใช้กับอุปกรณ์คนละชนิดและสั่งซื้อแยกกัน ยอดรวมเดียวไม่พอให้ Admin รู้ว่ารุ่นไหนใกล้หมดจนต้องรีบสั่งเพิ่ม
-    // (ดู computeGatewayModelBreakdown ด้านบน — preview ให้ผู้ใช้ดูก่อนแล้วจึงลงมือทำจริงตามที่ขอ)
-    const gatewayModels = cfg.key === "gateway" ? computeGatewayModelBreakdown(state.data.gateway || []) : [];
-    const lowModelCount = gatewayModels.filter((m) => m.isLow).length;
-    const modelBreakdownHtml = gatewayModels.length
+    // Phase: การ์ด Gateway — เพิ่มแยกยอดคงคลังตามรุ่น (EPG-001B/EPG-001S) ต่อท้ายยอดรวม เพราะสองรุ่นนี้ใช้กับ
+    // อุปกรณ์คนละชนิดและสั่งซื้อแยกกัน ยอดรวมเดียวไม่พอให้ Admin รู้ว่ารุ่นไหนใกล้หมดจนต้องรีบสั่งเพิ่ม (ดู
+    // computeGatewayModelBreakdown ด้านบน — preview ให้ผู้ใช้ดูก่อนแล้วจึงลงมือทำจริงตามที่ขอ)
+    // Phase: การ์ด Panolyzer — เพิ่มแยกยอดคงคลังตาม Type (Real-time/Lab) ในลักษณะเดียวกัน ตามที่ผู้ใช้ขอ (preview
+    // ให้ดูก่อนแล้ว — ผู้ใช้ให้ตัดคำอธิบายย่อยใต้ชื่อประเภทออก จึงไม่มี <small> เหมือนแถว Gateway)
+    const modelBreakdown = cfg.key === "gateway"
+      ? computeGatewayModelBreakdown(state.data.gateway || [])
+      : cfg.key === PANOLYZER_KEY
+        ? computePanolyzerTypeBreakdown(state.data.panolyzer || [])
+        : cfg.key === "moisturlyzer"
+          ? computeMoisturlyzerModelBreakdown(state.data.moisturlyzer || [])
+          : cfg.key === COLORSORTER_KEY
+            ? computeColorSorterModelBreakdown(state.data.colorSorter || [])
+            : [];
+    const lowModelCount = modelBreakdown.filter((m) => m.isLow).length;
+    const modelBreakdownHtml = modelBreakdown.length
       ? `
         <div class="kpi-model-split">
-          ${gatewayModels.map((m) => `
+          ${modelBreakdown.map((m) => `
           <div class="kpi-model-row${m.isLow ? " is-low" : ""}">
             <div class="kpi-model-head">
-              <span class="kpi-model-name">${escapeHtml(m.label)} <small>${escapeHtml(m.sub)}</small></span>
+              <span class="kpi-model-name">${escapeHtml(m.label)}${m.sub ? ` <small>${escapeHtml(m.sub)}</small>` : ""}</span>
               <span class="kpi-model-nums"><b${m.isLow ? ` class="stock-num"` : ""}>${m.stock}</b> ในคลัง</span>
             </div>
             <div class="kpi-model-bar"><span style="width:${m.total > 0 ? Math.round((m.stock / m.total) * 100) : 0}%; background:${m.isLow ? "#e08e0b" : meta.color}"></span></div>
+            <div class="kpi-model-sub">เบิกแล้ว <b>${m.used}</b> · รวม ${m.total}</div>
           </div>`).join("")}
         </div>`
       : "";
@@ -1649,7 +1782,6 @@ function renderDashboard() {
           <span><i class="kpi-dot" style="background:var(--sub2, #D2DCD8)"></i>เบิกแล้ว ${summary.used}</span>
         </div>
         ${modelBreakdownHtml}
-        ${summary.activated !== null ? `<div class="kpi-stat-sub">เปิดใช้งานแล้ว (Activated): ${summary.activated}</div>` : ""}
       </div>`;
   });
   html += `
@@ -2054,12 +2186,12 @@ function renderFormalReportCharts(rows) {
     const { months, monthly } = computeMonthlyTrend();
     if (state.charts.formalTrend) state.charts.formalTrend.destroy();
     if (months.length) {
-      const formalColors = ["#3F654D", "#63816F", "#9AA79E", "#0EA5A5"];
+      const formalColors = ["#3F654D", "#63816F", "#9AA79E", "#0EA5A5", "#475569"];
       state.charts.formalTrend = new Chart(trendCanvas.getContext("2d"), {
         type: "line",
         data: {
           labels: months,
-          datasets: ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer"].map((assetType, i) => ({
+          datasets: ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer", "ColorSorter"].map((assetType, i) => ({
             label: assetType, data: months.map((m) => monthly[m][assetType] || 0),
             borderColor: formalColors[i], backgroundColor: formalColors[i] + "22",
             tension: 0.35, fill: false, pointRadius: 2, borderWidth: 2,
@@ -2101,6 +2233,7 @@ const CHART_COLORS = {
   gateway: "#2f6fb0",
   simcard: "#e08e0b",
   panolyzer: "#0EA5A5",
+  colorsorter: "#475569",
 };
 
 function destroyAllCharts() {
@@ -2124,7 +2257,7 @@ function computeMonthlyTrend() {
     if (!approvedTxnIds.has(item.TransactionID)) return;
     const month = txnMonth[item.TransactionID];
     if (!month) return;
-    if (!monthly[month]) monthly[month] = { MoisturLyzer: 0, Gateway: 0, SimCard: 0, Panolyzer: 0 };
+    if (!monthly[month]) monthly[month] = { MoisturLyzer: 0, Gateway: 0, SimCard: 0, Panolyzer: 0, ColorSorter: 0 };
     monthly[month][item.AssetType] = (monthly[month][item.AssetType] || 0) + 1;
   });
 
@@ -2144,7 +2277,7 @@ function renderMonthlyTrendChart() {
 
   // Phase: เพิ่ม Panolyzer เข้ามาในกราฟแนวโน้มรายเดือนด้วย (ให้สอดคล้องกับที่เพิ่งเพิ่ม Panolyzer เข้าการ์ด KPI
   // และกราฟแท่งสัดส่วนคงคลังด้านล่าง — summaries — ไปแล้ว)
-  const datasets = ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer"].map((assetType) => ({
+  const datasets = ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer", "ColorSorter"].map((assetType) => ({
     label: assetType,
     data: months.map((m) => monthly[m][assetType] || 0),
     borderColor: CHART_COLORS[assetType.toLowerCase()],
@@ -2221,6 +2354,7 @@ function printDashboard() {
   // ตลอด ถ้าสั่งพิมพ์ทันทีโดยไม่รอให้โหลดเสร็จ เค้าโครง .rp-header อาจคำนวณผิดตอนพิมพ์จริง (เช่น หัวข้อรายงาน
   // ถูกบีบจนตัดคำแปลกๆ) จึงต้องรอทั้งกราฟและรูปโลโก้ให้พร้อมก่อน ค่อยเรียก window.print()
   document.body.classList.add("print-dashboard-active");
+  injectDashboardPrintPageStyle();
   const area = document.getElementById("formalReportArea");
   const logoImg = area ? area.querySelector(".rp-logo-col img") : null;
   const waitLogo = logoImg && !logoImg.complete
@@ -2665,6 +2799,7 @@ window.addEventListener("afterprint", () => {
   document.getElementById("printSlipRoot").innerHTML = "";
   document.getElementById("printLabelRoot").innerHTML = "";
   removeLabelPageStyle();
+  removeDashboardPrintPageStyle();
 });
 
 // ============================================================
@@ -2732,6 +2867,26 @@ function injectLabelPageStyle() {
 }
 function removeLabelPageStyle() {
   const el = document.getElementById("labelPrintPageStyle");
+  if (el) el.remove();
+}
+
+/** แก้บั๊ก "พิมพ์รายงาน Dashboard ต้องลด scale เหลือ 80-85% ก่อนถึงจะพอดีหน้า A4" — ต้นเหตุคือระยะขอบถูกหักซ้ำ
+ * 2 ชั้น: กติกา @media print ทั่วไปใน style.css ตั้ง `@page { margin: 15mm 16mm }` ไว้ (ใช้กับใบเบิก/ใบย้าย-เคลม
+ * ที่เนื้อหากว้างเท่าไรก็ได้ ไม่ fix ขนาด) แต่ .rp-page (กล่องรายงานทางการ) ถูกออกแบบให้ขนาดเท่ากระดาษ A4 เป๊ะ
+ * (width:210mm; min-height:297mm) อยู่แล้ว โดยใช้ padding ของตัวเอง (16mm 18mm 14mm) เป็นระยะขอบภาพอยู่แล้ว —
+ * พอ @page ไปหักขอบอีกชั้น พื้นที่พิมพ์จริงเหลือแค่ ~178mm×268mm (210-32, 297-29) ซึ่งน้อยกว่ากล่อง 210mm ที่ตั้งใจ
+ * จะวาง เบราว์เซอร์เลยต้องบีบ/ตัดเนื้อหาจนผู้ใช้ต้องลด scale เอง (178/210 ≈ 85% ตรงกับที่ผู้ใช้แจ้งพอดี) วิธีแก้คือ
+ * ฉีด @page ตัวใหม่ (margin:0) มาทับเฉพาะตอนพิมพ์ Dashboard เท่านั้น (แพตเทิร์นเดียวกับ injectLabelPageStyle ด้านบน)
+ * ให้ .rp-page เป็นคนคุมระยะขอบเองทั้งหมดคนเดียว ไม่กระทบใบเบิก/ใบย้าย-เคลมที่ยังต้องใช้ margin 15mm/16mm เดิม */
+function injectDashboardPrintPageStyle() {
+  removeDashboardPrintPageStyle();
+  const style = document.createElement("style");
+  style.id = "dashboardPrintPageStyle";
+  style.textContent = "@page { size: A4; margin: 0; }";
+  document.head.appendChild(style);
+}
+function removeDashboardPrintPageStyle() {
+  const el = document.getElementById("dashboardPrintPageStyle");
   if (el) el.remove();
 }
 
@@ -3022,6 +3177,170 @@ async function retryPanolyzerSync(serial) {
   const confirmed = await showConfirm(`ลองส่งข้อมูลเครื่อง Panolyzer S/N ${serial} ไปที่ Sheet Panolyzer Management ใหม่อีกครั้ง?`);
   if (!confirmed) return;
   const res = await apiPost({ action: "retryPanolyzerSheetSync", token: state.token, serial });
+  if (!res.ok) {
+    if (res.error === "unauthorized") return handleUnauthorized();
+    await showAlert("ลองใหม่ไม่สำเร็จ: " + (res.detail || res.error || "unknown_error"), "error");
+    return;
+  }
+  await showAlert("ส่งข้อมูลไปที่ Sheet สำเร็จแล้ว", "success");
+  renderCurrentView();
+}
+
+// ============================================================
+// Color Sorter (เครื่อง) — หน้ารายการ มิเรอร์โครงสร้างเดียวกับ Panolyzer ทุกจุด (ดูหมายเหตุ COLORSORTER_KEY
+// หัวไฟล์) ต่างกันแค่ไม่มีปุ่ม/คอลัมน์เกี่ยวกับการผูก Gateway เลย เพราะเบิกแบบเดี่ยวล้วนๆ
+// ============================================================
+function renderColorSorterView() {
+  const content = document.getElementById("viewContent");
+  const mobile = isMobileViewport();
+  content.innerHTML = `
+    <div class="controls-row">
+      <input type="text" id="csSearchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานที่, Model...)">
+      <select id="csStatusFilter">
+        <option value="all">-- สถานะทั้งหมด --</option>
+        <option value="stock">อยู่ใน Stock พร้อมเบิก</option>
+        <option value="used">เบิกไปแล้ว</option>
+      </select>
+      <button class="btn-sm btn-secondary" id="csRefreshBtn">🔄 รีเฟรชข้อมูลตอนนี้</button>
+    </div>
+    <div class="cache-note" style="margin-bottom:10px;">ข้อมูลเครื่อง Color Sorter มิเรอร์มาจาก Google Sheet เดียวกับ Panolyzer (แท็บ "Sorter_Data") — ซิงค์อัตโนมัติทุก 15 นาที หรือกดรีเฟรชเองได้ทันที ระบบนี้ใช้เบิก/รับคืนอย่างเดียว ไม่ผูกกับ Gateway หรือ SimCard เลย</div>
+    ${mobile
+      ? `<div id="csCards" class="mcard-list"></div>`
+      : `<div class="table-card">
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>S/N Sorter</th><th>ลูกค้า</th><th>สถานที่</th><th>สถานะ</th><th>Model</th><th>Firmware</th><th>หมายเหตุ</th><th></th>
+          </tr></thead>
+          <tbody id="csTbody"></tbody>
+        </table>
+      </div>
+    </div>`}
+  `;
+  document.getElementById("csRefreshBtn").addEventListener("click", refreshColorSorterNow);
+  document.getElementById("csSearchBox").addEventListener("input", renderColorSorterRows);
+  document.getElementById("csStatusFilter").addEventListener("change", renderColorSorterRows);
+  renderColorSorterRows();
+}
+
+function getFilteredColorSorterRows() {
+  const searchEl = document.getElementById("csSearchBox");
+  const statusEl = document.getElementById("csStatusFilter");
+  const search = (searchEl ? searchEl.value : "").toLowerCase();
+  const statusFilter = statusEl ? statusEl.value : "all";
+  return (state.data.colorSorter || []).filter((row) => {
+    const stock = isColorSorterStockRow(row);
+    if (statusFilter === "stock" && !stock) return false;
+    if (statusFilter === "used" && stock) return false;
+    if (!search) return true;
+    return [COLORSORTER_SERIAL_FIELD, "Client name", "Location", "Model", "Firmware", "Remark"]
+      .some((f) => String(row[f] || "").toLowerCase().includes(search));
+  });
+}
+
+function renderColorSorterRows() {
+  if (isMobileViewport()) {
+    renderColorSorterRowsAsCards();
+  } else {
+    renderColorSorterRowsAsTable();
+  }
+}
+
+function renderColorSorterRowsAsTable() {
+  const tbody = document.getElementById("csTbody");
+  if (!tbody) return;
+  const isAdmin = state.user.role === "Admin";
+  const rows = getFilteredColorSorterRows();
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">ไม่พบข้อมูล — ลองกดรีเฟรชข้อมูลตอนนี้</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const serial = String(row[COLORSORTER_SERIAL_FIELD] || "");
+    const stock = isColorSorterStockRow(row);
+    const statusCell = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(row["Status"] || ""))}</span>`;
+    const syncBadge = row.pendingSheetSync
+      ? `<div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="retryColorSorterSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}`
+      : "";
+    return `<tr class="row-clickable" onclick="openColorSorterDetailModal('${escapeAttr(serial)}')">
+      <td>${escapeHtml(serial)}</td>
+      <td>${escapeHtml(String(row["Client name"] || ""))}</td>
+      <td>${escapeHtml(String(row["Location"] || ""))}</td>
+      <td onclick="event.stopPropagation()">${statusCell}${syncBadge}</td>
+      <td>${escapeHtml(String(row["Model"] || ""))}</td>
+      <td>${escapeHtml(String(row["Firmware"] || ""))}</td>
+      <td>${escapeHtml(String(row["Remark"] || ""))}</td>
+      <td></td>
+    </tr>`;
+  }).join("");
+}
+
+/** เวอร์ชันมือถือของหน้า Color Sorter — การ์ดแนวตั้งเหมือนหน้า Panolyzer ทุกประการ */
+function renderColorSorterRowsAsCards() {
+  const wrap = document.getElementById("csCards");
+  if (!wrap) return;
+  const isAdmin = state.user.role === "Admin";
+  const rows = getFilteredColorSorterRows();
+
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="mcard-empty">ไม่พบข้อมูล — ลองกดรีเฟรชข้อมูลตอนนี้</div>`;
+    return;
+  }
+
+  wrap.innerHTML = rows.map((row) => {
+    const serial = String(row[COLORSORTER_SERIAL_FIELD] || "");
+    const stock = isColorSorterStockRow(row);
+    const pillHtml = `<span class="mcard-pill ${stock ? "stock" : "used"}">${escapeHtml(String(row["Status"] || ""))}</span>`;
+    const syncBadge = row.pendingSheetSync
+      ? `<div class="mcard-row"><div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="retryColorSorterSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}</div>`
+      : "";
+    const rowsHtml = [
+      ["ลูกค้า", row["Client name"]],
+      ["สถานที่", row["Location"]],
+      ["Model", row["Model"]],
+      ["Firmware", row["Firmware"]],
+      ["หมายเหตุ", row["Remark"]],
+    ].filter(([, v]) => v !== undefined && v !== null && String(v) !== "")
+      .map(([label, v]) => `<div class="mcard-row"><div class="mcard-label">${escapeHtml(label)}</div><div class="mcard-val">${escapeHtml(String(v))}</div></div>`)
+      .join("");
+
+    return `
+      <div class="mcard" onclick="openColorSorterDetailModal('${escapeAttr(serial)}')">
+        <div class="mcard-head">
+          <div class="mcard-title">${escapeHtml(serial || "-")}</div>
+          ${pillHtml}
+        </div>
+        ${rowsHtml}
+        ${syncBadge}
+      </div>`;
+  }).join("");
+}
+
+/** ปุ่ม "รีเฟรชข้อมูลตอนนี้" — เรียก syncColorSorterNow แล้วปล่อยให้ real-time listener (bind("colorSorter", ...))
+ * อัปเดตตารางให้เองอัตโนมัติ */
+async function refreshColorSorterNow() {
+  const btn = document.getElementById("csRefreshBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "กำลังรีเฟรช..."; }
+  try {
+    const res = await apiPost({ action: "syncColorSorterNow", token: state.token });
+    if (!res.ok) {
+      if (res.error === "unauthorized") return handleUnauthorized();
+      await showAlert("รีเฟรชข้อมูล Color Sorter ไม่สำเร็จ: " + (res.error || "unknown_error"), "error");
+      return;
+    }
+    await showAlert(`ซิงค์ข้อมูล Color Sorter สำเร็จ (${res.count || 0} เครื่อง)`, "success");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 รีเฟรชข้อมูลตอนนี้"; }
+  }
+}
+
+/** ปุ่ม "กดลองใหม่" ของแถวที่ sync กลับไป Sheet ไม่สำเร็จตอนอนุมัติเบิก (Admin เท่านั้น) */
+async function retryColorSorterSync(serial) {
+  const confirmed = await showConfirm(`ลองส่งข้อมูลเครื่อง Color Sorter S/N ${serial} ไปที่ Sheet ใหม่อีกครั้ง?`);
+  if (!confirmed) return;
+  const res = await apiPost({ action: "retryColorSorterSheetSync", token: state.token, serial });
   if (!res.ok) {
     if (res.error === "unauthorized") return handleUnauthorized();
     await showAlert("ลองใหม่ไม่สำเร็จ: " + (res.detail || res.error || "unknown_error"), "error");
@@ -3737,6 +4056,48 @@ function openPanolyzerDetailModal(serial) {
     ${fieldsHtml}
     ${syncHtml}
     ${attachBtn ? `<div class="mcard-actions" style="margin-top:14px;">${attachBtn}</div>` : ""}
+  `;
+  document.getElementById("assetDetailModal").style.display = "flex";
+}
+
+/** โมดัลรายละเอียด Color Sorter — เหมือน openPanolyzerDetailModal ทุกประการ ต่างแค่ไม่มีเรื่อง Gateway ผูกเลย
+ * (ไม่มีปุ่ม "ผูก Gateway เพิ่มทีหลัง" เพราะ Color Sorter ไม่ผูกกับอะไรทั้งสิ้น) */
+function openColorSorterDetailModal(serial) {
+  const row = (state.data.colorSorter || []).find((r) => String(r[COLORSORTER_SERIAL_FIELD] || "") === serial);
+  if (!row) {
+    showAlert("ไม่พบข้อมูลเครื่อง Color Sorter นี้ (อาจถูกลบ/ย้ายไปแล้ว)", "error");
+    return;
+  }
+  const isAdmin = state.user.role === "Admin";
+  const stock = isColorSorterStockRow(row);
+  document.getElementById("assetDetailModalTitle").textContent = `Color Sorter — ${serial}`;
+
+  const fieldsHtml = [
+    [COLORSORTER_SERIAL_FIELD, row[COLORSORTER_SERIAL_FIELD], "text"],
+    ["ลูกค้า", row["Client name"], "text"],
+    ["สถานที่", row["Location"], "text"],
+    ["สถานะ", row["Status"], "status"],
+    ["Model", row["Model"], "text"],
+    ["Model code", row["Model code"], "text"],
+    ["Firmware", row["Firmware"], "text"],
+    ["หมายเหตุ", row["Remark"], "text"],
+  ].map(([label, v, kind]) => {
+    let valHtml;
+    if (kind === "status") {
+      valHtml = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(v || ""))}</span>`;
+    } else {
+      valHtml = v ? escapeHtml(String(v)) : `<span class="cache-note">-</span>`;
+    }
+    return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(label)}</div><div class="mcard-val">${valHtml}</div></div>`;
+  }).join("");
+
+  const syncHtml = row.pendingSheetSync
+    ? `<div class="mcard-row"><div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="closeAssetDetailModal(); retryColorSorterSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}</div>`
+    : "";
+
+  document.getElementById("assetDetailModalBody").innerHTML = `
+    ${fieldsHtml}
+    ${syncHtml}
   `;
   document.getElementById("assetDetailModal").style.display = "flex";
 }
@@ -5465,6 +5826,25 @@ function getAvailablePanolyzerItems(search) {
   });
 }
 
+/** เหมือน getAvailablePanolyzerItems() แต่เฉพาะ Color Sorter (ไม่ได้อยู่ใน VIEW_CONFIG — ดูหมายเหตุ
+ * COLORSORTER_KEY หัวไฟล์) กรองเฉพาะ Status="Stock" และไม่ซ้ำกับที่มีคำขออื่นค้างอยู่/อยู่ในตะกร้าแล้ว */
+function getAvailableColorSorterItems(search) {
+  const pendingKeys = getPendingKeys();
+  const basketKeys = new Set(issuanceForm.basket.map((b) => b.assetType + "||" + b.serialNo));
+  const rows = state.data.colorSorter || [];
+  return rows.filter((row) => {
+    if (!isColorSorterStockRow(row)) return false;
+    const serial = String(row[COLORSORTER_SERIAL_FIELD] || "");
+    const key = COLORSORTER_ASSET_TYPE + "||" + serial;
+    if (pendingKeys.has(key) || basketKeys.has(key)) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      return [COLORSORTER_SERIAL_FIELD, "Client name", "Location", "Model", "Firmware"].some((f) => String(row[f] || "").toLowerCase().includes(s));
+    }
+    return true;
+  });
+}
+
 /** รายชื่อ user ที่ยัง active อยู่ (เรียงตามชื่อภาษาไทย) — ใช้เป็นตัวเลือกในฟีเจอร์ "เลือกผู้เบิกแทน" */
 function getIssuedByOptions() {
   return (state.data.users || [])
@@ -5530,6 +5910,7 @@ function renderIssueView() {
           <option value="gateway">Gateway</option>
           <option value="simcard">SimCard</option>
           <option value="panolyzer">Panolyzer</option>
+          <option value="colorSorter">Color Sorter</option>
           <option value="colorSorterParts">อะไหล่ Color Sorter</option>
           <option value="panolyzerParts">อะไหล่ Panolyzer</option>
           <option value="other">อื่นๆ (พิมพ์เอง)</option>
@@ -5625,6 +6006,28 @@ function renderPickerList() {
         <div class="picker-list-item">
           <span>${label}</span>
           <button class="btn-sm btn-add" onclick="addToBasket('${PANOLYZER_KEY}', '${escapeAttr(serial)}')">+ เพิ่ม</button>
+        </div>`;
+    }).join("");
+    return;
+  }
+
+  // Color Sorter (เครื่อง): ไม่ได้อยู่ใน VIEW_CONFIG เหมือน Panolyzer — ง่ายกว่า Panolyzer เพราะไม่มีเรื่อง
+  // Gateway/SimCard คู่กันเลย แค่แสดงรายการ + ปุ่มเพิ่มตรงๆ
+  if (assetKey === COLORSORTER_KEY) {
+    const search = searchInput.value;
+    const items = getAvailableColorSorterItems(search);
+    if (!items.length) {
+      listEl.innerHTML = `<div class="picker-empty">ไม่พบเครื่อง Color Sorter ที่พร้อมเบิก (สถานะ Stock)</div>`;
+      return;
+    }
+    listEl.innerHTML = items.slice(0, 50).map((row) => {
+      const serial = String(row[COLORSORTER_SERIAL_FIELD] || "");
+      const model = String(row.Model || "").trim();
+      const label = `Color Sorter — ${escapeHtml(serial)}${model ? " (" + escapeHtml(model) + ")" : ""}`;
+      return `
+        <div class="picker-list-item">
+          <span>${label}</span>
+          <button class="btn-sm btn-add" onclick="addToBasket('${COLORSORTER_KEY}', '${escapeAttr(serial)}')">+ เพิ่ม</button>
         </div>`;
     }).join("");
     return;
@@ -5792,6 +6195,18 @@ function addToBasket(assetKey, serial) {
       connectTo: "", connectSerial: "", location: "",
       linkedGatewaySerial: existing.linkedGatewaySerial, linkedSimSerial: existing.linkedSimSerial,
       preLinked: !!existing.linkedGatewaySerial, // ใช้บอก UI ว่ารายการนี้ "มากับเครื่องอยู่แล้ว" ไม่ใช่เพิ่งเลือกจาก Stock
+    });
+    renderPickerList();
+    renderBasket();
+    return;
+  }
+
+  // Color Sorter (เครื่อง): ไม่ได้อยู่ใน VIEW_CONFIG — ง่ายกว่า Panolyzer เพราะไม่มี linkedGatewaySerial/
+  // linkedSimSerial ใดๆ เลย (เบิกแบบเดี่ยวล้วนๆ ตามที่ผู้ใช้ยืนยัน)
+  if (assetKey === COLORSORTER_KEY) {
+    issuanceForm.basket.push({
+      assetType: COLORSORTER_ASSET_TYPE, assetKey, serialNo: serial,
+      connectTo: "", connectSerial: "", location: "",
     });
     renderPickerList();
     renderBasket();
@@ -6113,6 +6528,22 @@ function renderBasket() {
             </tr>`;
           }
 
+          // Color Sorter (เครื่อง): ไม่ได้อยู่ใน VIEW_CONFIG — ง่ายกว่า Panolyzer มาก เพราะไม่ผูก Gateway/SimCard
+          // เลยแม้แต่กรณีเดียว มีแค่สถานที่เฉพาะจุด (ไม่บังคับ) กับปุ่มลบ
+          if (item.assetType === "ColorSorter") {
+            const csLocationCell = `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
+                value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">`;
+            return `<tr>
+              <td>Color Sorter</td>
+              <td>${escapeHtml(item.serialNo)}</td>
+              <td><span class="cache-note">ไม่ผูกกับอะไร</span></td>
+              <td><span class="cache-note">-</span></td>
+              <td><span class="cache-note">-</span></td>
+              <td>${csLocationCell}</td>
+              <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
+            </tr>`;
+          }
+
           const cfg = VIEW_CONFIG[item.assetKey];
           let connectCell = `<span class="cache-note">-</span>`;
           let serialCell = `<span class="cache-note">-</span>`;
@@ -6336,6 +6767,27 @@ function renderBasketMobile(area) {
         </div>`;
     }
 
+    // Color Sorter (เครื่อง): ไม่ได้อยู่ใน VIEW_CONFIG — ง่ายกว่า Panolyzer มาก ไม่ผูก Gateway/SimCard เลย
+    if (item.assetType === "ColorSorter") {
+      const csFieldsHtml = `
+        <div class="basket-field">
+          <label>สถานที่เฉพาะจุด (ไม่บังคับ)</label>
+          <input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
+            value="${escapeAttr(item.location || "")}" oninput="updateBasketLocation(${idx}, this.value)">
+        </div>`;
+      return `
+        <div class="basket-card">
+          <div class="basket-card-head">
+            <div>
+              <div class="basket-card-title">Color Sorter</div>
+              <div class="basket-card-serial">S/N ${escapeHtml(item.serialNo)}</div>
+            </div>
+            <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
+          </div>
+          ${csFieldsHtml}
+        </div>`;
+    }
+
     const cfg = VIEW_CONFIG[item.assetKey];
     const fields = []; // { label, html, req }
 
@@ -6523,6 +6975,13 @@ async function submitIssuanceRequest() {
       if (b.linkedSimSerial) {
         items.push({ assetType: "SimCard", serialNo: b.linkedSimSerial, connectTo: "Panolyzer", connectSerial: b.serialNo, installedGatewaySerial: b.linkedGatewaySerial, newLocation: panoLocation });
       }
+      return;
+    }
+    // Color Sorter (เครื่อง): ไม่มี connectTo/connectSerial/Gateway/SimCard เกี่ยวข้องเลย (ดูหมายเหตุ
+    // COLORSORTER_KEY หัวไฟล์) — ส่งแค่ serial + สถานที่เฉพาะจุด (ถ้ามี)
+    if (b.assetType === "ColorSorter") {
+      const csLocation = String(b.location || "").trim() || undefined;
+      items.push({ assetType: "ColorSorter", serialNo: b.serialNo, newLocation: csLocation });
       return;
     }
     // installedGatewaySerial: แยกต่างหากจาก connectTo/connectSerial (ซึ่งใช้แสดงประวัติ "ใส่ในอุปกรณ์ปลายทางไหน"

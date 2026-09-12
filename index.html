@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
   <!-- เก็บ Chart.js ไว้ในโปรเจกต์เอง (vendor/) แทนการโหลดจาก CDN ภายนอก เพราะ path เดิมบน cdnjs คืน 404
        (ทำให้กราฟ Dashboard 2 อันไม่ขึ้นเลย) — ไม่ต้องพึ่งอินเทอร์เน็ต/CDN อีกต่อไปสำหรับไลบรารีนี้ -->
   <script src="vendor/chart.umd.min.js"></script>
@@ -82,7 +82,10 @@
         <span class="nav-icon-chip" style="background:#8B5CF6;"><i class="fas fa-sim-card"></i></span> <span>SimCard</span>
       </div>
       <div class="nav-item" data-view="panolyzer" onclick="switchView('panolyzer')">
-        <span class="nav-icon-chip" style="background:#EC6BAA;"><i class="fas fa-vial"></i></span> <span>Panolyzer</span>
+        <span class="nav-icon-chip" style="background:#EC6BAA;"><i class="fas fa-magnifying-glass-chart"></i></span> <span>Panolyzer</span>
+      </div>
+      <div class="nav-item" data-view="colorSorter" onclick="switchView('colorSorter')">
+        <span class="nav-icon-chip" style="background:#475569;"><i class="fas fa-sliders"></i></span> <span>Color Sorter</span>
       </div>
       <div class="nav-item" data-view="colorSorterParts" onclick="switchView('colorSorterParts')">
         <span class="nav-icon-chip" style="background:#e08e0b;"><i class="fas fa-cogs"></i></span> <span>อะไหล่ Color Sorter</span>

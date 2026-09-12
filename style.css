@@ -226,13 +226,21 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .kpi-model-row { display: flex; flex-direction: column; gap: 5px; }
 .kpi-model-row.is-low { background: #FBEFE6; margin: 0 -10px; padding: 7px 10px; border-radius: 8px; }
 .kpi-model-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.kpi-model-name { font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Phase (แก้ตามคำขอผู้ใช้): เดิม label+sub อยู่แถวเดียวกันแบบ flex-wrap ทำให้ EPG-001B ตัดขึ้นบรรทัด 2 เพราะ
+ * ข้อความรวมยาวเกินพอดี ในขณะที่ EPG-001S สั้นกว่าเลยอยู่บรรทัดเดียว (ไม่ตรงกัน) — เปลี่ยนเป็น column เสมอ
+ * เพื่อให้ label กับ sub แยกคนละบรรทัดแน่นอนทุกกรณี ไม่ขึ้นกับความยาวข้อความ */
+.kpi-model-name { font-size: 12px; font-weight: 700; color: var(--text); display: flex; flex-direction: column; gap: 1px; }
 .kpi-model-name small { font-size: 10.5px; font-weight: 500; color: var(--gray); }
 .kpi-model-nums { font-size: 11.5px; color: var(--gray); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kpi-model-nums b { color: var(--green-dark); font-size: 13px; }
 .kpi-model-nums b.stock-num { color: var(--warning); }
 .kpi-model-bar { width: 100%; height: 5px; border-radius: 3px; background: var(--sub2, #D2DCD8); overflow: hidden; }
 .kpi-model-bar span { display: block; height: 100%; border-radius: 3px; }
+/* Phase (ตามคำขอผู้ใช้): เพิ่มบรรทัดเล็กใต้หลอด stock ของแต่ละรุ่น โชว์ "เบิกแล้ว/รวม" ต่อรุ่น (preview ให้ดูก่อน
+ * แล้ว — เลือกแบบ B: แยกบรรทัดต่างหาก ไม่เบียดกับตัวเลข "ในคลัง" หลัก) ใช้ร่วมกันทุกการ์ดที่มี model breakdown
+ * (MoisturLyzer/Gateway/Panolyzer/Color Sorter) เพราะใช้โครง HTML เดียวกัน */
+.kpi-model-sub { font-size: 9.5px; color: #9aa39c; text-align: right; margin-top: -2px; }
+.kpi-model-sub b { color: var(--green); font-weight: 700; }
 
 /* Phase 17: การ์ดอะไหล่บน Dashboard — แสดงรายชื่ออะไหล่ทุกชื่อในการ์ดเดียว (แทนตัวเลขรวมก้อนเดียว) */
 .parts-count-pill { font-size: 11px; font-weight: 700; color: var(--green); background: var(--green-light); padding: 2px 9px; border-radius: 999px; flex-shrink: 0; }
@@ -1240,6 +1248,7 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
 .mh-c4 { background: #8B5CF6; } .mh-c5 { background: #e08e0b; } .mh-c6 { background: #EC6BAA; }
 .mh-c7 { background: var(--green); } .mh-c8 { background: var(--danger); } .mh-c9 { background: var(--gray); }
 .mh-c10 { background: #0EA5A5; }
+.mh-c11 { background: #475569; }
 
 .mh-tabbar {
   position: fixed; bottom: 0; left: 0; right: 0; background: #fff; display: flex; padding: 8px 4px calc(10px + env(safe-area-inset-bottom, 0px));
