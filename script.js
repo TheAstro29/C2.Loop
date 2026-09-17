@@ -2418,7 +2418,20 @@ async function printDashboardViaPopup() {
       renderFormalReportCharts(computeFormalReportRows(state.__dashboardSummaries || []));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
-    const canvas = await html2canvas(area, { backgroundColor: "#ffffff", scale: 2 });
+    // แก้บั๊ก "กดพิมพ์รายงานแล้วค้างที่ 'กำลังเตรียมข้อมูลสำหรับพิมพ์...' ตลอดไป" (พบเฉพาะตอนเปิดแอปผ่าน
+    // Google Sites ที่ฝังแอปนี้ไว้ใน iframe แบบ sandbox) — เดิม await html2canvas(...) ตรงๆ ไม่มี timeout เลย
+    // html2canvas สร้าง iframe ซ่อนของตัวเองขึ้นมาเพื่อ clone หน้าเว็บไปถ่ายภาพ ถ้า iframe ที่ซ้อนกันแบบนี้
+    // (iframe ของ html2canvas อยู่ข้างใน iframe ของ Google Sites ที่ sandbox จำกัดสิทธิ์อยู่แล้วอีกที) เริ่ม
+    // ทำงานไม่สมบูรณ์ promise ของ html2canvas จะไม่ resolve/reject เลยตลอดไป โค้ดเดิมเลยค้างที่ข้อความแรกสุด
+    // ใน popup ไปเรื่อยๆ ไม่มีทาง fallback ออกมาได้เลย — ใส่ Promise.race กับ timeout กันไว้ เหมือน pattern
+    // setTimeout กันเหนียวที่ printSlipViaPopup/printAfterImagesLoad ใช้อยู่แล้ว เพื่อให้อย่างน้อยก็มีข้อความ
+    // แจ้ง error ให้ผู้ใช้เห็นแทนที่จะค้างเฉยๆ ไม่มีทางออก และเปิด useCORS/allowTaint เผื่อกรณีรูปภาพในรายงาน
+    // โหลดข้าม origin (ลดโอกาสที่ html2canvas จะ throw เพราะ canvas ถูก taint)
+    const HTML2CANVAS_TIMEOUT_MS = 10000;
+    const canvas = await Promise.race([
+      html2canvas(area, { backgroundColor: "#ffffff", scale: 2, useCORS: true, allowTaint: true }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("html2canvas timeout")), HTML2CANVAS_TIMEOUT_MS)),
+    ]);
     const dataUrl = canvas.toDataURL("image/png");
     popup.document.body.innerHTML = `<img src="${dataUrl}" alt="C2 LOOP Dashboard">`;
     popup.document.title = "C2 LOOP — พิมพ์ Dashboard";
@@ -2428,7 +2441,7 @@ async function printDashboardViaPopup() {
     }, 300);
   } catch (err) {
     popup.close();
-    await showAlert("สร้างรูปสำหรับพิมพ์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง", "error");
+    await showAlert("สร้างรูปสำหรับพิมพ์ไม่สำเร็จ (มักเกิดจากการฝังแอปไว้ใน iframe ของ Google Sites ที่จำกัดสิทธิ์) กรุณาลองเปิดแอปนี้ในแท็บเบราว์เซอร์แยกต่างหาก (ไม่ผ่าน Google Sites) แล้วลองพิมพ์อีกครั้ง", "error");
   } finally {
     document.body.classList.remove("print-dashboard-active");
   }
