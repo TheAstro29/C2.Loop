@@ -40,7 +40,12 @@ let state = {
 };
 
 // ตะกร้าเบิกที่กำลังกรอกอยู่ (อยู่ใน memory เท่านั้น ไม่ persist — เคลียร์เมื่อส่งสำเร็จ)
-let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
+let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 };
+
+// หน้า "เบิกอุปกรณ์" แบบ Stepper: เก็บข้อมูลสรุปคำขอที่เพิ่งส่งสำเร็จ/ถูกคิวไว้ตอนออฟไลน์ไว้ชั่วคราว เพื่อโชว์เป็นหน้า
+// "สำเร็จ" เต็มจอแทนฟอร์มว่างเปล่า (เดิมข้อความสำเร็จโผล่ใน #issueMsg ของการ์ด "ตะกร้าเบิก" ซึ่งพอ reset ฟอร์มกลับไป
+// ขั้นที่ 1 แล้ว การ์ดนั้นจะถูกซ่อนไปด้วย ผู้ใช้จะไม่เห็นข้อความสำเร็จเลย — ต้องแยกมาเก็บไว้นอก issuanceForm แบบนี้)
+let issueSuccessInfo = null;
 
 // Phase 5: เลขที่ธุรกรรมที่เลือกไว้สำหรับดำเนินการแบบกลุ่ม (bulk) ในหน้าอนุมัติ/ประวัติ — เคลียร์ทุกครั้งที่เปลี่ยนหน้า
 let bulkSelection = new Set();
@@ -545,7 +550,8 @@ function logout() {
     offlineQueue: loadOfflineQueue(), charts: {},
     mobileHomeVisible: true,
   };
-  issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
+  issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 };
+  issueSuccessInfo = null;
   document.getElementById("login-username").value = "";
   document.getElementById("login-password").value = "";
   showLogin();
@@ -5883,61 +5889,82 @@ function renderIssuedByFieldHtml(fieldId, currentValue) {
     </div>`;
 }
 
+// ============================================================
+// รีดีไซน์หน้า "เบิกอุปกรณ์" เป็นแบบ Stepper 3 ขั้นตอน (ข้อมูลลูกค้า → เลือกอุปกรณ์ → ตรวจสอบ/ส่ง)
+// หลักการ: ยังคง render DOM ของทั้ง 3 การ์ดไว้เหมือนเดิมทุกจุด (pickerList/basketArea/ช่องกรอกต่างๆ ID เดิมทั้งหมด)
+// เพียงแค่ครอบด้วย <div class="issue-step" data-step="N"> แล้วโชว์/ซ่อนด้วย CSS (.issue-step.active) ตามขั้นที่
+// อยู่ปัจจุบัน (issuanceForm.step) — ทำแบบนี้เพื่อไม่ต้องแตะ logic เดิมของ renderPickerList/renderBasket/
+// submitIssuanceRequest ที่ซับซ้อนมาก (เชื่อมต่อ Gateway/SimCard, Panolyzer, อะไหล่นับจำนวน ฯลฯ) เลยแม้แต่บรรทัดเดียว
+// ============================================================
 function renderIssueView() {
   const content = document.getElementById("viewContent");
+  if (issueSuccessInfo) { content.innerHTML = renderIssueSuccessHtml(issueSuccessInfo); return; }
+  const step = issuanceForm.step || 1;
   content.innerHTML = `
-    <div class="form-card">
-      <h3>1. ข้อมูลการเบิก</h3>
-      ${renderIssuedByFieldHtml("f-issuedBy", issuanceForm.issuedByOverride)}
-      <div class="form-grid">
-        <div class="form-field">
-          <label>ชื่อลูกค้า *</label>
-          <input type="text" id="f-customerName" list="customerList" value="${escapeHtml(issuanceForm.customerName)}" placeholder="เช่น ธนกรรวมผล999">
-          <datalist id="customerList">${getKnownCustomerNames().map((n) => `<option value="${escapeHtml(n)}">`).join("")}</datalist>
+    ${renderIssueStepperHtml(step)}
+
+    <div class="issue-step ${step === 1 ? "active" : ""}" data-step="1">
+      <div class="form-card">
+        <h3>1. ข้อมูลการเบิก</h3>
+        ${renderIssuedByFieldHtml("f-issuedBy", issuanceForm.issuedByOverride)}
+        <div class="form-grid">
+          <div class="form-field">
+            <label>ชื่อลูกค้า *</label>
+            <input type="text" id="f-customerName" list="customerList" value="${escapeHtml(issuanceForm.customerName)}" placeholder="เช่น ธนกรรวมผล999">
+            <datalist id="customerList">${getKnownCustomerNames().map((n) => `<option value="${escapeHtml(n)}">`).join("")}</datalist>
+          </div>
+          <div class="form-field">
+            <label>สถานที่ติดตั้ง / ไซต์งาน *</label>
+            <input type="text" id="f-siteLocation" value="${escapeHtml(issuanceForm.siteLocation)}" placeholder="เช่น โกดัง 8 A">
+          </div>
+        </div>
+        <div class="form-grid full">
+          <div class="form-field">
+            <label>รายละเอียด / หมายเหตุ</label>
+            <textarea id="f-details">${escapeHtml(issuanceForm.details)}</textarea>
+          </div>
         </div>
         <div class="form-field">
-          <label>สถานที่ติดตั้ง / ไซต์งาน *</label>
-          <input type="text" id="f-siteLocation" value="${escapeHtml(issuanceForm.siteLocation)}" placeholder="เช่น โกดัง 8 A">
+          <div class="loan-field">
+            <input type="checkbox" id="f-isLoan" ${issuanceForm.isLoan ? "checked" : ""}>
+            <label for="f-isLoan"><strong>ลูกค้ายืมไปทดลอง</strong> (ไม่ใช่การเบิกขาย/ติดตั้งถาวร)</label>
+          </div>
+          <div class="loan-hint">ติ๊กแล้วใบเบิกนี้จะขึ้นป้าย "ยืม" กำกับสถานะไว้ ให้แยกจากการเบิกปกติ</div>
         </div>
+        <div id="issueStep1Msg" class="form-msg"></div>
       </div>
-      <div class="form-grid full">
-        <div class="form-field">
-          <label>รายละเอียด / หมายเหตุ</label>
-          <textarea id="f-details">${escapeHtml(issuanceForm.details)}</textarea>
-        </div>
-      </div>
-      <div class="form-field">
-        <div class="loan-field">
-          <input type="checkbox" id="f-isLoan" ${issuanceForm.isLoan ? "checked" : ""}>
-          <label for="f-isLoan"><strong>ลูกค้ายืมไปทดลอง</strong> (ไม่ใช่การเบิกขาย/ติดตั้งถาวร)</label>
-        </div>
-        <div class="loan-hint">ติ๊กแล้วใบเบิกนี้จะขึ้นป้าย "ยืม" กำกับสถานะไว้ ให้แยกจากการเบิกปกติ</div>
-      </div>
+      <div class="step-nav"><span></span><button class="btn-primary" id="issueStep1NextBtn">ถัดไป: เลือกอุปกรณ์ →</button></div>
     </div>
 
-    <div class="form-card">
-      <h3>2. เลือกอุปกรณ์ที่จะเบิก (แสดงเฉพาะรายการที่อยู่ในสถานะ Stock และไม่มีคำขออื่นค้างอยู่)</h3>
-      <div class="picker-row">
-        <select id="f-assetType">
-          <option value="moisturlyzer">MoisturLyzer</option>
-          <option value="gateway">Gateway</option>
-          <option value="simcard">SimCard</option>
-          <option value="panolyzer">Panolyzer</option>
-          <option value="colorSorter">Color Sorter</option>
-          <option value="colorSorterParts">อะไหล่ Color Sorter</option>
-          <option value="panolyzerParts">อะไหล่ Panolyzer</option>
-          <option value="other">อื่นๆ (พิมพ์เอง)</option>
-        </select>
-        <input type="text" id="f-itemSearch" placeholder="ค้นหา Serial / รุ่น...">
+    <div class="issue-step ${step === 2 ? "active" : ""}" data-step="2">
+      <div class="form-card">
+        <h3>2. เลือกอุปกรณ์ที่จะเบิก (แสดงเฉพาะรายการที่อยู่ในสถานะ Stock และไม่มีคำขออื่นค้างอยู่)</h3>
+        <div class="picker-row">
+          <select id="f-assetType">
+            <option value="moisturlyzer">MoisturLyzer</option>
+            <option value="gateway">Gateway</option>
+            <option value="simcard">SimCard</option>
+            <option value="panolyzer">Panolyzer</option>
+            <option value="colorSorter">Color Sorter</option>
+            <option value="colorSorterParts">อะไหล่ Color Sorter</option>
+            <option value="panolyzerParts">อะไหล่ Panolyzer</option>
+            <option value="other">อื่นๆ (พิมพ์เอง)</option>
+          </select>
+          <input type="text" id="f-itemSearch" placeholder="ค้นหา Serial / รุ่น...">
+        </div>
+        <div class="picker-list" id="pickerList"></div>
       </div>
-      <div class="picker-list" id="pickerList"></div>
+      <div id="issueBasketBadge" class="issue-basket-badge"></div>
+      <div class="step-nav"><button class="btn-secondary" onclick="goToIssueStep(1)">← ย้อนกลับ</button><button class="btn-primary" id="issueStep2NextBtn">ถัดไป: ตรวจสอบ →</button></div>
     </div>
 
-    <div class="form-card">
-      <h3>3. ตะกร้าเบิก (<span id="basketCount">${issuanceForm.basket.length}</span> รายการ)</h3>
-      <div id="basketArea"></div>
-      <div id="issueMsg" class="form-msg"></div>
-      <button class="btn-primary" id="submitIssuanceBtn">ส่งคำขอเบิก (รออนุมัติ)</button>
+    <div class="issue-step ${step === 3 ? "active" : ""}" data-step="3">
+      <div class="form-card">
+        <h3>3. ตรวจสอบและส่งคำขอ (<span id="basketCount">${issuanceForm.basket.length}</span> รายการ)</h3>
+        <div id="basketArea"></div>
+        <div id="issueMsg" class="form-msg"></div>
+      </div>
+      <div class="step-nav"><button class="btn-secondary" onclick="goToIssueStep(2)">← ย้อนกลับ</button><button class="btn-primary" id="submitIssuanceBtn">ส่งคำขอเบิก (รออนุมัติ)</button></div>
     </div>
   `;
 
@@ -5949,10 +5976,102 @@ function renderIssueView() {
   document.getElementById("f-isLoan").addEventListener("change", (e) => { issuanceForm.isLoan = e.target.checked; });
   document.getElementById("f-assetType").addEventListener("change", renderPickerList);
   document.getElementById("f-itemSearch").addEventListener("input", renderPickerList);
+  document.getElementById("issueStep1NextBtn").addEventListener("click", () => goToIssueStep(2));
+  document.getElementById("issueStep2NextBtn").addEventListener("click", () => goToIssueStep(3));
   document.getElementById("submitIssuanceBtn").addEventListener("click", submitIssuanceRequest);
 
   renderPickerList();
   renderBasket();
+}
+
+/** แถบสถานะขั้นตอนบนสุดของหน้าเบิก — คลิกย้อนกลับขั้นก่อนหน้าได้เสมอ ไปข้างหน้าได้เฉพาะขั้นที่ผ่านการตรวจสอบแล้ว */
+function renderIssueStepperHtml(step) {
+  const dotCls = (n) => (n < step ? "step-dot done" : n === step ? "step-dot current" : "step-dot");
+  const lineCls = (n) => (n < step ? "step-line done" : "step-line");
+  return `
+    <div class="issue-stepper-wrap">
+      <div class="stepper">
+        <button class="${dotCls(1)}" onclick="goToIssueStep(1)">${step > 1 ? "✓" : "1"}</button>
+        <div class="${lineCls(2)}"></div>
+        <button class="${dotCls(2)}" onclick="goToIssueStep(2)">${step > 2 ? "✓" : "2"}</button>
+        <div class="${lineCls(3)}"></div>
+        <button class="${step === 3 ? "step-dot current" : "step-dot"}" ${step >= 3 ? `onclick="goToIssueStep(3)"` : ""}>3</button>
+      </div>
+      <div class="step-labels">
+        <span class="${step === 1 ? "current" : ""}">ข้อมูลลูกค้า</span>
+        <span class="${step === 2 ? "current" : ""}">เลือกอุปกรณ์</span>
+        <span class="${step === 3 ? "current" : ""}">ตรวจสอบ &amp; ส่ง</span>
+      </div>
+    </div>`;
+}
+
+/** สลับขั้นตอน — ไปข้างหน้าต้องผ่านการตรวจสอบของขั้นปัจจุบันก่อนเสมอ (เหมือนปุ่ม "ถัดไป") ย้อนกลับทำได้อิสระ */
+function goToIssueStep(target) {
+  const current = issuanceForm.step || 1;
+  if (target > current) {
+    if (current === 1 && !validateIssueStep1(true)) return;
+    if (current === 2 && !issuanceForm.basket.length) {
+      showAlert("กรุณาเลือกอุปกรณ์อย่างน้อย 1 รายการก่อนไปขั้นตอนถัดไป", "warning");
+      return;
+    }
+  }
+  issuanceForm.step = target;
+  renderIssueView();
+}
+
+function validateIssueStep1(showError) {
+  const ok = issuanceForm.customerName.trim() && issuanceForm.siteLocation.trim();
+  if (!ok && showError) {
+    const msg = document.getElementById("issueStep1Msg");
+    if (msg) { msg.className = "form-msg error"; msg.textContent = "กรุณากรอกชื่อลูกค้าและสถานที่ติดตั้งก่อนไปขั้นตอนถัดไป"; }
+  }
+  return !!ok;
+}
+
+/** หน้าจอ "สำเร็จ" เต็มการ์ด — โชว์แทนฟอร์มหลังส่งคำขอเบิกสำเร็จ (หรือบันทึกคิวไว้ตอนออฟไลน์) ดู issueSuccessInfo ด้านบน */
+function renderIssueSuccessHtml(info) {
+  return `
+    <div class="form-card issue-success">
+      <div class="issue-success-check">${info.offline ? "🔄" : "✓"}</div>
+      <h3 style="text-align:center;">${info.offline ? "บันทึกคำขอไว้ในเครื่องแล้ว" : "ส่งคำขอเบิกเรียบร้อยแล้ว"}</h3>
+      <p style="text-align:center; color:var(--gray); font-size:13px;">
+        ${info.offline
+          ? "ขณะนี้ออฟไลน์ — ระบบจะส่งคำขอนี้ให้อัตโนมัติทันทีที่กลับมาออนไลน์"
+          : `คำขอถูกส่งไปรออนุมัติจาก Admin แล้ว (เลขที่ธุรกรรม ${escapeHtml(info.transactionId || "-")})`}
+      </p>
+      <div class="issue-success-summary">
+        <div><b>ลูกค้า:</b> ${escapeHtml(info.customerName)}${info.siteLocation ? " — " + escapeHtml(info.siteLocation) : ""}</div>
+        <div><b>อุปกรณ์:</b> ${info.itemCount} รายการ</div>
+        ${!info.offline ? `<div><b>สถานะ:</b> รออนุมัติ</div>` : ""}
+      </div>
+      <button class="btn-primary" style="width:100%;" onclick="startNewIssuance()">+ เบิกรายการใหม่</button>
+    </div>`;
+}
+
+/** ปุ่ม "เบิกรายการใหม่" บนหน้าสำเร็จ — เคลียร์ issueSuccessInfo แล้วกลับไปเริ่มฟอร์มว่างที่ขั้นที่ 1 */
+function startNewIssuance() {
+  issueSuccessInfo = null;
+  renderIssueView();
+}
+
+/** ป้ายสรุปจำนวน/รายการที่อยู่ในตะกร้าแล้ว โชว์ไว้ใต้ตัวเลือกอุปกรณ์ในขั้นที่ 2 ให้เห็นว่าเลือกอะไรไปแล้วบ้างโดยไม่ต้องรอไปถึงขั้นที่ 3
+ * (อ่านอย่างเดียว — ลบ/แก้ไขการเชื่อมต่อยังคงทำที่ตะกร้าเต็มในขั้นที่ 3 เหมือนเดิม เพื่อไม่ให้ต้องซ้อน logic เดียวกันสองที่) */
+function renderIssueBasketBadge() {
+  const el = document.getElementById("issueBasketBadge");
+  if (!el) return; // ไม่ได้อยู่ขั้นที่ 2 ตอนนี้ ไม่ต้องทำอะไร
+  if (!issuanceForm.basket.length) {
+    el.innerHTML = `<div class="basket-empty">ยังไม่ได้เลือกอุปกรณ์ — เลือกจากรายการด้านบน</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="issue-basket-badge-title">ตะกร้าเบิก <span class="count">${issuanceForm.basket.length}</span> รายการ</div>
+    <div class="issue-basket-badge-chips">
+      ${issuanceForm.basket.map((b, idx) => {
+        const label = b.assetType === "Other" ? escapeHtml(b.itemName) : escapeHtml(b.partName || b.assetType || "");
+        const serialTag = (b.serialNo && b.serialNo !== "-" && !PART_QTY_DEVICE_LABEL[b.assetType]) ? " · " + escapeHtml(b.serialNo) : "";
+        return `<span class="basket-chip">${label}${serialTag}<span class="basket-chip-x" onclick="removeFromBasket(${idx})">✕</span></span>`;
+      }).join("")}
+    </div>`;
 }
 
 function getKnownCustomerNames() {
@@ -6437,6 +6556,7 @@ function getLinkableTargets() {
 }
 
 function renderBasket() {
+  renderIssueBasketBadge(); // อัปเดตป้ายสรุปตะกร้าที่ขั้นที่ 2 ของหน้าเบิก (Stepper) ให้ตรงกันเสมอทุกครั้งที่ตะกร้าเปลี่ยน
   const countEl = document.getElementById("basketCount");
   if (countEl) countEl.textContent = issuanceForm.basket.length;
 
@@ -7047,11 +7167,9 @@ async function submitIssuanceRequest() {
     state.offlineQueue.push({ label: `เบิก ${payload.customerName}`, body: { action: "requestIssuance", token: state.token, payload } });
     saveOfflineQueue();
     persistCache();
-    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
+    issueSuccessInfo = { offline: true, customerName: payload.customerName, siteLocation: payload.siteLocation, itemCount: issuanceForm.basket.length };
+    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 };
     renderIssueView();
-    const freshMsg = document.getElementById("issueMsg");
-    freshMsg.className = "form-msg success";
-    freshMsg.textContent = "ขณะนี้ออฟไลน์ — บันทึกคำขอไว้ในเครื่องแล้ว จะส่งให้อัตโนมัติทันทีที่กลับมาออนไลน์";
     return;
   }
 
@@ -7065,13 +7183,10 @@ async function submitIssuanceRequest() {
       throw new Error(issuanceErrorMessage(res.error) + conflictMsg);
     }
 
-    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "" };
-    const successText = "ส่งคำขอเบิกสำเร็จ (เลขที่ธุรกรรม " + res.transactionId + ") — รอ Admin อนุมัติ";
+    issueSuccessInfo = { offline: false, transactionId: res.transactionId, customerName: payload.customerName, siteLocation: payload.siteLocation, itemCount: issuanceForm.basket.length };
+    issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 };
     await refreshInBackground(true);
-    renderIssueView(); // สร้างฟอร์มใหม่ (ว่างเปล่า) ก่อน แล้วค่อยแปะข้อความสำเร็จทับ #issueMsg ของฟอร์มใหม่
-    const freshMsg = document.getElementById("issueMsg");
-    freshMsg.className = "form-msg success";
-    freshMsg.textContent = successText;
+    renderIssueView(); // แสดงหน้าจอ "สำเร็จ" (renderIssueSuccessHtml) แทนฟอร์มว่าง — ดู issueSuccessInfo ด้านบน
     return;
   } catch (err) {
     msg.className = "form-msg error";
@@ -7144,6 +7259,35 @@ function formatItemLabel(item, opts) {
 function formatItemSerialLabel(item) {
   if (PART_QTY_DEVICE_LABEL[item.AssetType]) return "-";
   return escapeHtml(item.SerialNo);
+}
+
+// ============================================================
+// การ์ดอนุมัติ/ประวัติ (รีดีไซน์): ตัวย่อชื่อผู้ขอเบิก + ไอคอนอุปกรณ์ต่อประเภท + ไอคอนกลาง (pin/note/swap)
+// ที่ใช้ร่วมกันในบล็อกปลายทาง/วัตถุประสงค์/สลับเครื่องเคลม — ดู renderApprovalsView / renderHistoryList
+// ============================================================
+
+/** ตัวย่อ 1-2 ตัวอักษรจากชื่อผู้ขอเบิก สำหรับใส่ในวงกลมอวตารหน้าการ์ด — "สมชาย ใจดี" -> "สจ", ชื่อคำเดียวตัด 2 ตัวแรก */
+function getRequesterInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2);
+  return parts[0].charAt(0) + parts[1].charAt(0);
+}
+
+const ICON_PIN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21Z"/><circle cx="12" cy="9.5" r="2.3"/></svg>`;
+const ICON_NOTE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 8v5"/><circle cx="12" cy="16.2" r=".4" fill="currentColor"/><circle cx="12" cy="12" r="9"/></svg>`;
+const ICON_SWAP = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg>`;
+const ASSET_ICON_DEVICE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`;
+const ASSET_ICON_GATEWAY = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M8 21h8M12 17v4"/></svg>`;
+const ASSET_ICON_SIM = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h.01"/></svg>`;
+const ASSET_ICON_PART = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>`;
+
+/** ไอคอนหน้ารายการอุปกรณ์ในการ์ด — เลือกตาม AssetType ให้พอแยกแยะประเภทได้ไวๆ ด้วยสายตา ไม่ต้องอ่านชื่อทุกแถว */
+function assetIconSvg(assetType) {
+  if (assetType === "Gateway") return ASSET_ICON_GATEWAY;
+  if (assetType === "SimCard") return ASSET_ICON_SIM;
+  if (assetType === "MoisturLyzer") return ASSET_ICON_DEVICE;
+  return ASSET_ICON_PART;
 }
 
 /** ข้อความอธิบาย "เชื่อมต่อ/ติดตั้งอยู่กับอะไร" แบบข้อความล้วน (ไม่มีวงเล็บ/คำนำหน้า) ใช้เป็นแกนกลางให้ทั้ง
@@ -7329,37 +7473,62 @@ function renderApprovalsView() {
         : isClaim
           ? `<span class="status-badge status-claim">คำขอเคลม</span>`
           : "";
-      const requesterLine = (isTransfer || isClaim)
-        ? `<div class="txn-meta">ผู้ขอ: ${escapeHtml(txn.IssuedBy)}${delegatedByText(txn) ? ` (${escapeHtml(delegatedByText(txn))})` : ""}${txn.FromCustomer ? ` · ลูกค้าเดิม: ${escapeHtml(txn.FromCustomer)}${txn.FromLocation ? " — " + escapeHtml(txn.FromLocation) : ""}` : ""}</div>`
+      // ปลายทาง: เคลมไม่ได้ย้ายลูกค้า ให้โชว์ลูกค้าเดิม (FromCustomer) เป็น "ลูกค้า" / ย้าย-เบิกปกติโชว์ CustomerName ปลายทางตามจริง
+      const destCustomer = isClaim ? (txn.FromCustomer || txn.CustomerName || "") : txn.CustomerName;
+      const destLocation = isClaim ? (txn.FromLocation || "") : txn.SiteLocation;
+      const destLabel = isTransfer ? "ย้ายไปยัง" : isClaim ? "ลูกค้า" : "ลูกค้า/สถานที่ปลายทาง";
+      // ย้าย: โชว์ต้นทางเดิมเพิ่มอีกบรรทัด (ปลายทางอยู่ใน dest-row ด้านบนแล้ว) ให้ Admin เห็นครบทั้งจาก-ไป ก่อนอนุมัติ
+      const originRow = (isTransfer && (txn.FromCustomer || txn.FromLocation))
+        ? `<div class="dest-row" style="background:#F1EEEE;color:var(--gray);">${ICON_PIN}<div><b style="color:var(--text);">ย้ายจาก:</b> ${escapeHtml(txn.FromCustomer || "-")}${txn.FromLocation ? " — " + escapeHtml(txn.FromLocation) : ""}</div></div>`
         : "";
       // เคลม: โชว์ "เครื่องเดิม ⇄ เครื่องทดแทน" ให้ Admin เห็นชัดว่ากำลังจะเปลี่ยนเครื่องอะไรให้อะไร ก่อนกดอนุมัติ
-      const claimSwapLine = isClaim
-        ? `<div class="txn-meta">เครื่องที่เคลม: <b>${escapeHtml(txn.ClaimedSerial || "-")}</b>${txn.ReplacementSerial ? ` ⇄ เครื่องทดแทน: <b>${escapeHtml(txn.ReplacementSerial)}</b>` : " (ยังไม่เลือกเครื่องทดแทน)"}</div>`
+      const claimSwapBox = isClaim
+        ? `<div class="purpose-box" style="background:var(--info-bg);border-color:#c9dcf0;">
+             ${ICON_SWAP}
+             <div><div class="purpose-label" style="color:var(--info);">เครื่องที่เคลม ⇄ เครื่องทดแทน</div>
+             <div class="purpose-text" style="color:var(--text);"><b>${escapeHtml(txn.ClaimedSerial || "-")}</b>${txn.ReplacementSerial ? ` ⇄ <b>${escapeHtml(txn.ReplacementSerial)}</b>` : " (ยังไม่เลือกเครื่องทดแทน)"}</div></div>
+           </div>`
         : "";
+      const requesterName = txn.IssuedBy || "-";
+      const via = delegatedByText(txn);
+      const itemsHtml = items.map((i) => `
+        <div class="a-item-row">
+          <div class="a-item-icon">${assetIconSvg(i.AssetType)}</div>
+          <div class="a-item-main">
+            <div class="a-item-name">${formatItemLabel(i, { withQty: false })}${formatConnectInfo(i)}${formatItemLocationTag(i, txn)}</div>
+            ${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : `<div class="a-item-serial">S/N ${formatItemSerialLabel(i)}</div>`}
+          </div>
+          ${(i.AssetType === "Other" || PART_QTY_DEVICE_LABEL[i.AssetType]) && Number(i.Quantity) > 1 ? `<div class="a-item-qty">×${Number(i.Quantity)}</div>` : ""}
+        </div>`).join("");
       return `
       <div class="txn-card">
-        <div class="txn-card-head">
+        <div class="req-row">
           ${txn._pendingSync ? "" : `<label class="txn-select"><input type="checkbox" class="bulk-approval-cb" data-txn-id="${escapeAttr(txn.TransactionID)}" onchange="toggleBulkSelect('${escapeAttr(txn.TransactionID)}', this.checked)"></label>`}
-          <div>
-            <div class="txn-title">${isTransfer ? "คำขอย้าย" : isClaim ? "คำขอเคลม" : escapeHtml(txn.CustomerName)} — ${escapeHtml(isClaim ? (txn.FromCustomer || txn.CustomerName || "") : txn.CustomerName)}${!isClaim && txn.SiteLocation ? " — " + escapeHtml(txn.SiteLocation) : ""}</div>
-            <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ${formatDateTh(txn.Timestamp)}</div>
+          <div class="req-avatar">${escapeHtml(getRequesterInitials(requesterName))}</div>
+          <div class="req-text">
+            <div class="req-eyebrow">ผู้ขอเบิก</div>
+            <div class="req-name">${escapeHtml(requesterName)}${via ? ` <span class="via">· ${escapeHtml(via)}</span>` : ""}</div>
           </div>
-          <span class="status-badge status-PendingApproval">รออนุมัติ</span>
-          ${movementBadge}
-          ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
+          <div class="req-time">เลขที่ ${escapeHtml(txn.TransactionID)}<br><b>${formatDateTh(txn.Timestamp)}</b></div>
         </div>
-        ${requesterLine}
-        ${claimSwapLine}
-        ${txn.Details ? `<div class="txn-meta">${isClaim ? "เหตุผลที่เคลม" : "หมายเหตุ"}: ${escapeHtml(txn.Details)}</div>` : ""}
-        ${!isClaim ? `<div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}${formatItemLocationTag(i, txn)}</div>`).join("")}
-        </div>` : ""}
-        ${txn._pendingSync
-          ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์ก่อนจึงจะอนุมัติได้</div>`
-          : `<div class="txn-actions">
-               <button class="btn-sm btn-approve" onclick="approveTxn('${escapeAttr(txn.TransactionID)}', this)">อนุมัติ${isTransfer ? "ย้าย" : isClaim ? "เคลม" : ""}</button>
-               <button class="btn-sm btn-reject" onclick="rejectTxn('${escapeAttr(txn.TransactionID)}', this)">ปฏิเสธ</button>
-             </div>`}
+        ${destCustomer ? `<div class="dest-row">${ICON_PIN}<div><span class="dest-kind">${destLabel}</span><b>${escapeHtml(destCustomer)}</b>${destLocation ? `<div class="dest-sub">${escapeHtml(destLocation)}</div>` : ""}</div></div>` : ""}
+        ${originRow}
+        ${claimSwapBox}
+        ${txn.Details ? `<div class="purpose-box">${ICON_NOTE}<div><div class="purpose-label">${isClaim ? "เหตุผลที่เคลม" : "วัตถุประสงค์การเบิก"}</div><div class="purpose-text">${escapeHtml(txn.Details)}</div></div></div>` : ""}
+        ${!isClaim ? `<div class="a-items"><div class="a-items-label">อุปกรณ์ที่ขอเบิก (${items.length} รายการ)</div>${itemsHtml}</div>` : ""}
+        <div class="a-foot">
+          <div class="a-badges">
+            <span class="status-badge status-PendingApproval">รออนุมัติ</span>
+            ${movementBadge}
+            ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
+          </div>
+          ${txn._pendingSync
+            ? `<div class="a-sync-note">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์ก่อนจึงจะอนุมัติได้</div>`
+            : `<div class="a-actions">
+                 <button class="btn-sm btn-approve" onclick="approveTxn('${escapeAttr(txn.TransactionID)}', this)">อนุมัติ${isTransfer ? "ย้าย" : isClaim ? "เคลม" : ""}</button>
+                 <button class="btn-sm btn-reject" onclick="rejectTxn('${escapeAttr(txn.TransactionID)}', this)">ปฏิเสธ</button>
+               </div>`}
+        </div>
       </div>`;
     }).join("")}
   `;
@@ -7721,33 +7890,54 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
     const canEdit = isAdmin && !txn._pendingSync;
     const canDelete = isAdmin && !txn._pendingSync && (txn.RequestStatus === "Rejected" || txn.RequestStatus === "Returned" || txn.RequestStatus === "Cancelled");
     const canBulkReturn = canReturn && !txn._pendingSync;
+    const requesterName = txn.IssuedBy || "-";
+    const via = delegatedByText(txn);
+    const itemsHtml = items.map((i) => `
+      <div class="a-item-row">
+        <div class="a-item-icon">${assetIconSvg(i.AssetType)}</div>
+        <div class="a-item-main">
+          <div class="a-item-name">${formatItemLabel(i, { withQty: false })}${formatConnectInfo(i)}${formatItemLocationTag(i, txn)}</div>
+          ${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : `<div class="a-item-serial">S/N ${formatItemSerialLabel(i)}</div>`}
+        </div>
+        ${(i.AssetType === "Other" || PART_QTY_DEVICE_LABEL[i.AssetType]) && Number(i.Quantity) > 1 ? `<div class="a-item-qty">×${Number(i.Quantity)}</div>` : ""}
+      </div>`).join("");
+    // เส้นเวลา: รวมทุกเหตุการณ์ (ขอเบิก/อนุมัติ/คืนของ/ยกเลิก) เรียงตามลำดับเวลาจริง แทนที่จะกระจายเป็นบรรทัดข้อความเดี่ยวๆ
+    const timelineRows = [
+      `<div class="timeline-row"><span class="timeline-dot"></span>ขอเบิกโดย <b>${escapeHtml(requesterName)}</b>${via ? ` (${escapeHtml(via)})` : ""} — ${formatDateTh(txn.Timestamp)}</div>`,
+      txn.ApprovedBy ? `<div class="timeline-row"><span class="timeline-dot"></span>ดำเนินการโดย <b>${escapeHtml(txn.ApprovedBy)}</b> — ${formatDateTh(txn.ApprovedAt)}</div>` : "",
+      txn.ReturnedAt ? `<div class="timeline-row"><span class="timeline-dot" style="background:var(--info);"></span>คืนของเมื่อ ${formatDateTh(txn.ReturnedAt)}</div>` : "",
+      txn.CancelledAt ? `<div class="timeline-row"><span class="timeline-dot" style="background:var(--gray);"></span>ยกเลิกโดย <b>${escapeHtml(txn.CancelledBy)}</b> — ${formatDateTh(txn.CancelledAt)}</div>` : "",
+    ].filter(Boolean).join("");
     return `
       <div class="txn-card">
-        <div class="txn-card-head">
+        <div class="req-row">
           ${canBulkReturn ? `<label class="txn-select"><input type="checkbox" class="bulk-return-cb" data-txn-id="${escapeAttr(txn.TransactionID)}" onchange="toggleBulkSelect('${escapeAttr(txn.TransactionID)}', this.checked)"></label>` : ""}
-          <div>
-            <div class="txn-title">${escapeHtml(txn.CustomerName)} — ${escapeHtml(txn.SiteLocation || "")}</div>
-            <div class="txn-meta">เลขที่ ${escapeHtml(txn.TransactionID)} · ผู้เบิก: ${escapeHtml(txn.IssuedBy)}${delegatedByText(txn) ? ` (${escapeHtml(delegatedByText(txn))})` : ""} · ${formatDateTh(txn.Timestamp)}</div>
-            ${txn.ApprovedBy ? `<div class="txn-meta">ดำเนินการโดย: ${escapeHtml(txn.ApprovedBy)} เมื่อ ${formatDateTh(txn.ApprovedAt)}</div>` : ""}
-            ${txn.ReturnedAt ? `<div class="txn-meta">คืนของเมื่อ: ${formatDateTh(txn.ReturnedAt)}</div>` : ""}
-            ${txn.CancelledAt ? `<div class="txn-meta">ยกเลิกโดย: ${escapeHtml(txn.CancelledBy)} เมื่อ ${formatDateTh(txn.CancelledAt)}</div>` : ""}
-            ${txn._pendingSync ? `<div class="txn-meta">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์</div>` : ""}
+          <div class="req-avatar">${escapeHtml(getRequesterInitials(requesterName))}</div>
+          <div class="req-text">
+            <div class="req-eyebrow">ผู้ขอเบิก</div>
+            <div class="req-name">${escapeHtml(requesterName)}</div>
           </div>
-          <span class="status-badge status-${txn.RequestStatus}">${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</span>
-          ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
-          ${txn.MovementType === "Transfer" ? `<span class="status-badge status-transfer">ย้าย</span>` : ""}
-          ${txn.MovementType === "Claim" ? `<span class="status-badge status-claim">เคลม</span>` : ""}
+          <div class="req-time">เลขที่ ${escapeHtml(txn.TransactionID)}<br><b>${formatDateTh(txn.Timestamp)}</b></div>
         </div>
-        ${txn.Details ? `<div class="txn-meta">หมายเหตุ: ${escapeHtml(txn.Details)}</div>` : ""}
-        <div class="txn-items">
-          ${items.map((i) => `<div class="txn-item-row">${formatItemLabel(i)}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : " — " + formatItemSerialLabel(i)}${formatConnectInfo(i)}${formatItemLocationTag(i, txn)}</div>`).join("")}
-        </div>
-        <div class="txn-actions">
-          ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
-          ${canCancel ? `<button class="btn-sm btn-cancel-txn" onclick="cancelTxn('${escapeAttr(txn.TransactionID)}', this)">ยกเลิกรายการ</button>` : ""}
-          ${canPrint ? `<button class="btn-sm btn-secondary" onclick="printSlip('${escapeAttr(txn.TransactionID)}')">พิมพ์ใบเบิก</button>` : ""}
-          ${canEdit ? `<button class="btn-sm btn-secondary" onclick="openEditIssuance('${escapeAttr(txn.TransactionID)}')">แก้ไข</button>` : ""}
-          ${canDelete ? `<button class="btn-sm btn-remove" onclick="deleteIssuance('${escapeAttr(txn.TransactionID)}')">ลบ</button>` : ""}
+        ${txn.CustomerName ? `<div class="dest-row">${ICON_PIN}<div><b>${escapeHtml(txn.CustomerName)}</b>${txn.SiteLocation ? `<div class="dest-sub">${escapeHtml(txn.SiteLocation)}</div>` : ""}</div></div>` : ""}
+        ${txn.Details ? `<div class="purpose-box">${ICON_NOTE}<div><div class="purpose-label">หมายเหตุ</div><div class="purpose-text">${escapeHtml(txn.Details)}</div></div></div>` : ""}
+        ${txn._pendingSync ? `<div class="a-sync-note">🔄 บันทึกไว้ตอนออฟไลน์ — รอซิงค์กับเซิร์ฟเวอร์</div>` : ""}
+        <div class="a-items"><div class="a-items-label">อุปกรณ์ (${items.length} รายการ)</div>${itemsHtml}</div>
+        <div class="timeline">${timelineRows}</div>
+        <div class="a-foot">
+          <div class="a-badges">
+            <span class="status-badge status-${txn.RequestStatus}">${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</span>
+            ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
+            ${txn.MovementType === "Transfer" ? `<span class="status-badge status-transfer">ย้าย</span>` : ""}
+            ${txn.MovementType === "Claim" ? `<span class="status-badge status-claim">เคลม</span>` : ""}
+          </div>
+          <div class="a-actions">
+            ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
+            ${canCancel ? `<button class="btn-sm btn-cancel-txn" onclick="cancelTxn('${escapeAttr(txn.TransactionID)}', this)">ยกเลิกรายการ</button>` : ""}
+            ${canPrint ? `<button class="btn-sm btn-secondary" onclick="printSlip('${escapeAttr(txn.TransactionID)}')">พิมพ์ใบเบิก</button>` : ""}
+            ${canEdit ? `<button class="btn-sm btn-secondary" onclick="openEditIssuance('${escapeAttr(txn.TransactionID)}')">แก้ไข</button>` : ""}
+            ${canDelete ? `<button class="btn-sm btn-remove" onclick="deleteIssuance('${escapeAttr(txn.TransactionID)}')">ลบ</button>` : ""}
+          </div>
         </div>
       </div>`;
   }).join("");

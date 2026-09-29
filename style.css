@@ -555,6 +555,55 @@ tbody tr.row-clickable { cursor: pointer; }
 .form-msg.error { display: block; background: #fdeaea; color: var(--danger); }
 .form-msg.success { display: block; background: #e8f5eb; color: var(--ok); }
 
+/* ============================================================
+   หน้า "เบิกอุปกรณ์" แบบ Stepper 3 ขั้นตอน (ดู renderIssueView / renderIssueStepperHtml ใน script.js)
+   ============================================================ */
+.issue-step { display: none; }
+.issue-step.active { display: block; }
+
+.issue-stepper-wrap { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px 6px; margin-bottom: 14px; }
+.stepper { display: flex; align-items: center; }
+.step-dot {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--border); color: #8a8580; border: none;
+  display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0;
+  font-family: inherit; cursor: default; padding: 0;
+}
+.step-dot.done, .step-dot[onclick] { cursor: pointer; }
+.step-dot.done { background: var(--ok); color: #fff; }
+.step-dot.current { background: var(--green); color: #fff; box-shadow: 0 0 0 4px var(--green-light); }
+.step-line { flex: 1; height: 2px; background: var(--border); margin: 0 6px; }
+.step-line.done { background: var(--ok); }
+.step-labels { display: flex; padding: 8px 0 14px; }
+.step-labels span { flex: 1; text-align: center; font-size: 11.5px; color: var(--gray); font-weight: 600; }
+.step-labels span.current { color: var(--green-dark); }
+
+.step-nav { display: flex; justify-content: space-between; gap: 10px; margin: 14px 0 20px; }
+
+.issue-basket-badge { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 18px; margin-bottom: 0; }
+.issue-basket-badge-title { font-size: 12px; font-weight: 700; color: var(--green-dark); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+.issue-basket-badge-title .count { background: var(--green); color: #fff; border-radius: 20px; padding: 1px 9px; font-size: 11px; margin-left: 4px; }
+.issue-basket-badge-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.basket-chip {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--green-light); color: var(--green-dark);
+  border-radius: 20px; padding: 6px 8px 6px 12px; font-size: 12px; font-weight: 600;
+}
+.basket-chip-x { color: var(--danger); font-weight: 700; cursor: pointer; padding: 0 4px; }
+
+.issue-success { text-align: center; padding: 36px 24px; }
+.issue-success-check {
+  width: 60px; height: 60px; border-radius: 50%; background: var(--ok-bg, #e5f2ea); color: var(--ok);
+  display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; font-size: 26px;
+}
+.issue-success-summary {
+  text-align: left; background: var(--paper); border-radius: 10px; padding: 14px 16px; margin: 18px 0 20px;
+  font-size: 13px; color: var(--text); line-height: 1.9;
+}
+
+@media (max-width: 640px) {
+  .step-labels span { font-size: 10px; }
+  .step-nav { position: sticky; bottom: 0; background: var(--paper); padding: 10px 0; margin: 10px -2px 0; }
+}
+
 .status-badge {
   display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase;
 }
@@ -579,6 +628,70 @@ tbody tr.row-clickable { cursor: pointer; }
 .txn-item-row:last-child { border-bottom: none; }
 /* Phase: สถานที่เฉพาะจุด — ต่อท้ายรายการที่สถานที่ต่างจากสถานที่รวมของทั้งคำขอ */
 .loc-tag { font-size: 11px; color: var(--info); font-weight: 600; }
+.txn-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+/* ============================================================
+   รีดีไซน์การ์ดหน้า "อนุมัติการเบิก" / "ประวัติการเบิก/คืน" (ดู renderApprovalsView / renderHistoryList)
+   เพิ่มเติมจาก .txn-card เดิม ไม่ได้แทนที่ — เพื่อให้เห็นชัดว่า "ใครขอเบิก" และ "เบิกไปทำอะไร" ตั้งแต่แวบแรก
+   ============================================================ */
+.req-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.req-avatar {
+  width: 38px; height: 38px; border-radius: 50%; background: var(--green);
+  color: #fff; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; font-weight: 700; font-size: 14px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.req-text { flex: 1; min-width: 0; }
+.req-eyebrow { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--green); }
+.req-name { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; }
+.req-name .via { font-size: 12px; font-weight: 500; color: var(--gray); }
+.req-time { font-size: 11.5px; color: var(--gray); white-space: nowrap; text-align: right; }
+.req-time b { color: var(--text); font-weight: 600; }
+
+.dest-row {
+  display: flex; align-items: flex-start; gap: 8px; background: var(--green-light); color: var(--green-dark);
+  border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; font-size: 12.5px;
+}
+.dest-row svg { flex-shrink: 0; margin-top: 1px; }
+.dest-row b { font-weight: 700; }
+.dest-row .dest-kind { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; opacity: .75; margin-bottom: 1px; }
+.dest-sub { color: #5c7268; }
+
+.a-items { margin-bottom: 10px; }
+.a-items-label { font-size: 11px; font-weight: 700; color: var(--gray); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.a-item-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.a-item-row:last-child { border-bottom: none; }
+.a-item-icon {
+  width: 30px; height: 30px; border-radius: 8px; background: #F5F7F6; border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--green);
+}
+.a-item-main { flex: 1; min-width: 0; }
+.a-item-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.a-item-serial { font-size: 11.5px; color: var(--gray); font-family: "Courier New", monospace; }
+.a-item-qty { font-size: 12px; color: var(--gray); font-weight: 600; white-space: nowrap; }
+
+.purpose-box {
+  background: #fffaf0; border: 1px solid #f3e3c2; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.purpose-box svg { flex-shrink: 0; margin-top: 2px; color: var(--warning); }
+.purpose-label { font-size: 10.5px; font-weight: 700; color: #8a5a06; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.purpose-text { font-size: 12.5px; color: #5a4321; line-height: 1.5; }
+
+.a-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.a-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.a-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.a-sync-note { font-size: 12px; color: var(--gray); }
+
+.timeline { margin-top: 4px; margin-bottom: 4px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 6px; }
+.timeline-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--gray); }
+.timeline-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex-shrink: 0; }
+.timeline-row b { color: var(--text); font-weight: 600; }
+
+@media (max-width: 640px) {
+  .req-row { flex-wrap: wrap; }
+  .req-time { text-align: left; margin-left: 48px; }
+}
+
 .txn-actions { display: flex; gap: 8px; margin-top: 10px; }
 .btn-approve { background: var(--ok); color: #fff; }
 .btn-approve:hover { background: #257c46; }
