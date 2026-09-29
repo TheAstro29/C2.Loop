@@ -599,9 +599,52 @@ tbody tr.row-clickable { cursor: pointer; }
   font-size: 13px; color: var(--text); line-height: 1.9;
 }
 
+/* Phase (จับคู่อุปกรณ์ — รีดีไซน์ B "การ์ดจับคู่แบบเห็นภาพ"): แทนที่ dropdown "เชื่อมต่อกับ" เล็กๆ กลางตาราง
+   ตะกร้า (แก้ปัญหาผู้ใช้แจ้งว่าเบิกของพร้อมกันแล้วไม่รู้ว่าต้องมาเชื่อมต่อกันตรงไหน) ดู renderPairingSectionHtml/
+   pairCardHtml ในไฟล์ script.js — .pairing-hint คือสถานะสั้นๆ ที่เหลือไว้ในตารางเดิม ชี้ไปที่ส่วนนี้ */
+.pairing-hint { font-size: 12px; color: var(--gray); font-weight: 600; }
+.pairing-hint.linked { color: var(--ok); }
+
+.pairing-section {
+  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border);
+  padding: 18px 20px; margin: 16px 0 14px;
+}
+.pairing-section h3 {
+  margin: 0 0 4px; font-size: 14.5px; color: var(--green-dark); display: flex; align-items: center; gap: 8px;
+}
+.pairing-section h3 svg { flex-shrink: 0; }
+.pairing-section .ph-sub { font-size: 12.5px; color: var(--gray); margin: 0 0 14px; line-height: 1.6; }
+
+.pair-card {
+  border: 1.5px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.pair-card:last-child { margin-bottom: 0; }
+.pair-card.linked { border-color: var(--green); background: var(--green-light); }
+.pair-node { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 180px; }
+.pair-node .ico {
+  width: 34px; height: 34px; border-radius: 9px; background: #fff; border: 1px solid var(--border); color: var(--green-dark);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.pair-node .meta .n { font-weight: 700; font-size: 13px; }
+.pair-node .meta .s { font-size: 11px; color: var(--gray); font-variant-numeric: tabular-nums; }
+.pair-mid { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.pair-line { width: 20px; height: 2px; background: var(--border); }
+.pair-card.linked .pair-line { background: var(--green); }
+.pair-status { font-size: 11px; font-weight: 700; color: var(--gray); white-space: nowrap; }
+.pair-card.linked .pair-status { color: var(--green-dark); }
+.pair-target { flex: 1 1 220px; min-width: 0; }
+.pair-target-label { font-size: 11px; font-weight: 700; color: var(--gray); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 5px; }
+.pair-target select, .pair-target input[type="text"] {
+  width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); font-size: 12.5px; box-sizing: border-box;
+}
+.pair-extra { margin-top: 8px; }
+
 @media (max-width: 640px) {
   .step-labels span { font-size: 10px; }
   .step-nav { position: sticky; bottom: 0; background: var(--paper); padding: 10px 0; margin: 10px -2px 0; }
+  .pair-card { flex-direction: column; align-items: stretch; }
+  .pair-mid { align-self: flex-start; padding-left: 6px; }
 }
 
 .status-badge {

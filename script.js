@@ -6555,6 +6555,178 @@ function getLinkableTargets() {
     .sort((a, b) => (a.stock === b.stock ? a.serial.localeCompare(b.serial) : a.stock ? -1 : 1));
 }
 
+/** เหมือน getLinkableTargets() เป๊ะ แต่เป็นฝั่ง Panolyzer — ใช้แทนช่อง "พิมพ์ S/N เอง" เดิมตอนเบิก Gateway
+ * รุ่น EPG-001S (ใช้กับ Panolyzer เท่านั้น) เพื่อเลือกว่าจะเอาไปเชื่อมกับเครื่อง Panolyzer เครื่องไหน ทั้งที่ว่าง
+ * อยู่ในสต๊อกและที่เบิกออกไปติดตั้งแล้ว (กันพิมพ์ S/N ผิดมือ) Panolyzer ไม่ได้อยู่ใน VIEW_CONFIG (ดูหมายเหตุ
+ * PANOLYZER_KEY หัวไฟล์) จึงต้องเขียนฟังก์ชันแยกจาก getLinkableTargets แทนที่จะใช้ cfg ร่วมกัน */
+function getLinkableTargetsForPanolyzer() {
+  const rows = state.data[PANOLYZER_KEY] || [];
+  return rows
+    .map((row) => ({
+      serial: String(row[PANOLYZER_SERIAL_FIELD] || ""),
+      stock: isPanolyzerStockRow(row),
+      customer: String(row.Customer_name || "").trim(),
+    }))
+    .filter((r) => r.serial)
+    .sort((a, b) => (a.stock === b.stock ? a.serial.localeCompare(b.serial) : a.stock ? -1 : 1));
+}
+
+/** Phase (แก้บัค — SimCard หา Gateway ที่เพิ่งเบิกพร้อมกันในตะกร้าเดียวกันไม่เจอ): getLinkableIssuedGateways()
+ * ดึงมาเฉพาะ Gateway ที่ "เบิกออกไปแล้ว" (ไม่ใช่ Stock) เท่านั้น — Gateway ที่เพิ่งถูกเพิ่มลงตะกร้าเดียวกันนี้ยังเป็น
+ * สถานะ Stock อยู่ฝั่ง client (ยังไม่ได้ยืนยันคำขอ) จึงไม่โผล่ในรายการนั้น ทำให้ผู้ใช้หา Gateway ที่เพิ่งเลือกไม่เจอ
+ * (บัคที่ผู้ใช้แจ้ง) — helper นี้ดึง Gateway ที่เป็นรายการของตัวเองในตะกร้าปัจจุบันมาเป็นตัวเลือกเพิ่ม ยืนยันแล้วว่า
+ * ฝั่ง backend (requestIssuance, functions/index.js) ตรวจแค่ว่าเอกสาร Gateway มีอยู่จริงใน Firestore เท่านั้น
+ * (tx.get(...).exists) ไม่ได้บังคับว่าต้องไม่ใช่สถานะ Stock — เพราะ Gateway ทุกตัวเป็นเอกสารที่มีอยู่ในระบบอยู่แล้ว
+ * (ลงทะเบียนไว้ล่วงหน้าตอนรับเข้าสต๊อก ไม่ใช่ถูกสร้างขึ้นตอนเบิก) การเพิ่ม Gateway สถานะ Stock ในตะกร้านี้เป็น
+ * ตัวเลือกจึงปลอดภัยฝั่ง backend เหมือนกันทุกประการ (ดูจุดเดียวกันซ้ำใน approveIssuance ~บรรทัด 716 ด้วย) */
+function getBasketGatewayCandidatesForSim(excludeIdx) {
+  return issuanceForm.basket
+    .map((item, idx) => ({ item, idx }))
+    .filter(({ item, idx }) => item.assetType === "Gateway" && idx !== excludeIdx)
+    .map(({ item }) => ({ serial: String(item.serialNo || ""), customer: "", location: "อยู่ในตะกร้านี้ (เบิกพร้อมกัน)" }))
+    .filter((r) => r.serial);
+}
+
+/** Phase (จับคู่อุปกรณ์ — รีดีไซน์): รายการ "คู่ที่ต้องจับคู่" ในตะกร้าปัจจุบัน — เฉพาะ Gateway/SimCard แบบ
+ * เดี่ยว (top-level) ที่ต้องระบุว่าเชื่อมต่อ/ใส่เข้ากับอะไร (connectTo/connectSerial) เท่านั้น ไม่รวมความสัมพันธ์
+ * แบบ "อุปกรณ์เสริมที่มากับเครื่องหลัก" (linkedGatewaySerial/linkedSimSerial ของ MoisturLyzer/Panolyzer) เพราะ
+ * แบบนั้นเป็นฟิลด์ของตัวเครื่องหลักเองอยู่แล้ว ไม่ใช่จุดที่ผู้ใช้สับสนตามที่แจ้งมา (ดูสรุปที่คุยกับผู้ใช้ก่อนลงมือ) —
+ * ใช้ helper เดียวกันทั้ง renderBasket (เดสก์ท็อป) และ renderBasketMobile เพื่อไม่ให้ตรรกะสองที่เพี้ยนไปจากกัน */
+function getBasketPairables() {
+  return issuanceForm.basket
+    .map((item, idx) => ({ item, idx }))
+    .filter(({ item }) => item.assetType === "Gateway" || item.assetType === "SimCard");
+}
+
+/** การ์ด 1 ใบในส่วน "จับคู่อุปกรณ์" — ใช้ร่วมกันทั้งเดสก์ท็อป/มือถือ (ดู renderPairingSectionHtml) */
+function pairCardHtml(opts) {
+  return `
+    <div class="pair-card ${opts.linkedClass ? "linked" : ""}">
+      <div class="pair-node">
+        <div class="ico">${opts.leftIcon}</div>
+        <div class="meta"><div class="n">${escapeHtml(opts.leftName)}</div><div class="s">${escapeHtml(opts.leftSerial)}</div></div>
+      </div>
+      <div class="pair-mid">
+        <div class="pair-line"></div>
+        <span class="pair-status">${opts.statusHtml}</span>
+        <div class="pair-line"></div>
+      </div>
+      <div class="pair-target">
+        <div class="pair-target-label">${escapeHtml(opts.rightLabel)}</div>
+        ${opts.rightControlHtml}
+      </div>
+    </div>`;
+}
+
+/** Phase (จับคู่อุปกรณ์ — รีดีไซน์ B "การ์ดจับคู่แบบเห็นภาพ"): ส่วนแยกต่างหากใต้ตะกร้า รวมทุกคู่ Gateway/SimCard
+ * ที่ต้องระบุว่า "เชื่อมต่อ/ใส่เข้ากับอะไร" (connectTo/connectSerial) ไว้ในที่เดียว เห็นภาพรวมทั้งหมดก่อนกดส่ง —
+ * ใช้ handler เดิมทุกตัว (updateBasketConnectTo/updateBasketConnectSerial/updateSimConnectToGateway) ไม่มีการ
+ * เพิ่ม/เปลี่ยนตรรกะการคำนวณตัวเลือกที่เลือกได้แม้แต่จุดเดียว — เปลี่ยนแค่ตำแหน่งที่วาด UI ควบคุมเหล่านี้เท่านั้น
+ * ไม่รวมความสัมพันธ์แบบ "อุปกรณ์เสริมที่มากับเครื่องหลัก" ของ MoisturLyzer/Panolyzer (linkedGatewaySerial/
+ * linkedSimSerial) เพราะยังอยู่ในแถว/การ์ดของตัวเองตามเดิม ไม่ใช่จุดที่ผู้ใช้แจ้งว่าสับสน */
+function renderPairingSectionHtml() {
+  const pairables = getBasketPairables();
+  if (!pairables.length) return "";
+
+  const linkableTargets = getLinkableTargets(); // เครื่อง MoisturLyzer ที่เชื่อมต่อได้ (เดิม)
+  const panolyzerTargets = getLinkableTargetsForPanolyzer(); // เครื่อง Panolyzer ที่เชื่อมต่อได้ (ใหม่ — แทนช่องพิมพ์ S/N เอง)
+
+  const cardsHtml = pairables.map(({ item, idx }) => {
+    if (item.assetType === "SimCard") {
+      // Phase (แก้บัค): รวม Gateway ที่ "เบิกออกไปแล้ว" (getLinkableIssuedGateways) กับ Gateway ที่เพิ่งเพิ่มลง
+      // ตะกร้าเดียวกันนี้ (getBasketGatewayCandidatesForSim, ยังเป็นสถานะ Stock ฝั่ง client) เข้าด้วยกัน — กันซ้ำ
+      // ด้วย serial เป็น key เผื่อกรณีชนกัน (ไม่ควรเกิดในทางปฏิบัติ) ยืนยันปลอดภัยฝั่ง backend แล้ว (ดู docstring
+      // ของ getBasketGatewayCandidatesForSim)
+      const issuedGw = getLinkableIssuedGateways();
+      const inBasketGw = getBasketGatewayCandidatesForSim(idx);
+      const gwMap = new Map();
+      issuedGw.forEach((g) => gwMap.set(g.serial, g));
+      inBasketGw.forEach((g) => gwMap.set(g.serial, g));
+      const availableGw = Array.from(gwMap.values()).sort((a, b) => a.serial.localeCompare(b.serial));
+      let targetHtml;
+      if (!availableGw.length) {
+        targetHtml = `<span class="cache-note">ไม่มี Gateway ที่เบิกออกไปแล้ว หรือเบิกพร้อมกันในตะกร้านี้</span>`;
+      } else {
+        targetHtml = `<select class="searchable-select" onchange="updateSimConnectToGateway(${idx}, this.value)">
+          <option value="">-- ไม่ระบุ Gateway เจาะจง --</option>
+          ${availableGw.map((g) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)} — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}</option>`).join("")}
+        </select>`;
+      }
+      return pairCardHtml({
+        leftIcon: assetIconSvg("SimCard"), leftName: "SimCard", leftSerial: item.serialNo,
+        rightLabel: "Gateway ที่จะใส่ซิม (เจาะจง)", rightControlHtml: targetHtml,
+        linkedClass: !!item.connectSerial, statusHtml: item.connectSerial ? "🔗 เชื่อม" : "ยังไม่เชื่อม",
+      });
+    }
+
+    // Gateway รุ่น EPG-001S — ใช้กับ Panolyzer เท่านั้น (ล็อครุ่นไว้กันเบิกผิด) — เดิมเป็นช่องพิมพ์ S/N เอง
+    // เปลี่ยนเป็นค้นหา/เลือกจากรายการจริงแทน กันพิมพ์ S/N ผิดมือ (ดู getLinkableTargetsForPanolyzer)
+    if (item.model === GATEWAY_MODEL_PANOLYZER) {
+      let targetHtml;
+      if (!panolyzerTargets.length) {
+        targetHtml = `<span class="cache-note">ไม่มีเครื่อง Panolyzer ในระบบ</span>`;
+      } else {
+        targetHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
+          <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
+          ${panolyzerTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+        </select>`;
+      }
+      return pairCardHtml({
+        leftIcon: assetIconSvg("Gateway"), leftName: `Gateway (${GATEWAY_MODEL_PANOLYZER})`, leftSerial: item.serialNo,
+        rightLabel: "Panolyzer (เจาะจง — ไม่บังคับ)", rightControlHtml: targetHtml,
+        linkedClass: !!item.connectSerial, statusHtml: item.connectSerial ? "🔗 เชื่อม" : "ยังไม่เชื่อม",
+      });
+    }
+
+    // Gateway รุ่น EPG-001B ที่ถูกเพิ่มโดยตรง — ล็อครุ่นไว้ว่าใช้กับ MoisturLyzer เท่านั้น (กันเบิกผิดรุ่น)
+    if (item.model === GATEWAY_MODEL_MOISTURLYZER) {
+      let targetHtml;
+      if (!linkableTargets.length) {
+        targetHtml = `<span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
+      } else {
+        targetHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
+          <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
+          ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+        </select>`;
+      }
+      return pairCardHtml({
+        leftIcon: assetIconSvg("Gateway"), leftName: `Gateway (${GATEWAY_MODEL_MOISTURLYZER})`, leftSerial: item.serialNo,
+        rightLabel: `${LINKABLE_TARGET_ASSET_TYPE} (เจาะจง — ไม่บังคับ)`, rightControlHtml: targetHtml,
+        linkedClass: !!item.connectSerial, statusHtml: item.connectSerial ? "🔗 เชื่อม" : "ยังไม่เชื่อม",
+      });
+    }
+
+    // Gateway ที่ยังไม่ระบุรุ่น — คงพฤติกรรมเดิมทุกอย่าง (เลือกประเภทที่จะเชื่อมต่อเองก่อนจาก connectOptions)
+    const gwCfg = VIEW_CONFIG.gateway;
+    const typeSelectHtml = `<select onchange="updateBasketConnectTo(${idx}, this.value)">
+      ${gwCfg.connectOptions.map((o) => `<option value="${escapeAttr(o)}" ${o === item.connectTo ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+    </select>`;
+    let extraTargetHtml = "";
+    if (item.connectTo === LINKABLE_TARGET_ASSET_TYPE) {
+      if (!linkableTargets.length) {
+        extraTargetHtml = `<div class="pair-extra"><span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span></div>`;
+      } else {
+        extraTargetHtml = `<div class="pair-extra"><select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
+          <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
+          ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+        </select></div>`;
+      }
+    }
+    return pairCardHtml({
+      leftIcon: assetIconSvg("Gateway"), leftName: "Gateway", leftSerial: item.serialNo,
+      rightLabel: "เชื่อมต่อกับ / ใส่ใน", rightControlHtml: typeSelectHtml + extraTargetHtml,
+      linkedClass: false, statusHtml: escapeHtml(item.connectTo || "-"),
+    });
+  }).join("");
+
+  return `
+    <div class="pairing-section">
+      <h3>${ICON_SWAP} จับคู่อุปกรณ์ที่เชื่อมต่อกัน</h3>
+      <p class="ph-sub">อุปกรณ์เบิกพร้อมกันไม่ได้แปลว่าต้องเชื่อมกันเสมอไป — เลือกให้ตรงกับหน้างานจริงได้เลย (ไม่บังคับ)</p>
+      ${cardsHtml}
+    </div>`;
+}
+
 function renderBasket() {
   renderIssueBasketBadge(); // อัปเดตป้ายสรุปตะกร้าที่ขั้นที่ 2 ของหน้าเบิก (Stepper) ให้ตรงกันเสมอทุกครั้งที่ตะกร้าเปลี่ยน
   const countEl = document.getElementById("basketCount");
@@ -6575,17 +6747,19 @@ function renderBasket() {
 
   area.innerHTML = `
     <table class="basket-table">
-      <thead><tr><th>ประเภท</th><th>Serial</th><th>เชื่อมต่อกับ / ใส่ใน</th><th>เครื่องที่เชื่อมต่อ (เจาะจง)</th><th>SimCard คู่กัน</th><th>สถานที่เฉพาะจุด</th><th></th></tr></thead>
+      <thead><tr><th>ประเภท</th><th>Serial</th><th>การเชื่อมต่อ</th><th>SimCard คู่กัน</th><th>สถานที่เฉพาะจุด</th><th></th></tr></thead>
       <tbody>
         ${issuanceForm.basket.map((item, idx) => {
           // Phase 12: ของนอกระบบ (พิมพ์ชื่อเอง) — ไม่มี cfg/รุ่น/การเชื่อมต่อใดๆ เกี่ยวข้อง แสดงชื่อ+serial+จำนวนที่พิมพ์มา
           // (เช็คก่อน item.quantity !== undefined ด้านล่าง เพราะของนอกระบบก็มี quantity เหมือนกันแล้ว)
+          // Phase (ลดคอลัมน์ตาราง — แก้ UI ซ้ำซ้อนตามที่ผู้ใช้แจ้ง): รวมคอลัมน์ "เชื่อมต่อกับ/ใส่ใน" +
+          // "เครื่องที่เชื่อมต่อ (เจาะจง)" เดิมเป็นคอลัมน์เดียว "การเชื่อมต่อ" ทุกแถว (ของนอกระบบ/นับจำนวนใช้ตำแหน่งนี้
+          // แสดงจำนวนเหมือนเดิมทุกประการ ไม่มีอะไรเปลี่ยนด้านข้อมูล)
           if (item.assetType === "Other") {
             return `<tr>
               <td>${escapeHtml(item.itemName)} <span class="cache-note">(นอกระบบ)</span></td>
               <td>${escapeHtml(item.serialNo)}</td>
               <td><input type="number" min="1" value="${escapeAttr(String(item.quantity != null ? item.quantity : 1))}" style="width:80px;" onchange="updateBasketQuantity(${idx}, this.value)"> ชิ้น</td>
-              <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -6598,7 +6772,6 @@ function renderBasket() {
               <td>${escapeHtml(item.partName)} <span class="cache-note">(นับจำนวน)</span></td>
               <td><span class="cache-note">-</span></td>
               <td><input type="number" min="1" value="${escapeAttr(String(item.quantity))}" style="width:80px;" onchange="updateBasketQuantity(${idx}, this.value)"> ชิ้น</td>
-              <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -6653,8 +6826,7 @@ function renderBasket() {
             return `<tr>
               <td>Panolyzer</td>
               <td>${escapeHtml(item.serialNo)}</td>
-              <td><span class="cache-note">Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน (ไม่บังคับ)</span></td>
-              <td>${panoSerialCell}</td>
+              <td><div class="cache-note" style="margin-bottom:4px;">Gateway (${escapeHtml(GATEWAY_MODEL_PANOLYZER)}) คู่กัน (ไม่บังคับ)</div>${panoSerialCell}</td>
               <td>${panoSimCell}</td>
               <td>${panoLocationCell}</td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -6670,7 +6842,6 @@ function renderBasket() {
               <td>Color Sorter</td>
               <td>${escapeHtml(item.serialNo)}</td>
               <td><span class="cache-note">ไม่ผูกกับอะไร</span></td>
-              <td><span class="cache-note">-</span></td>
               <td><span class="cache-note">-</span></td>
               <td>${csLocationCell}</td>
               <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -6716,53 +6887,16 @@ function renderBasket() {
                 ${availableGw.map((g) => `<option value="${escapeAttr(String(g[gwCfg.serialField]))}" ${String(g[gwCfg.serialField]) === item.linkedGatewaySerial ? "selected" : ""}>${escapeHtml(String(g[gwCfg.serialField]))}</option>`).join("")}
               </select>`;
             }
-          } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER) {
-            // Gateway รุ่น EPG-001S — ใช้กับ Panolyzer เท่านั้น (ล็อครุ่นไว้กันเบิกผิด) แต่ไม่บังคับให้กรอก S/N
-            // เครื่องเจาะจง เผื่อกรณีนำไปทดลอง/ติดตั้งกับเครื่องที่ยังไม่ได้ขึ้นทะเบียนในระบบ
-            connectCell = `<span class="cache-note">Panolyzer (${escapeHtml(GATEWAY_MODEL_PANOLYZER)})</span>`;
-            serialCell = `<input type="text" placeholder="กรอก S/N เครื่อง Panolyzer (ไม่บังคับ)"
-              value="${escapeAttr(item.connectSerial)}" oninput="updateBasketConnectSerial(${idx}, this.value)">`;
-          } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER) {
-            // Gateway รุ่น EPG-001B ที่ถูกเพิ่มโดยตรง — ล็อครุ่นไว้ว่าใช้กับ MoisturLyzer เท่านั้น (กันเบิกผิดรุ่น)
-            // แต่ไม่บังคับให้เลือกเครื่องเจาะจง เผื่อกรณีนำ Gateway+SimCard ไปทดลองกับเครื่องอื่นที่ไม่ได้อยู่ในระบบ
-            connectCell = `<span class="cache-note">MoisturLyzer (${escapeHtml(GATEWAY_MODEL_MOISTURLYZER)})</span>`;
-            if (!linkableTargets.length) {
-              serialCell = `<span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
-            } else {
-              serialCell = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
-                <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
-                ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
-              </select>`;
-            }
-          } else if (item.assetType === "SimCard") {
-            // SimCard ใส่ได้เฉพาะใน Gateway เท่านั้นทางกายภาพ (ใส่ตรงกับ MoisturLyzer/Panolyzer ไม่ได้) — ไม่ต้อง
-            // มี dropdown ให้เลือกประเภทอื่นอีกต่อไป ล็อกไว้เป็น Gateway เสมอ แล้วให้เลือกเจาะจงจาก Gateway ที่
-            // เบิกออกไปแล้วเท่านั้น พร้อมชื่อลูกค้า/สถานที่ติดตั้งช่วยระบุตัว
-            connectCell = `<span class="cache-note">Gateway</span>`;
-            const availableGw = getLinkableIssuedGateways();
-            if (!availableGw.length) {
-              serialCell = `<span class="cache-note">ไม่มี Gateway ที่เบิกออกไปแล้วในระบบ</span>`;
-            } else {
-              serialCell = `<select class="searchable-select" onchange="updateSimConnectToGateway(${idx}, this.value)">
-                <option value="">-- ไม่ระบุ Gateway เจาะจง --</option>
-                ${availableGw.map((g) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)} — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}</option>`).join("")}
-              </select>`;
-            }
-          } else if (cfg.connectOptions) {
-            // Gateway ที่ยังไม่ระบุรุ่น — คงพฤติกรรมเดิม (ไม่บังคับ)
-            connectCell = `<select onchange="updateBasketConnectTo(${idx}, this.value)">
-                 ${cfg.connectOptions.map((o) => `<option value="${escapeAttr(o)}" ${o === item.connectTo ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
-               </select>`;
-            if (item.connectTo === LINKABLE_TARGET_ASSET_TYPE) {
-              if (!linkableTargets.length) {
-                serialCell = `<span class="cache-note">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
-              } else {
-                serialCell = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
-                  <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
-                  ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
-                </select>`;
-              }
-            }
+          } else if (item.assetType === "Gateway" || item.assetType === "SimCard") {
+            // Phase (จับคู่อุปกรณ์ — รีดีไซน์ B): ตัวควบคุมจริง (เลือกเชื่อมต่อกับอะไร) อยู่ในส่วน "จับคู่อุปกรณ์"
+            // (renderPairingSectionHtml) แยกต่างหากด้านล่างตารางเท่านั้น — ค่า connectTo/connectSerial ที่ถูกตั้ง
+            // เป็นยังคงเป็นฟิลด์เดิมทุกประการ (ดู updateBasketConnectTo/updateBasketConnectSerial/
+            // updateSimConnectToGateway) submitIssuanceRequest จึงไม่ต้องแก้ไขอะไรเลย
+            // Phase (ลดความซ้ำซ้อนของ UI — ผู้ใช้แจ้งว่าตารางยังดูรกเหมือนมี 2 ที่ซ้อนกัน): เดิมคอลัมน์นี้มีทั้ง
+            // badge สถานะ "เชื่อมแล้ว/ยังไม่เชื่อม" และข้อความ hint แยกอีกคอลัมน์ว่า "ดูที่จับคู่อุปกรณ์ด้านล่าง" —
+            // ตอนนี้รวมเหลือ badge เดียวพอ (คอลัมน์หัวตารางชื่อ "การเชื่อมต่อ" สื่อความหมายอยู่แล้ว ไม่ต้องมี hint ซ้ำ)
+            connectCell = `<span class="pairing-hint ${item.connectSerial ? "linked" : ""}">${item.connectSerial ? "🔗 เชื่อมแล้ว" : "ยังไม่เชื่อม"}</span>`;
+            serialCell = "";
           }
 
           const locationCell = `<input type="text" placeholder="ว่าง = ใช้ &quot;${escapeAttr(issuanceForm.siteLocation) || "สถานที่ด้านบน"}&quot;"
@@ -6771,8 +6905,7 @@ function renderBasket() {
           return `<tr>
             <td>${escapeHtml(cfg.title)}</td>
             <td>${escapeHtml(item.serialNo)}</td>
-            <td>${connectCell}</td>
-            <td>${serialCell}</td>
+            <td>${connectCell}${serialCell}</td>
             <td>${simCell}</td>
             <td>${locationCell}</td>
             <td><button class="btn-sm btn-remove" onclick="removeFromBasket(${idx})">ลบ</button></td>
@@ -6780,6 +6913,7 @@ function renderBasket() {
         }).join("")}
       </tbody>
     </table>
+    ${renderPairingSectionHtml()}
     <div class="cache-note" style="margin-top:8px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
     <div class="cache-note">"สถานที่เฉพาะจุด" ไม่บังคับกรอก — ถ้าปล่อยว่างจะใช้สถานที่ติดตั้ง/ไซต์งานรวมที่กรอกไว้ด้านบนของแบบฟอร์ม (ข้อ 1) ให้ทุกเครื่อง กรอกเฉพาะเครื่องที่ไปติดตั้งคนละจุดกับที่อื่น</div>
     <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
@@ -6789,8 +6923,6 @@ function renderBasket() {
 
 /** เวอร์ชันมือถือของตะกร้าเบิก — แต่ละชิ้นเป็นการ์ดแยก วางฟิลด์ซ้อนแนวตั้งเต็มความกว้างจอ แทนตารางแนวนอนที่ต้องเลื่อนซ้าย-ขวา (ลอจิกการเลือก Gateway/SimCard/เชื่อมต่อเหมือนกับเวอร์ชันคอมพิวเตอร์ทุกประการ ต่างแค่การจัดวาง) */
 function renderBasketMobile(area) {
-  const linkableTargets = getLinkableTargets();
-
   const cardsHtml = issuanceForm.basket.map((item, idx) => {
     // Phase 12: ของนอกระบบ (พิมพ์ชื่อเอง) — เช็คก่อน item.quantity !== undefined ด้านล่าง เพราะตอนนี้มี quantity เหมือนกัน
     if (item.assetType === "Other") {
@@ -6959,65 +7091,20 @@ function renderBasketMobile(area) {
       if (item.linkedGatewaySerial) {
         fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
       }
-    } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_PANOLYZER) {
-      // Panolyzer ไม่ได้ถูกเก็บเป็นอุปกรณ์ในระบบ จึงไม่มีสต๊อกให้เลือก — กรอก S/N เองได้ถ้าทราบ แต่ไม่บังคับ
-      // (ล็อคไว้แค่ว่า Gateway รุ่นนี้ใช้กับ Panolyzer เท่านั้น กันเบิกผิดรุ่น)
+    } else if (item.assetType === "Gateway" || item.assetType === "SimCard") {
+      // Phase (จับคู่อุปกรณ์ — รีดีไซน์ B): เดิมตรงนี้มีช่องพิมพ์ S/N Panolyzer เอง / dropdown เลือก MoisturLyzer/
+      // Gateway เจาะจง อยู่ในการ์ดของแต่ละชิ้น — ย้ายตัวควบคุมจริงไปรวมไว้ในส่วน "จับคู่อุปกรณ์" ท้ายรายการทั้งหมด
+      // แทน (renderPairingSectionHtml ตัวเดียวกับเดสก์ท็อป) เห็นภาพรวมทุกคู่พร้อมกันในจอเดียวแทนที่จะไล่ดูทีละการ์ด
+      // ค่า connectTo/connectSerial ยังเป็นฟิลด์เดิมทุกประการ ไม่กระทบ submitIssuanceRequest แม้แต่จุดเดียว
+      // Phase (ลดความซ้ำซ้อนของ UI): เดิมข้อความมี "— ดูที่จับคู่อุปกรณ์ด้านล่างสุด" ซ้ำกับหัวข้อของส่วนจับคู่อุปกรณ์
+      // เองอยู่แล้ว (แสดงต่อท้ายการ์ดทั้งหมดเสมอ) ตัดข้อความซ้ำออก เหลือ badge สถานะสั้นๆ พอ
       fields.push({
-        label: "S/N เครื่อง Panolyzer",
-        html: `<input type="text" placeholder="กรอก S/N เครื่อง Panolyzer (ไม่บังคับ)"
-          value="${escapeAttr(item.connectSerial)}" oninput="updateBasketConnectSerial(${idx}, this.value)">`,
+        label: "การเชื่อมต่อ",
+        html: `<span class="pairing-hint ${item.connectSerial ? "linked" : ""}">${item.connectSerial ? "🔗 เชื่อมแล้ว" : "ยังไม่เชื่อม"}</span>`,
         req: false,
       });
-      fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
-    } else if (item.assetType === "Gateway" && item.model === GATEWAY_MODEL_MOISTURLYZER) {
-      // Gateway EPG-001B ที่เพิ่มโดยตรง — ล็อคไว้แค่ว่ารุ่นนี้ใช้กับ MoisturLyzer เท่านั้น (กันเบิกผิดรุ่น)
-      // แต่ไม่บังคับให้เลือกเครื่องเจาะจง เผื่อนำ Gateway+SimCard ไปทดลองกับเครื่องอื่นนอกระบบ
-      let targetFieldHtml;
-      if (!linkableTargets.length) {
-        targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
-      } else {
-        targetFieldHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
-          <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
-          ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
-        </select>`;
-      }
-      fields.push({ label: `เชื่อมต่อกับเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} (ไม่บังคับ)`, html: targetFieldHtml, req: false });
-      fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
-    } else if (item.assetType === "SimCard") {
-      // SimCard ใส่ได้เฉพาะใน Gateway เท่านั้นทางกายภาพ (ใส่ตรงกับ MoisturLyzer/Panolyzer ไม่ได้) — ไม่มี dropdown
-      // ให้เลือกประเภทอื่นแล้ว ล็อกไว้เป็น Gateway เสมอ เลือกเจาะจงจาก Gateway ที่เบิกออกไปแล้วเท่านั้น
-      const availableGw = getLinkableIssuedGateways();
-      let targetFieldHtml;
-      if (!availableGw.length) {
-        targetFieldHtml = `<span class="warn-text">ไม่มี Gateway ที่เบิกออกไปแล้วในระบบ</span>`;
-      } else {
-        targetFieldHtml = `<select class="searchable-select" onchange="updateSimConnectToGateway(${idx}, this.value)">
-          <option value="">-- ไม่ระบุ Gateway เจาะจง --</option>
-          ${availableGw.map((g) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)} — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}</option>`).join("")}
-        </select>`;
-      }
-      fields.push({ label: "เชื่อมต่อกับ / ใส่ใน", html: `<span class="cache-note">Gateway</span>`, req: false });
-      fields.push({ label: "Gateway ที่จะใส่ซิม (เจาะจง)", html: targetFieldHtml, req: false });
-    } else if (cfg.connectOptions) {
-      // Gateway ที่ยังไม่ระบุรุ่น — dropdown ตัวเลือกเดิม
-      fields.push({
-        label: "เชื่อมต่อกับ / ใส่ใน",
-        html: `<select onchange="updateBasketConnectTo(${idx}, this.value)">
-          ${cfg.connectOptions.map((o) => `<option value="${escapeAttr(o)}" ${o === item.connectTo ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
-        </select>`,
-        req: false,
-      });
-      if (item.connectTo === LINKABLE_TARGET_ASSET_TYPE) {
-        let targetFieldHtml;
-        if (!linkableTargets.length) {
-          targetFieldHtml = `<span class="warn-text">ไม่มีเครื่อง ${escapeHtml(LINKABLE_TARGET_ASSET_TYPE)} ในระบบ</span>`;
-        } else {
-          targetFieldHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
-            <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
-            ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
-          </select>`;
-        }
-        fields.push({ label: "เครื่องที่เชื่อมต่อ (เจาะจง)", html: targetFieldHtml, req: false });
+      if (item.assetType === "Gateway") {
+        fields.push({ label: "SimCard คู่กัน (ไม่บังคับ)", html: simFieldHtml, req: false });
       }
     }
 
@@ -7050,6 +7137,7 @@ function renderBasketMobile(area) {
 
   area.innerHTML = `
     <div class="basket-cards">${cardsHtml}</div>
+    ${renderPairingSectionHtml()}
     <div class="cache-note" style="margin-top:10px;">หมายเหตุ: การเลือก "เครื่องที่เชื่อมต่อ (เจาะจง)" เป็นการบันทึกความสัมพันธ์เพื่อการติดตามเท่านั้น ไม่ได้ตัดสต๊อกของเครื่องที่เลือก (ยกเว้น Gateway ที่เลือกคู่กับ MoisturLyzer ซึ่งจะถูกเบิกออกจากสต๊อกจริง)</div>
     <div id="basketRequirementNotice">${renderBasketRequirementNotice()}</div>
   `;
