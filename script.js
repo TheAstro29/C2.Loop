@@ -41,6 +41,10 @@ let state = {
 
 // ตะกร้าเบิกที่กำลังกรอกอยู่ (อยู่ใน memory เท่านั้น ไม่ persist — เคลียร์เมื่อส่งสำเร็จ)
 let issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 };
+/** Filter chip ที่เลือกไว้ตอนเลือกประเภท "Gateway" ในขั้นที่ 2 ของหน้าเบิก — "all" | GATEWAY_MODEL_MOISTURLYZER | GATEWAY_MODEL_PANOLYZER
+ * (ผู้ใช้ขอ: อยากมี filter ว่าจะดูเฉพาะ Gateway ที่ใช้กับ MoisturLyzer หรือ Panolyzer เวลามีสต๊อกสองรุ่นปนกันเยอะๆ)
+ * เก็บเป็น module-level state แทนใส่ใน issuanceForm เพราะเป็นแค่ตัวกรองการแสดงผลชั่วคราว ไม่ใช่ข้อมูลของคำขอเบิก */
+let gatewayPickerFilter = "all";
 
 // หน้า "เบิกอุปกรณ์" แบบ Stepper: เก็บข้อมูลสรุปคำขอที่เพิ่งส่งสำเร็จ/ถูกคิวไว้ตอนออฟไลน์ไว้ชั่วคราว เพื่อโชว์เป็นหน้า
 // "สำเร็จ" เต็มจอแทนฟอร์มว่างเปล่า (เดิมข้อความสำเร็จโผล่ใน #issueMsg ของการ์ด "ตะกร้าเบิก" ซึ่งพอ reset ฟอร์มกลับไป
@@ -5952,6 +5956,7 @@ function renderIssueView() {
           </select>
           <input type="text" id="f-itemSearch" placeholder="ค้นหา Serial / รุ่น...">
         </div>
+        <div class="picker-filter-chips" id="pickerFilterChips" style="display:none;"></div>
         <div class="picker-list" id="pickerList"></div>
       </div>
       <div id="issueBasketBadge" class="issue-basket-badge"></div>
@@ -6090,6 +6095,25 @@ function renderPickerList() {
   const searchInput = document.getElementById("f-itemSearch");
   const listEl = document.getElementById("pickerList");
 
+  // Filter chips "ทั้งหมด / ใช้กับ MoisturLyzer / ใช้กับ Panolyzer" — โชว์เฉพาะตอนเลือกประเภท Gateway เท่านั้น
+  // (ตอนเลือกประเภทอื่นซ่อนไว้ — ไม่รีเซ็ต gatewayPickerFilter ตอนสลับไปประเภทอื่น เผื่อผู้ใช้สลับกลับมาดู Gateway อีกที
+  // จะได้ filter เดิมที่เลือกไว้)
+  const chipsEl = document.getElementById("pickerFilterChips");
+  if (assetKey === "gateway") {
+    chipsEl.style.display = "flex";
+    const chips = [
+      { value: "all", label: "ทั้งหมด" },
+      { value: GATEWAY_MODEL_MOISTURLYZER, label: "ใช้กับ MoisturLyzer" },
+      { value: GATEWAY_MODEL_PANOLYZER, label: "ใช้กับ Panolyzer" },
+    ];
+    chipsEl.innerHTML = chips.map((c) =>
+      `<button type="button" class="picker-filter-chip${gatewayPickerFilter === c.value ? " active" : ""}" onclick="setGatewayPickerFilter('${escapeAttr(c.value)}')">${escapeHtml(c.label)}</button>`
+    ).join("");
+  } else {
+    chipsEl.style.display = "none";
+    chipsEl.innerHTML = "";
+  }
+
   // Phase 11: ของนอกระบบ (พิมพ์ชื่อเอง) — ไม่มีสต๊อกให้เลือก แสดงฟอร์มพิมพ์เองแทนรายการสต๊อก
   if (assetKey === "other") {
     searchInput.disabled = true;
@@ -6199,7 +6223,12 @@ function renderPickerList() {
     return;
   }
 
-  const items = getAvailableItems(cfg, search);
+  let items = getAvailableItems(cfg, search);
+
+  // ใช้ filter chip ที่เลือกไว้ (ถ้ามี) กรองเฉพาะ Gateway รุ่นที่ตรงกัน — เฉพาะประเภท gateway เท่านั้น
+  if (assetKey === "gateway" && gatewayPickerFilter !== "all") {
+    items = items.filter((row) => normalizeGatewayModel(row[GATEWAY_MODEL_FIELD]) === gatewayPickerFilter);
+  }
 
   if (!items.length) {
     listEl.innerHTML = `<div class="picker-empty">ไม่พบอุปกรณ์ที่พร้อมเบิก</div>`;
@@ -6215,6 +6244,12 @@ function renderPickerList() {
         <button class="btn-sm btn-add" onclick="addToBasket('${assetKey}', '${escapeAttr(serial)}')">+ เพิ่ม</button>
       </div>`;
   }).join("");
+}
+
+/** onclick ของ filter chip ในขั้นตอนเลือก Gateway — เปลี่ยนตัวกรองแล้ววาดรายการใหม่ทันที (ไม่ต้องรอ action อื่น) */
+function setGatewayPickerFilter(value) {
+  gatewayPickerFilter = value;
+  renderPickerList();
 }
 
 /** Phase 8: รวมรายการอะไหล่ที่พร้อมเบิกของหมวดหนึ่ง — ทั้งชิ้นที่มี S/N (ว่างอยู่ในสต๊อก) และแบบนับจำนวน (ยังมีจำนวนเหลือให้เบิกหลังหักลบที่ตะกร้า+รออนุมัติแล้ว) */
@@ -6396,7 +6431,14 @@ function updateBasketConnectTo(index, value) {
 
 function updateBasketConnectSerial(index, value) {
   issuanceForm.basket[index].connectSerial = value;
-  refreshBasketNotice();
+  // Phase (แก้บัค — ผู้ใช้แจ้งว่าเลือกเครื่องที่จะเชื่อม (เช่น Panolyzer) แล้วต้อง "รอสักพัก" การ์ดถึงจะขึ้นว่าเชื่อมกัน):
+  // เดิมเรียกแค่ refreshBasketNotice() (ไม่วาดตะกร้าใหม่) เพราะกันไว้ไม่ให้ "ช่องกรอกข้อความ" เสีย focus ระหว่างพิมพ์
+  // (เช่น ช่องสถานที่เฉพาะจุด) — แต่ handler นี้ผูกกับ <select> เท่านั้น (ตัวเลือก Panolyzer/MoisturLyzer/Gateway
+  // เจาะจงในการ์ดจับคู่อุปกรณ์) ไม่ใช่ช่องพิมพ์ข้อความต่อเนื่อง เปลี่ยนค่าเสร็จ dropdown ก็ปิดตัวเองอยู่แล้ว ไม่มีความ
+  // เสี่ยงเรื่อง focus หลุด จึงเรียก renderBasket() เต็มรูปแบบได้ทันที ให้การ์ดอัปเดตเป็น "เชื่อมแล้ว" (border/badge
+  // สีเขียว) ทันทีที่เลือก ไม่ต้องรอ action อื่นมาสั่งวาดใหม่ทีหลัง (เทียบเคียงกับ updateSimConnectToGateway ที่เรียก
+  // renderBasket() อยู่แล้วเช่นกัน — ตอนนี้ทั้งสอง handler พฤติกรรมตรงกัน)
+  renderBasket();
 }
 
 /** สถานที่เฉพาะจุด — ไม่ต้องวาดตะกร้าใหม่ (แค่พิมพ์ข้อความ ไม่กระทบ dropdown อื่น) แค่เก็บค่าไว้ใน state รอส่งตอนกดยืนยัน */

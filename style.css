@@ -491,6 +491,14 @@ tbody tr.row-clickable { cursor: pointer; }
 .picker-row select, .picker-row input { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
 .picker-row input { flex: 1; min-width: 200px; }
 
+.picker-filter-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.picker-filter-chip {
+  background: #fff; color: var(--gray); border: 1px solid var(--border); border-radius: 20px;
+  padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .12s, color .12s, border-color .12s;
+}
+.picker-filter-chip:hover { border-color: var(--green); color: var(--green-dark); }
+.picker-filter-chip.active { background: var(--green); color: #fff; border-color: var(--green); }
+
 .picker-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; }
 .picker-list-item {
   display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
@@ -643,8 +651,32 @@ tbody tr.row-clickable { cursor: pointer; }
 @media (max-width: 640px) {
   .step-labels span { font-size: 10px; }
   .step-nav { position: sticky; bottom: 0; background: var(--paper); padding: 10px 0; margin: 10px -2px 0; }
-  .pair-card { flex-direction: column; align-items: stretch; }
+  /* Phase (แก้บัค UI มือถือ — ผู้ใช้แจ้งว่าการ์ดจับคู่อุปกรณ์ดูใหญ่โล่งเกินไป): ต้นเหตุคือ .pair-node/.pair-target
+   * มี flex-basis แบบพิกเซล (180px/220px) ที่ตั้งไว้สำหรับ "ความกว้าง" ตอนวางแนวนอน (จอปกติ) — พอ .pair-card สลับเป็น
+   * flex-direction:column บนมือถือ แกนหลักของ flex เปลี่ยนเป็นแนวตั้ง ทำให้ flex-basis เดิมกลายเป็น "ความสูงขั้นต่ำ"
+   * แทน บังคับให้แต่ละส่วนสูงอย่างน้อย 180px/220px ทั้งที่เนื้อหาข้างในสูงแค่ไม่กี่สิบพิกเซล เกิดช่องว่างเปล่าๆ มหาศาล
+   * ในการ์ด (เห็นชัดในภาพที่ผู้ใช้ส่งมา) แก้โดยรีเซ็ต flex เป็น auto (ไม่จองพื้นที่ล่วงหน้า) เฉพาะบนมือถือ — จอปกติ
+   * ที่เป็นแนวนอนอยู่แล้วไม่กระทบ ยังคงใช้ flex-basis เดิมสำหรับจัดสัดส่วนความกว้างตามปกติ */
+  .pair-card { flex-direction: column; align-items: stretch; padding: 12px; gap: 10px; }
+  .pair-node { flex: 0 0 auto; }
+  .pair-target { flex: 0 0 auto; }
   .pair-mid { align-self: flex-start; padding-left: 6px; }
+  .pairing-section { padding: 14px 16px; }
+
+  /* Phase (จัดแถว filter chip เลือกรุ่น Gateway ใหม่บนมือถือ — ผู้ใช้ส่งภาพมาว่า wrap แล้ว chip สุดท้าย
+   * ("ใช้กับ Panolyzer") ตกไปอยู่บรรทัดเดี่ยวๆ โดดๆ ดูไม่เป็นระเบียบ เพราะจอแคบ 3 ปุ่มความยาวไม่เท่ากันใส่ไม่พอ 1 แถว
+   * แก้โดยเปลี่ยนเป็นแถวเดียวเลื่อนแนวนอนได้ (horizontal scroll) แทนการ wrap — เป็นแพทเทิร์นมาตรฐานของแถบ filter
+   * chip บนมือถือ (เช่น App Store, Maps) ทำให้ทุกปุ่มอยู่แถวเดียวกัน กดเลื่อนดูปุ่มที่โดนบังได้ ไม่ต้องเดาว่ามีปุ่มไหนอีก) */
+  .picker-filter-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+    margin-left: -2px;
+    padding-left: 2px;
+    scrollbar-width: thin;
+  }
+  .picker-filter-chip { flex: 0 0 auto; white-space: nowrap; }
 }
 
 .status-badge {
