@@ -6836,7 +6836,8 @@ function getLinkableTargetsForPanolyzer() {
     .map((row) => ({
       serial: String(row[PANOLYZER_SERIAL_FIELD] || ""),
       stock: isPanolyzerStockRow(row),
-      customer: String(row.Customer_name || "").trim(),
+      // ชื่อลูกค้าของ Panolyzer อยู่ในคอลัมน์ดิบ "Client name" (ไม่ใช่ Customer_name เหมือน MoisturLyzer) — เดิมอ่านผิดฟิลด์จึงไม่เห็นชื่อลูกค้าในตัวเลือก
+      customer: String(row["Client name"] || row.Customer_name || "").trim(),
     }))
     .filter((r) => r.serial)
     .sort((a, b) => (a.stock === b.stock ? a.serial.localeCompare(b.serial) : a.stock ? -1 : 1));
@@ -6867,6 +6868,18 @@ function getBasketPairables() {
   return issuanceForm.basket
     .map((item, idx) => ({ item, idx }))
     .filter(({ item }) => item.assetType === "Gateway" || item.assetType === "SimCard");
+}
+
+/** ตัวเลือก "เครื่องที่จะเชื่อมต่อ" (MoisturLyzer/Panolyzer) ในส่วนจับคู่ — ชื่อลูกค้าอยู่ในข้อความตัวเลือก จึงพิมพ์ค้นหาชื่อลูกค้าได้
+ * ถ้ามีเครื่องที่อยู่ในตะกร้านี้ (เบิกพร้อมกัน) จะแยกกลุ่ม "อยู่ในตะกร้านี้" ขึ้นก่อน ตามด้วยเครื่องอื่นในระบบ — ค่า/handler เหมือนเดิม */
+function pairTargetOptionsHtml(targets, selectedSerial, assetType) {
+  const inBasket = new Set(issuanceForm.basket.filter((b) => b.assetType === assetType).map((b) => String(b.serialNo)));
+  const opt = (t, basket) => `<option value="${escapeAttr(t.serial)}" ${t.serial === selectedSerial ? "selected" : ""}>${escapeHtml(t.serial)}${basket ? " (อยู่ในตะกร้านี้)" : t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}${basket && t.customer ? " — " + escapeHtml(t.customer) : ""}</option>`;
+  const first = targets.filter((t) => inBasket.has(t.serial));
+  if (!first.length) return targets.map((t) => opt(t, false)).join("");
+  const rest = targets.filter((t) => !inBasket.has(t.serial));
+  return `<optgroup label="อยู่ในตะกร้านี้ (เบิกพร้อมกัน)">${first.map((t) => opt(t, true)).join("")}</optgroup>` +
+    (rest.length ? `<optgroup label="เครื่องอื่นในระบบ">${rest.map((t) => opt(t, false)).join("")}</optgroup>` : "");
 }
 
 /** การ์ด 1 ใบในส่วน "จับคู่อุปกรณ์" — ใช้ร่วมกันทั้งเดสก์ท็อป/มือถือ (ดู renderPairingSectionHtml) */
@@ -6918,9 +6931,16 @@ function renderPairingSectionHtml() {
       if (!availableGw.length) {
         targetHtml = `<span class="cache-note">ไม่มี Gateway ที่เบิกออกไปแล้ว หรือเบิกพร้อมกันในตะกร้านี้</span>`;
       } else {
+        // เรียงให้ Gateway ที่อยู่ในตะกร้านี้ขึ้นก่อน (แยกหัวข้อกลุ่ม) แล้วตามด้วย Gateway ที่เบิกออกไปแล้ว — หาง่ายขึ้น
+        // ค่าที่เลือก/handler/รายการตัวเลือกทั้งหมดเหมือนเดิม เปลี่ยนแค่ลำดับและการจัดกลุ่ม
+        const basketSerials = new Set(inBasketGw.map((g) => g.serial));
+        const gwOptionHtml = (g, inBasket) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)}${inBasket ? " — Gateway ในตะกร้านี้" : ` — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}`}</option>`;
+        const basketOpts = availableGw.filter((g) => basketSerials.has(g.serial));
+        const issuedOpts = availableGw.filter((g) => !basketSerials.has(g.serial));
         targetHtml = `<select class="searchable-select" onchange="updateSimConnectToGateway(${idx}, this.value)">
           <option value="">-- ไม่ระบุ Gateway เจาะจง --</option>
-          ${availableGw.map((g) => `<option value="${escapeAttr(g.serial)}" ${g.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(g.serial)} — ${escapeHtml(g.customer || "-")} / ${escapeHtml(g.location || "-")}</option>`).join("")}
+          ${basketOpts.length ? `<optgroup label="อยู่ในตะกร้านี้ (เบิกพร้อมกัน)">${basketOpts.map((g) => gwOptionHtml(g, true)).join("")}</optgroup>` : ""}
+          ${issuedOpts.length ? `<optgroup label="เบิกออกไปแล้ว">${issuedOpts.map((g) => gwOptionHtml(g, false)).join("")}</optgroup>` : ""}
         </select>`;
       }
       return pairCardHtml({
@@ -6939,7 +6959,7 @@ function renderPairingSectionHtml() {
       } else {
         targetHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
           <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
-          ${panolyzerTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+          ${pairTargetOptionsHtml(panolyzerTargets, item.connectSerial, PANOLYZER_ASSET_TYPE)}
         </select>`;
       }
       return pairCardHtml({
@@ -6957,7 +6977,7 @@ function renderPairingSectionHtml() {
       } else {
         targetHtml = `<select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
           <option value="">-- ไม่ระบุเครื่องเจาะจง (ไม่บังคับ) --</option>
-          ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+          ${pairTargetOptionsHtml(linkableTargets, item.connectSerial, LINKABLE_TARGET_ASSET_TYPE)}
         </select>`;
       }
       return pairCardHtml({
@@ -6979,7 +6999,7 @@ function renderPairingSectionHtml() {
       } else {
         extraTargetHtml = `<div class="pair-extra"><select class="searchable-select" onchange="updateBasketConnectSerial(${idx}, this.value)">
           <option value="">-- ไม่ระบุเครื่องเจาะจง --</option>
-          ${linkableTargets.map((t) => `<option value="${escapeAttr(t.serial)}" ${t.serial === item.connectSerial ? "selected" : ""}>${escapeHtml(t.serial)}${t.stock ? " (ว่าง/Stock)" : t.customer ? " (ติดตั้งที่ " + escapeHtml(t.customer) + ")" : " (ใช้งานอยู่)"}</option>`).join("")}
+          ${pairTargetOptionsHtml(linkableTargets, item.connectSerial, LINKABLE_TARGET_ASSET_TYPE)}
         </select></div>`;
       }
     }
@@ -8003,7 +8023,7 @@ function makeSearchableSelect(select) {
   wrap.appendChild(input);
   wrap.appendChild(list);
 
-  const optionsData = () => Array.from(select.options).map((o) => ({ value: o.value, label: o.textContent, disabled: o.disabled }));
+  const optionsData = () => Array.from(select.options).map((o) => ({ value: o.value, label: o.textContent, disabled: o.disabled, group: o.parentElement && o.parentElement.tagName === "OPTGROUP" ? o.parentElement.label : "" }));
   const syncInputFromSelect = () => {
     const opt = select.options[select.selectedIndex];
     input.value = opt ? opt.textContent : "";
@@ -8013,12 +8033,31 @@ function makeSearchableSelect(select) {
     const opts = optionsData().filter((o) => !o.disabled && (!t || o.label.toLowerCase().includes(t)));
     list.innerHTML = !opts.length
       ? `<div class="ss-empty">ไม่พบรายการที่ตรงกัน</div>`
-      : opts.slice(0, 300).map((o) => `<div class="ss-item${o.value === select.value ? " sel" : ""}" data-value="${escapeAttr(o.value)}">${highlightMatch(o.label, t)}</div>`).join("");
+      : (() => {
+          // optgroup (ถ้ามี) แสดงเป็นหัวข้อกลุ่มคั่นในรายการ — select ที่ไม่มี optgroup แสดงเหมือนเดิมทุกประการ
+          let lastGroup = "";
+          return opts.slice(0, 300).map((o) => {
+            let head = "";
+            if (o.group && o.group !== lastGroup) head = `<div class="ss-group">${escapeHtml(o.group)}</div>`;
+            lastGroup = o.group || lastGroup;
+            return head + `<div class="ss-item${o.value === select.value ? " sel" : ""}" data-value="${escapeAttr(o.value)}">${highlightMatch(o.label, t)}</div>`;
+          }).join("");
+        })();
     list.classList.add("open");
   };
-  input.addEventListener("focus", () => renderList(""));
+  // คลิกแล้วเป็นช่องว่างพร้อมพิมพ์ค้นหาทันที (ไม่ต้องลบข้อความเดิมก่อน) — ค่าที่เลือกไว้เดิมย้ายไปแสดงเป็น placeholder
+  // จางๆ แทน ถ้าไม่ได้เลือกอะไรใหม่ตอนออกจากช่อง (blur) จะคืนข้อความของค่าที่เลือกไว้เดิมให้เหมือนเดิม
+  input.addEventListener("focus", () => {
+    const cur = select.options[select.selectedIndex];
+    input.placeholder = cur && cur.value ? cur.textContent : "พิมพ์เพื่อค้นหา...";
+    input.value = "";
+    renderList("");
+  });
   input.addEventListener("input", () => renderList(input.value));
-  input.addEventListener("blur", () => setTimeout(() => list.classList.remove("open"), 150));
+  input.addEventListener("blur", () => {
+    syncInputFromSelect();
+    setTimeout(() => list.classList.remove("open"), 150);
+  });
   list.addEventListener("mousedown", (e) => {
     const item = e.target.closest(".ss-item");
     if (!item) return;

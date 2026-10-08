@@ -1577,3 +1577,5 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
 .mp-wiz #mp-formArea.mp-new > #mp-qtyOrSerialArea { margin: 0; }
 .mp-wiz #mp-formArea.mp-new > .form-field { margin-top: 0 !important; }
 @media (max-width: 760px) { .mp-wiz #mp-formArea.mp-new { grid-template-columns: 1fr; } }
+
+.ss-group { padding: 6px 12px; font-size: 11px; font-weight: 600; color: var(--green-dark); background: var(--green-light); letter-spacing: .02em; position: sticky; top: 0; }
