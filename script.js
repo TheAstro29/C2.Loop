@@ -4205,27 +4205,252 @@ function compressImageFileToDataUrl(file, maxDim, quality, callback) {
 
 let managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
 
+// ============================================================
+// หน้า "จัดการ Stock/อะไหล่" แบบตัวช่วยทีละขั้น (3 ขั้น: เลือกประเภท → กรอกข้อมูล → ตรวจสอบ/บันทึก)
+// ออกแบบใหม่ (UI เท่านั้น) — ฟอร์มกรอกข้อมูลและฟังก์ชันบันทึกเดิมทั้งหมด (renderAddStockInlineUI / renderPartsSubUI /
+// renderBulkActivateSimUI และ submitAddStockBasket / submitManagePartsForm / submitBulkActivateSim) ใช้ต่อได้เหมือนเดิม
+// ไม่ได้แก้ logic การบันทึกหรือการเรียก Cloud Functions ใดๆ — ขั้นที่ 3 แค่เรียกฟังก์ชันบันทึกตัวเดิมแทนปุ่มบันทึกที่ซ่อนไว้
+// แก้บั๊กเดิมไปด้วย: เมื่อมีข้อมูลเปลี่ยนจาก Firestore (เช่นเพื่อนร่วมงานเบิกของ) ระบบเคยเรนเดอร์หน้านี้ใหม่ทั้งหน้า ทำให้
+// ตะกร้า S/N ที่กรอกค้างไว้หายหมด — ตอนนี้ถ้าหน้านี้เปิดอยู่แล้วจะอัปเดตเฉพาะตัวเลขสต๊อกในการ์ด ไม่แตะฟอร์มที่กรอกอยู่
+// ============================================================
+let mpStep = 1; // 1 = เลือกประเภท, 2 = กรอกข้อมูล, 3 = ตรวจสอบ
+let mpRenderedType = null; // ประเภทที่ฟอร์มขั้นที่ 2 เรนเดอร์ไว้ในหน้าจอปัจจุบัน (null = ยังไม่ได้เรนเดอร์)
+const MP_STEP_LABELS = ["เลือกประเภท", "กรอกข้อมูล", "ตรวจสอบ"];
+const MP_TYPE_ICONS = { moisturlyzer: "fa-droplet", gateway: "fa-tower-broadcast", simcard: "fa-sim-card", colorSorterParts: "fa-gears", panolyzerParts: "fa-microscope" };
+
+function mpTypeLabel(value) {
+  const t = MANAGE_STOCK_ASSET_TYPES.find((x) => x.value === value);
+  return t ? t.label : value;
+}
+
+/** ตัวเลขสต๊อกสั้นๆ บนการ์ดเลือกประเภท (อ่านจาก state.data ที่มีอยู่แล้ว ไม่ยิง request เพิ่ม) */
+function mpTypeStockInfo(value) {
+  try {
+    const cfg = VIEW_CONFIG[value];
+    if (value === "colorSorterParts" || value === "panolyzerParts") {
+      const cat = value === "colorSorterParts" ? "ColorSorter" : "Panolyzer";
+      const n = (state.data.partsCatalog || []).filter((p) => p.Category === cat).length;
+      return { text: `${n} รายการอะไหล่ในระบบ`, badge: "" };
+    }
+    const rows = state.data[value] || [];
+    const stock = rows.filter((r) => isStockRow(r, cfg.stockField, cfg.stockRequiresField)).length;
+    const pending = value === "simcard" ? getNotActivatedSimCards().length : 0;
+    return { text: `คงเหลือใน Stock ${stock} ชิ้น`, badge: pending ? `รอ Activate ${pending}` : "" };
+  } catch (e) {
+    return { text: "", badge: "" };
+  }
+}
+
+function mpHasDraft() {
+  if (mpRenderedType === null) return false;
+  if (mpRenderedType === "colorSorterParts" || mpRenderedType === "panolyzerParts") {
+    const f = managePartsForm;
+    return !!(f.partName.trim() || String(f.quantity).trim() || f.serials.some((s) => s.trim()));
+  }
+  if (mpRenderedType === "simcard" && mpSimTab === "activate") return bulkActivateSimState.selected.size > 0;
+  return addStockForm.assetKey === mpRenderedType && addStockForm.items.length > 0;
+}
+
 function renderManagePartsView() {
+  // ถ้าหน้านี้ถูกสร้างไว้แล้วและยังอยู่บนจอ (เช่น Firestore ส่งข้อมูลใหม่มา) — อัปเดตเฉพาะตัวเลขสต๊อก ไม่ล้างฟอร์มที่กำลังกรอก
+  if (document.getElementById("mp-wiz")) { mpRefreshLive(); return; }
+  mpBuildWizard("");
+}
+
+function mpBuildWizard(banner) {
   const content = document.getElementById("viewContent");
-
+  mpStep = 1;
+  mpRenderedType = null;
   content.innerHTML = `
-    <div class="form-card">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-        <h3 style="margin:0;">จัดการ Stock/อะไหล่</h3>
-        <button class="btn-sm btn-secondary" onclick="showPartsActivityFeed()">ดูประวัติ Stock ล่าสุด</button>
+    <div class="mp-wiz" id="mp-wiz">
+      <div class="mp-head">
+        <span class="cache-note" style="margin:0;">เพิ่มสต๊อกอุปกรณ์/อะไหล่เข้าคลัง</span>
+        <button class="btn-sm btn-secondary" onclick="showPartsActivityFeed()"><i class="fa-regular fa-clock"></i> ประวัติ Stock</button>
       </div>
-      <div class="form-field" style="margin:14px 0;">
-        <label>เลือกประเภทที่จะเพิ่มสต๊อก *</label>
-        <select id="mp-assetType">
-          ${MANAGE_STOCK_ASSET_TYPES.map((t) => `<option value="${t.value}" ${t.value === mpAssetType ? "selected" : ""}>${escapeHtml(t.label)}</option>`).join("")}
-        </select>
+      <div id="mp-steps" class="mp-steps"></div>
+      <div id="mp-banner">${banner ? `<div class="form-msg success" style="display:block; margin-bottom:12px;">${escapeHtml(banner)}</div>` : ""}</div>
+      <div id="mp-p1" class="mp-panel"></div>
+      <div id="mp-p2" class="mp-panel" style="display:none;">
+        <div class="form-card mp-formcard">
+          <div class="mp-typebar" id="mp-typebar"></div>
+          <div id="mp-subArea"></div>
+        </div>
       </div>
-      <div id="mp-subArea"></div>
-    </div>
-  `;
+      <div id="mp-p3" class="mp-panel" style="display:none;"></div>
+      <div class="mp-footer" id="mp-footer"></div>
+    </div>`;
+  mpGoStep(1);
+}
 
-  document.getElementById("mp-assetType").addEventListener("change", (e) => { mpAssetType = e.target.value; renderMpSubArea(); });
-  renderMpSubArea();
+function mpRefreshLive() {
+  if (mpStep === 1) mpRenderStep1();
+}
+
+function mpRenderSteps() {
+  document.getElementById("mp-steps").innerHTML = MP_STEP_LABELS.map((label, i) => {
+    const n = i + 1;
+    const cls = mpStep === n ? "on" : mpStep > n ? "done" : "";
+    return `<div class="mp-stp ${cls}"><b>${mpStep > n ? "✓" : n}</b><span>${label}</span></div>${n < 3 ? '<div class="mp-line"></div>' : ""}`;
+  }).join("");
+}
+
+function mpRenderStep1() {
+  document.getElementById("mp-p1").innerHTML = `
+    <div class="cache-note" style="margin-bottom:10px;">เลือกสิ่งที่ต้องการเพิ่มสต๊อก</div>
+    <div class="mp-types">${MANAGE_STOCK_ASSET_TYPES.map((t) => {
+      const info = mpTypeStockInfo(t.value);
+      return `<button type="button" class="mp-type ${mpRenderedType === t.value ? "on" : ""}" onclick="mpPickType('${t.value}')">
+        <span class="mp-ico"><i class="fa-solid ${MP_TYPE_ICONS[t.value] || "fa-box"}"></i></span>
+        <span class="mp-type-txt"><b>${escapeHtml(t.label)}</b><small>${escapeHtml(info.text)}</small></span>
+        ${info.badge ? `<span class="mp-badge">${escapeHtml(info.badge)}</span>` : ""}
+        <i class="fa-solid fa-chevron-right mp-chev"></i>
+      </button>`;
+    }).join("")}</div>`;
+}
+
+async function mpPickType(value) {
+  if (value !== mpRenderedType && mpHasDraft()) {
+    const ok = await showConfirm("ข้อมูลที่กรอกค้างไว้จะถูกล้างเมื่อเปลี่ยนประเภท ต้องการเปลี่ยนใช่หรือไม่?");
+    if (!ok) return;
+  }
+  mpAssetType = value;
+  mpGoStep(2);
+}
+
+function mpClearMsgs() {
+  ["as-msg", "mp-msg", "ba-msg"].forEach((id) => { const el = document.getElementById(id); if (el) { el.className = "form-msg"; el.textContent = ""; } });
+}
+
+function mpGoStep(n) {
+  mpStep = n;
+  if (n !== 1) { const bn = document.getElementById("mp-banner"); if (bn) bn.innerHTML = ""; }
+  if (n === 2) mpClearMsgs();
+  mpRenderSteps();
+  [1, 2, 3].forEach((i) => { document.getElementById("mp-p" + i).style.display = i === n ? "" : "none"; });
+  const footer = document.getElementById("mp-footer");
+  if (n === 1) {
+    mpRenderStep1();
+    footer.innerHTML = "";
+  } else if (n === 2) {
+    if (mpRenderedType !== mpAssetType) {
+      managePartsForm = { mode: "new", partName: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
+      mpSimTab = "addstock";
+      renderMpSubArea();
+      mpRenderedType = mpAssetType;
+    }
+    const info = mpTypeStockInfo(mpAssetType);
+    document.getElementById("mp-typebar").innerHTML = `
+      <span class="mp-chip"><i class="fa-solid ${MP_TYPE_ICONS[mpAssetType] || "fa-box"}"></i> ${escapeHtml(mpTypeLabel(mpAssetType))}</span>
+      <span class="mp-typebar-note">${escapeHtml(info.text)}</span>
+      <button type="button" class="btn-sm btn-secondary" style="margin-left:auto;" onclick="mpGoStep(1)">เปลี่ยนประเภท</button>`;
+    footer.innerHTML = `<button type="button" class="btn-secondary mp-fbtn" onclick="mpGoStep(1)">ย้อนกลับ</button>
+      <button type="button" class="btn-primary mp-fbtn mp-fnext" onclick="mpToReview()">ตรวจสอบ <i class="fa-solid fa-arrow-right"></i></button>`;
+  } else {
+    footer.innerHTML = `<button type="button" class="btn-secondary mp-fbtn" onclick="mpGoStep(2)">แก้ไข</button>
+      <button type="button" class="btn-primary mp-fbtn mp-fnext" id="mp-saveBtn" onclick="mpConfirmSave()"><i class="fa-solid fa-check"></i> ยืนยันบันทึก</button>`;
+  }
+  const main = document.querySelector(".main");
+  if (main) main.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
+function mpCleanLabel(l) {
+  return String(l).replace(/\s*\*/g, "").split(" — ")[0].trim();
+}
+
+/** สรุปสิ่งที่จะบันทึกจากสถานะของฟอร์มเดิม — คืน { error } ถ้ายังกรอกไม่ครบ ไม่ยิงอะไรไปเซิร์ฟเวอร์ */
+function mpBuildDraft() {
+  const key = mpAssetType;
+  if (key === "colorSorterParts" || key === "panolyzerParts") {
+    const f = managePartsForm;
+    const hasSerial = currentManagePartsHasSerial();
+    const serials = f.serials.map((s) => s.trim()).filter(Boolean);
+    const rows = [];
+    if (f.mode === "new") {
+      if (!f.partName.trim()) return { error: "กรุณากรอกชื่ออะไหล่", msgId: "mp-msg" };
+      if (hasSerial && !serials.length) return { error: "กรุณากรอก S/N อย่างน้อย 1 ชิ้น", msgId: "mp-msg" };
+      if (!hasSerial && (!f.quantity || Number(f.quantity) <= 0)) return { error: "กรุณากรอกจำนวนเริ่มต้นให้มากกว่า 0", msgId: "mp-msg" };
+      rows.push(["การทำรายการ", "เพิ่มอะไหล่ใหม่"], ["ชื่ออะไหล่", f.partName.trim()], ["ประเภทอะไหล่", mpTypeLabel(key)], ["การนับ", hasSerial ? "มี S/N ทีละชิ้น" : "นับจำนวนรวม"]);
+      rows.push(["รูปอะไหล่", f.photoBase64 ? "แนบรูปแล้ว" : "ไม่มีรูป"]);
+    } else {
+      if (!f.restockPartId) return { error: "กรุณาเลือกอะไหล่ที่จะเติมของ", msgId: "mp-msg" };
+      if (hasSerial && !serials.length) return { error: "กรุณากรอก S/N อย่างน้อย 1 ชิ้น", msgId: "mp-msg" };
+      if (!hasSerial && (!f.quantity || Number(f.quantity) <= 0)) return { error: "กรุณากรอกจำนวนที่เติมให้มากกว่า 0", msgId: "mp-msg" };
+      const part = (state.data.partsCatalog || []).find((p) => p.PartID === f.restockPartId);
+      rows.push(["การทำรายการ", "เติมของอะไหล่ที่มีอยู่"], ["อะไหล่", part ? part.PartName : f.restockPartId]);
+    }
+    if (hasSerial) return { rows, serials, total: serials.length, msgId: "mp-msg" };
+    rows.push(["จำนวนที่เพิ่ม", `${Number(f.quantity)} ชิ้น`]);
+    return { rows, total: Number(f.quantity), msgId: "mp-msg" };
+  }
+  if (key === "simcard" && mpSimTab === "activate") {
+    const sel = [...bulkActivateSimState.selected];
+    if (!sel.length) return { error: "กรุณาเลือกซิมอย่างน้อย 1 รายการ", msgId: "ba-msg" };
+    if (!bulkActivateSimState.date) return { error: "กรุณากรอกวันที่เปิดใช้บริการ", msgId: "ba-msg" };
+    const [y, m, d] = bulkActivateSimState.date.split("-");
+    return { rows: [["การทำรายการ", "Activate ซิม"], ["วันที่เปิดใช้บริการ", `${d}/${m}/${y}`]], serials: sel, total: sel.length, serialLabel: "S/N ซิมที่จะ Activate", msgId: "ba-msg" };
+  }
+  const { commonFields, common, items, itemFields } = addStockForm;
+  if (commonFields.some((f) => f.label.indexOf("*") !== -1 && !String(common[f.key] || "").trim())) return { error: "กรุณากรอกข้อมูลในช่องที่มี * ให้ครบ", msgId: "as-msg" };
+  if (!items.length) return { error: "กรุณาเพิ่มรายการอย่างน้อย 1 รายการลงตะกร้าก่อน", msgId: "as-msg" };
+  const rows = [["การทำรายการ", "เพิ่มสต๊อกใหม่"]];
+  commonFields.forEach((f) => { rows.push([mpCleanLabel(f.label), String(common[f.key] || "-")]); });
+  return { rows, table: { head: itemFields.map((f) => f.label), body: items.map((it) => itemFields.map((f) => it[f.field])) }, total: items.length, msgId: "as-msg" };
+}
+
+function mpToReview() {
+  const d = mpBuildDraft();
+  if (d.error) {
+    const el = document.getElementById(d.msgId);
+    if (el) { el.className = "form-msg error"; el.textContent = d.error; el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+    return;
+  }
+  mpClearMsgs();
+  const kvHtml = d.rows.map((r) => `<div class="mp-kv"><span>${escapeHtml(r[0])}</span><b>${escapeHtml(r[1])}</b></div>`).join("");
+  let listHtml = "";
+  if (d.table) {
+    listHtml = `<div class="table-card" style="margin-top:12px;"><div class="table-scroll"><table><thead><tr><th>#</th>${d.table.head.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${d.table.body.map((r, i) => `<tr><td>${i + 1}</td>${r.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+  } else if (d.serials) {
+    listHtml = `<div class="mp-sn-list"><div class="cache-note" style="margin-bottom:6px;">${escapeHtml(d.serialLabel || "S/N ที่จะเพิ่ม")}</div>${d.serials.map((s) => `<span class="mp-sn">${escapeHtml(s)}</span>`).join("")}</div>`;
+  }
+  const isAdd = !(mpAssetType === "simcard" && mpSimTab === "activate");
+  document.getElementById("mp-p3").innerHTML = `
+    <div class="form-card">
+      <div class="mp-total"><span>${escapeHtml(mpTypeLabel(mpAssetType))}</span><b>${d.total} ชิ้น</b></div>
+      ${kvHtml}${listHtml}
+      ${isAdd && !(mpAssetType === "colorSorterParts" || mpAssetType === "panolyzerParts") ? `<div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">ทุกชิ้นจะเข้าสถานะ "Stock" ทันที พร้อมให้เลือกเบิกได้เลย</div>` : ""}
+      <div id="mp-reviewMsg" class="form-msg"></div>
+    </div>`;
+  mpGoStep(3);
+}
+
+async function mpConfirmSave() {
+  const isParts = mpAssetType === "colorSorterParts" || mpAssetType === "panolyzerParts";
+  const isActivate = mpAssetType === "simcard" && mpSimTab === "activate";
+  const msgId = isParts ? "mp-msg" : isActivate ? "ba-msg" : "as-msg";
+  const before = bulkActivateSimState.selected.size;
+  const btn = document.getElementById("mp-saveBtn");
+  const rev = document.getElementById("mp-reviewMsg");
+  if (rev) { rev.className = "form-msg"; rev.textContent = ""; }
+  if (btn) btn.disabled = true;
+  try {
+    if (isParts) await submitManagePartsForm();
+    else if (isActivate) await submitBulkActivateSim();
+    else await submitAddStockBasket();
+  } finally {
+    const b = document.getElementById("mp-saveBtn");
+    if (b) b.disabled = false;
+  }
+  if (!document.getElementById("mp-wiz")) return; // ออกจากหน้านี้ไปแล้ว (เช่น เซสชันหมดอายุ)
+  const el = document.getElementById(msgId);
+  const failed = el && el.classList.contains("error");
+  const success = isActivate ? bulkActivateSimState.selected.size < before : !!(el && el.classList.contains("success"));
+  if (failed) {
+    const r = document.getElementById("mp-reviewMsg");
+    if (r) { r.className = "form-msg error"; r.textContent = el.textContent; }
+  } else if (success) {
+    mpBuildWizard(isActivate ? "Activate ซิมเรียบร้อยแล้ว" : "บันทึกเข้าสต๊อกสำเร็จ");
+  }
 }
 
 /** สลับเนื้อหาส่วนล่างของหน้าตามประเภทที่เลือกไว้บนสุด — MoisturLyzer/Gateway/SimCard ใช้ฟอร์มเพิ่มสต๊อกแบบตะกร้าใหม่
@@ -4444,18 +4669,20 @@ async function submitBulkActivateSim() {
 function renderPartsSubUI(area) {
   const f = managePartsForm;
   area.innerHTML = `
-    <div class="picker-row" style="margin-bottom:14px;">
-      <select id="mp-mode">
-        <option value="new" ${f.mode === "new" ? "selected" : ""}>+ เพิ่มอะไหล่ใหม่ (ชื่อที่ยังไม่เคยมีในระบบ)</option>
-        <option value="restock" ${f.mode === "restock" ? "selected" : ""}>เติมของอะไหล่ที่มีอยู่แล้ว</option>
-      </select>
+    <div class="seg mp-seg" id="mp-mode">
+      <button type="button" class="${f.mode === "new" ? "on" : ""}" data-mode="new">+ อะไหล่ใหม่</button>
+      <button type="button" class="${f.mode === "restock" ? "on" : ""}" data-mode="restock">เติมของที่มีอยู่</button>
     </div>
     <div id="mp-formArea"></div>
     <div id="mp-msg" class="form-msg"></div>
     <button class="btn-primary" id="mp-submitBtn" style="margin-top:12px;">บันทึก</button>
   `;
 
-  document.getElementById("mp-mode").addEventListener("change", (e) => { f.mode = e.target.value; f.serials = [""]; f.photoBase64 = ""; f.photoMimeType = ""; renderManagePartsFormArea(); });
+  document.querySelectorAll("#mp-mode button").forEach((btn) => btn.addEventListener("click", () => {
+    f.mode = btn.getAttribute("data-mode"); f.serials = [""]; f.photoBase64 = ""; f.photoMimeType = "";
+    document.querySelectorAll("#mp-mode button").forEach((b) => b.classList.toggle("on", b === btn));
+    renderManagePartsFormArea();
+  }));
   document.getElementById("mp-submitBtn").addEventListener("click", submitManagePartsForm);
   renderManagePartsFormArea();
 }
@@ -4463,6 +4690,7 @@ function renderPartsSubUI(area) {
 function renderManagePartsFormArea() {
   const area = document.getElementById("mp-formArea");
   const f = managePartsForm;
+  area.classList.toggle("mp-new", f.mode === "new");
 
   if (f.mode === "new") {
     area.innerHTML = `
@@ -4559,6 +4787,7 @@ function renderQtyOrSerialArea() {
   if (!area) return;
   const f = managePartsForm;
   const hasSerial = currentManagePartsHasSerial();
+  area.classList.toggle("mp-span2", hasSerial);
 
   if (hasSerial) {
     area.innerHTML = `

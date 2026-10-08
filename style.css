@@ -1521,3 +1521,59 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
 .gwl-row .v { font-family: monospace; font-weight: 700; color: var(--text); text-align: right; word-break: break-all; }
 .gwl-footer { margin-top: auto; font-size: 2.1mm; color: var(--gray); }
 .gwl-footer .cust b { color: var(--text); display: block; font-size: 2.3mm; }
+
+/* ============================================================
+   หน้า "จัดการ Stock/อะไหล่" แบบตัวช่วยทีละขั้น (mp-wiz) — ดู renderManagePartsView ใน script.js
+   ============================================================ */
+.mp-wiz { max-width: 760px; }
+.mp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.mp-steps { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.mp-stp { display: flex; align-items: center; gap: 8px; color: var(--gray); font-weight: 500; font-size: 13px; white-space: nowrap; }
+.mp-stp b { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #E6ECE8; font-size: 12px; flex: none; }
+.mp-stp.on { color: var(--green-dark); }
+.mp-stp.on b { background: var(--green); color: #fff; }
+.mp-stp.done b { background: #63816F; color: #fff; }
+.mp-line { flex: 1; height: 2px; background: #E6ECE8; min-width: 12px; }
+.mp-types { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mp-type { display: flex; align-items: center; gap: 12px; text-align: left; width: 100%; min-height: 64px; padding: 12px 14px; border: 1.5px solid var(--border); background: #fff; border-radius: var(--radius); cursor: pointer; font-family: inherit; color: var(--text); }
+.mp-type:hover, .mp-type.on { border-color: var(--green); background: var(--green-light); }
+.mp-ico { width: 42px; height: 42px; border-radius: 11px; background: var(--green-light); color: var(--green); display: grid; place-items: center; font-size: 18px; flex: none; }
+.mp-type:hover .mp-ico, .mp-type.on .mp-ico { background: var(--green); color: #fff; }
+.mp-type-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mp-type-txt small { color: var(--gray); font-size: 12px; }
+.mp-badge { background: #fdf1dc; color: #96600a; border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.mp-chev { color: #9aa8a0; font-size: 12px; flex: none; }
+.mp-typebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.mp-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--green-light); color: var(--green-dark); border-radius: 999px; padding: 5px 12px; font-weight: 600; font-size: 13px; }
+.mp-typebar-note { color: var(--gray); font-size: 12px; }
+.mp-wiz #as-submitBtn, .mp-wiz #mp-submitBtn, .mp-wiz #ba-submitBtn { display: none; }
+.mp-wiz .mp-formcard .form-card { border: 0; padding: 0; box-shadow: none; background: transparent; }
+.mp-wiz .mp-formcard .form-card > h3 { display: none; }
+.mp-footer { display: flex; gap: 10px; margin-top: 16px; position: sticky; bottom: 0; padding: 10px 0; background: linear-gradient(rgba(245,247,246,0), var(--bg, #F5F7F6) 35%); z-index: 5; }
+.mp-footer:empty { display: none; }
+.mp-fbtn { min-height: 44px; padding: 0 18px; border-radius: 9px; font-family: inherit; font-size: 14px; }
+.mp-fnext { margin-left: auto; }
+.mp-kv { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid #eef1ef; font-size: 14px; }
+.mp-kv span { color: var(--gray); }
+.mp-kv b { text-align: right; word-break: break-word; }
+.mp-total { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-size: 15px; color: var(--green-dark); }
+.mp-total b { font-size: 22px; }
+.mp-sn-list { margin-top: 12px; }
+.mp-sn { display: inline-block; background: #fff; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; margin: 0 6px 6px 0; font-variant-numeric: tabular-nums; font-size: 13px; }
+@media (max-width: 760px) {
+  .mp-types { grid-template-columns: 1fr; }
+  .mp-stp span { font-size: 12px; white-space: normal; line-height: 1.2; }
+  .mp-footer { bottom: calc(46px + env(safe-area-inset-bottom, 0px)); padding: 10px 0 12px; background: var(--bg, #F5F7F6); }
+  .mp-fbtn { flex: 1; }
+  .mp-fnext { flex: 2; }
+}
+
+/* ฟอร์มอะไหล่ในตัวช่วย: สลับโหมดแบบปุ่มคู่ + จำนวน/รูปอยู่เคียงกันบนจอกว้าง */
+.seg { display: flex; background: #EEF1EF; border-radius: 10px; padding: 3px; gap: 3px; margin-bottom: 14px; }
+.seg button { flex: 1; border: 0; background: transparent; border-radius: 8px; padding: 9px 10px; min-height: 40px; font-family: inherit; font-size: 14px; font-weight: 500; color: var(--gray); cursor: pointer; }
+.seg button.on { background: #fff; color: var(--green-dark); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.mp-wiz #mp-formArea.mp-new { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.mp-wiz #mp-formArea.mp-new > .form-grid, .mp-wiz #mp-formArea.mp-new > .mp-span2 { grid-column: 1 / -1; }
+.mp-wiz #mp-formArea.mp-new > #mp-qtyOrSerialArea { margin: 0; }
+.mp-wiz #mp-formArea.mp-new > .form-field { margin-top: 0 !important; }
+@media (max-width: 760px) { .mp-wiz #mp-formArea.mp-new { grid-template-columns: 1fr; } }
