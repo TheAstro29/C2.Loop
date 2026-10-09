@@ -1579,3 +1579,17 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
 @media (max-width: 760px) { .mp-wiz #mp-formArea.mp-new { grid-template-columns: 1fr; } }
 
 .ss-group { padding: 6px 12px; font-size: 11px; font-weight: 600; color: var(--green-dark); background: var(--green-light); letter-spacing: .02em; position: sticky; top: 0; }
+
+/* ===== ตะกร้าเบิก v3: ตารางเหลือแค่รายการ + ส่วนจับคู่แบบพับได้ ===== */
+.basket-table--slim td { padding: 10px 12px; vertical-align: middle; }
+.basket-table--slim th { padding: 10px 12px; }
+.pairing-v3 .pairing-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border: 1px dashed var(--border); border-radius: 10px; background: #f7f9f8; }
+.pairing-v3 .pairing-bar.has-links { background: var(--green-light); border-style: solid; border-color: var(--green); }
+.pairing-v3 .pairing-bar-text { font-size: 13px; color: var(--gray); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.pairing-v3 .pairing-bar-text b { color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+.pairing-v3 .pairing-bar.has-links .pairing-bar-text { color: var(--green-dark); }
+.pairing-v3 .pairing-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: #fff; }
+.pairing-v3 .pairing-panel > .cache-note { margin: 0 0 12px; }
+.pairing-v3 .pair-summary { margin-top: 10px; font-size: 13px; }
+.pairing-v3 .pair-summary-line { margin-top: 4px; }
+.pairing-v3 .pair-pre { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
