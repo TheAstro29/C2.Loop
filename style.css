@@ -1018,7 +1018,7 @@ tbody tr.row-clickable { cursor: pointer; }
 .users-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .users-table th { background: var(--green); color: #fff; text-align: left; padding: 10px 12px; }
 .users-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
-.users-table tr:nth-child(even) { background: var(--green-light); }
+.users-table tr:nth-child(even) { background: #F3F6F4; }
 .status-pill { padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 700; }
 .status-pill.active { background: #e5f2ea; color: var(--ok); }
 .status-pill.inactive { background: #f0f0f0; color: var(--gray); }
@@ -1600,3 +1600,61 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
 .fld-counter.over { color: var(--warning); font-weight: 600; }
 .picker-detail { margin-top: 2px; }
 .form-field textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 14px; resize: vertical; min-height: 84px; box-sizing: border-box; }
+
+/* ===== จัดการผู้ใช้: ป้ายสถานะ/ปุ่ม/ประวัติ/บังคับตั้งรหัสใหม่ ===== */
+.users-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 4px 0 10px; flex-wrap: wrap; }
+.users-table td { vertical-align: middle; }
+.users-table td.role-admin { font-weight: 700; color: var(--green-dark); }
+.user-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.ustat { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 20px; border: 1px solid transparent; white-space: nowrap; }
+.ustat .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ustat.ok { background: #E3F4E9; color: #1f7a43; border-color: #BFE3CC; }
+.ustat.off { background: #F1F1F1; color: #666; border-color: #DADADA; }
+.ustat.lock { background: #FFF1DC; color: #9a5b00; border-color: #F3D29A; }
+.ustat.pw { background: #E8F0FB; color: #2f5f9e; border-color: #C9DAF2; }
+.ustat-sub { font-size: 11px; color: var(--gray); margin-top: 3px; }
+.btn-unlock { background: #fff; color: #9a5b00; border: 1px solid #F3D29A; }
+.ulog-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.ulog-chip { font: inherit; font-size: 12.5px; padding: 5px 11px; border-radius: 99px; border: 1px solid var(--border); background: #fff; color: var(--text); cursor: pointer; }
+.ulog-chip.on { background: var(--green); border-color: var(--green); color: #fff; }
+.forced-pw-overlay { position: fixed; inset: 0; z-index: 9000; background: rgba(32, 38, 34, .55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.forced-pw-card { background: #fff; border-radius: 16px; box-shadow: 0 16px 40px rgba(0,0,0,.2); width: 100%; max-width: 400px; padding: 26px 24px; text-align: center; }
+.forced-pw-card .form-field { text-align: left; }
+.forced-pw-icon { width: 60px; height: 60px; border-radius: 50%; margin: 0 auto 10px; display: grid; place-items: center; font-size: 26px; background: linear-gradient(135deg, var(--green), var(--green-dark)); }
+.forced-pw-card h3 { color: var(--green-dark); margin: 0 0 12px; }
+.forced-pw-note { background: #EAF2FB; color: #2f5f9e; border: 1px solid #C9DAF2; border-radius: 10px; padding: 10px 12px; font-size: 13.5px; text-align: left; margin-bottom: 14px; }
+.forced-pw-btn { width: 100%; margin-top: 6px; }
+.forced-pw-logout { margin-top: 10px; background: none; border: none; color: var(--gray); text-decoration: underline; cursor: pointer; font: inherit; font-size: 13px; }
+.ustat-wrap { text-align: right; flex: none; max-width: 48%; }
+
+/* ===== Dashboard มือถือ (ปรับใหม่): การ์ดแยกรุ่น + SimCard พร้อมใช้/ยังไม่ Activate + ชิปใกล้หมด ===== */
+.dm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.dm-tile { position: relative; background: #fff; border-radius: 14px; padding: 12px; box-shadow: var(--shadow); cursor: pointer; min-width: 0; }
+.dm-tile.dm-wide { grid-column: 1 / -1; }
+.dm-tile.dm-empty { opacity: .55; }
+.dm-top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; padding-right: 22px; }
+.dm-ic { width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; flex-shrink: 0; }
+.dm-name { font-size: 13px; font-weight: 700; color: var(--green-dark); line-height: 1.2; }
+.dm-name-sub { font-weight: 400; color: var(--gray); font-size: 12px; }
+.dm-big { font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 24px; line-height: 1; color: var(--text); }
+.dm-big small { font-family: inherit; font-size: 11.5px; font-weight: 600; color: var(--gray); margin-left: 4px; }
+.dm-big.low { color: var(--warning); }
+.dm-line { font-size: 11.5px; color: var(--gray); margin-top: 6px; line-height: 1.45; }
+.dm-line b { color: var(--text); }
+.dm-line .w { color: var(--warning); font-weight: 700; }
+.dm-lowdot { position: absolute; top: 8px; right: 8px; background: var(--warning); color: #fff; font-size: 11px; font-weight: 700; border-radius: 99px; min-width: 18px; padding: 0 5px; text-align: center; line-height: 18px; }
+.dm-sim-row { display: flex; gap: 10px; }
+.dm-sim-box { flex: 1; border-radius: 10px; padding: 8px 10px; }
+.dm-sim-box .k { font-size: 11.5px; font-weight: 700; }
+.dm-sim-box .v { font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 24px; line-height: 1.1; }
+.dm-sim-box.ok { background: #E8F5EE; color: #1f7a43; }
+.dm-sim-box.ok.low { background: #FFF4E0; color: #9a5b00; }
+.dm-sim-box.wait { background: #F3F4F3; color: #555; }
+.dm-low-alert { margin-top: 14px; background: #FFF4E0; border: 1px solid #F3D29A; border-radius: 12px; padding: 11px 13px; display: flex; gap: 10px; align-items: flex-start; }
+.dm-low-icon { width: 32px; height: 32px; border-radius: 50%; background: var(--warning); color: #fff; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+.dm-low-body { flex: 1; min-width: 0; }
+.dm-low-body > b { display: block; font-size: 12.5px; color: #7a4a00; margin-bottom: 6px; }
+.dm-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.dm-chip { background: #fff; border: 1px solid #F3D29A; border-radius: 99px; padding: 2px 9px; font-size: 11.5px; color: var(--text); }
+.dm-chip b { color: #9a5b00; }
+.dm-chip.more { color: var(--gray); }

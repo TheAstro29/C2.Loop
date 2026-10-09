@@ -367,6 +367,7 @@ function init() {
     if (!state.data.users) state.data.users = [];
 
     showApp();
+    if (state.user.mustChangePassword) showForcedPasswordChange();
     // แสดงข้อมูลจาก cache ทันที (ถ้ามี) แล้วค่อยรีเฟรชเบื้องหลัง
     renderCurrentView();
     const initialLoad = navigator.onLine
@@ -493,7 +494,7 @@ async function onLoginSubmit(ev) {
   try {
     const res = await apiPost({ action: "login", username, password });
     if (!res.ok) {
-      throw new Error(loginErrorMessage(res.error));
+      throw new Error(loginErrorMessage(res.error, res));
     }
     state.token = res.token;
     state.user = res.user;
@@ -509,6 +510,7 @@ async function onLoginSubmit(ev) {
     }
 
     showApp();
+    if (state.user.mustChangePassword) { showForcedPasswordChange(); return; }
     await refreshInBackground(true);
     startPolling();
   } catch (err) {
@@ -520,9 +522,18 @@ async function onLoginSubmit(ev) {
   }
 }
 
-function loginErrorMessage(code) {
+function loginErrorMessage(code, res) {
+  res = res || {};
   switch (code) {
-    case "invalid_credentials": return "Username หรือรหัสผ่านไม่ถูกต้อง";
+    case "invalid_credentials":
+      // เตือนเมื่อใกล้ถูกล็อก (เหลือ 3 ครั้งหรือน้อยกว่า) — ดู LOGIN_MAX_FAILS ฝั่ง backend
+      return Number.isFinite(res.attemptsLeft) && res.attemptsLeft <= 3
+        ? `Username หรือรหัสผ่านไม่ถูกต้อง — เหลืออีก ${res.attemptsLeft} ครั้งก่อนบัญชีถูกล็อกชั่วคราว`
+        : "Username หรือรหัสผ่านไม่ถูกต้อง";
+    case "account_locked": {
+      const mins = Math.max(1, Math.ceil(((Number(res.lockedUntil) || 0) - Date.now()) / 60000));
+      return `🔒 บัญชีถูกล็อกชั่วคราวเพราะกรอกรหัสผิดหลายครั้ง ลองใหม่ได้ใน ${mins} นาที หรือติดต่อ Admin เพื่อปลดล็อก`;
+    }
     case "account_disabled": return "บัญชีนี้ถูกปิดใช้งาน กรุณาติดต่อ Admin";
     case "missing_credentials": return "กรุณากรอก Username และรหัสผ่าน";
     default: return "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่";
@@ -1867,53 +1878,84 @@ function renderDashboard() {
 // ============================================================
 // Dashboard เวอร์ชันมือถือ — วงแหวนสรุปสัดส่วนคงคลัง + ตารางไอคอนแยกตามประเภท (ดูง่ายกว่ากราฟเดิมบนจอเล็ก)
 // ============================================================
+/** แยกยอดย่อยของการ์ด Dashboard มือถือ — ใช้ฟังก์ชันเดียวกับการ์ด KPI หน้า PC (รายรุ่น/รายประเภท/รายชื่ออะไหล่)
+ * ให้ตัวเลข "ใกล้หมด" ตรงกันทั้งสองจอ คืน { big, unit, lines:[{label, stock, isLow}], lowItems:[{name, stock}] } */
+function mobileDashTileData(cfg, summary) {
+  const title = cfg.title.replace(" (มี S/N)", "");
+  if (PART_CATEGORY_BY_VIEW[cfg.key]) {
+    // อะไหล่: นับรวมทั้งแบบนับจำนวน (QuantityInStock) และแบบมี S/N (ชิ้นที่อยู่ในคลัง) — เดิมนับเฉพาะแบบมี S/N
+    const items = computePartsBreakdown(cfg.key);
+    const lowItems = items.filter((p) => p.stock <= LOW_STOCK_THRESHOLD).map((p) => ({ name: p.name, stock: p.stock }));
+    return { big: items.reduce((t, p) => t + p.stock, 0), unit: "ชิ้น", parts: items.length, lowItems };
+  }
+  const breakdown = cfg.key === "gateway" ? computeGatewayModelBreakdown(state.data.gateway || [])
+    : cfg.key === PANOLYZER_KEY ? computePanolyzerTypeBreakdown(state.data.panolyzer || [])
+    : cfg.key === "moisturlyzer" ? computeMoisturlyzerModelBreakdown(state.data.moisturlyzer || [])
+    : cfg.key === COLORSORTER_KEY ? computeColorSorterModelBreakdown(state.data.colorSorter || [])
+    : [];
+  const lines = breakdown.map((m) => ({ label: m.label, stock: m.stock, isLow: m.isLow }));
+  // ไม่มีข้อมูลรุ่น → เตือนจากยอดรวมของหมวดแทน (เหมือนเดิม)
+  const lowItems = breakdown.length
+    ? breakdown.filter((m) => m.isLow).map((m) => ({ name: `${title} ${m.label}`, stock: m.stock }))
+    : (summary.total > 0 && summary.stock <= LOW_STOCK_THRESHOLD ? [{ name: title, stock: summary.stock }] : []);
+  return { big: summary.stock, unit: "ในคลัง", lines, lowItems };
+}
+
 function renderDashboardMobile(content, summaries) {
   const isAdmin = state.user.role === "Admin";
-  const totalStock = summaries.reduce((sum, s) => sum + s.summary.stock, 0);
   const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
 
-  // คำนวณส่วนโค้งของวงแหวนแต่ละหมวด (เรียงตาม summaries เดิม ให้สีตรงกับไอคอนหน้าแรกมือถือเสมอ)
-  const RADIUS = 80;
-  const CIRC = 2 * Math.PI * RADIUS;
-  let cumulative = 0;
-  const segments = totalStock > 0 ? summaries
-    .filter((s) => s.summary.stock > 0)
-    .map((s) => {
-      const meta = DASHBOARD_CATEGORY_META[s.cfg.key] || { color: "#3F654D" };
-      const pct = s.summary.stock / totalStock;
-      const arcLen = pct * CIRC;
-      const seg = { color: meta.color, arcLen, offset: -cumulative, pct: Math.round(pct * 100) };
-      cumulative += arcLen;
-      return seg;
-    }) : [];
+  // SimCard แยกเป็นการ์ดเต็มความกว้าง: "พร้อมใช้งาน" (อยู่ในคลัง + Activate แล้ว = เบิกได้จริง) กับ "ยังไม่ Activate"
+  // (อยู่ในคลังแต่ยังเบิกไม่ได้) — เดิมรวมกันเป็น "N ในคลัง" ทำให้ดูเหมือนมีซิมให้เบิกมากกว่าความจริง
+  const simEntry = summaries.find((s) => s.cfg.key === "simcard");
+  const otherEntries = summaries.filter((s) => s.cfg.key !== "simcard");
+  let simHtml = "";
+  let simLow = [];
+  if (simEntry) {
+    const sm = simEntry.summary;
+    const ready = sm.stock - (sm.stockPendingActivate || 0);
+    const waiting = sm.stockPendingActivate || 0;
+    const simCfg = VIEW_CONFIG.simcard;
+    const issuedNotActivated = getNotActivatedSimCards().filter((r) => !isPhysicalStockRow(r, simCfg.stockField)).length;
+    // เตือนใกล้หมดจาก "พร้อมใช้งาน" เพราะซิมที่ยังไม่ Activate เอาไปเบิกไม่ได้
+    if (sm.total > 0 && ready <= LOW_STOCK_THRESHOLD) simLow = [{ name: "SimCard พร้อมใช้งาน", stock: ready }];
+    const meta = DASHBOARD_CATEGORY_META.simcard;
+    simHtml = `
+      <div class="dm-tile dm-wide${sm.total === 0 ? " dm-empty" : ""}" onclick="switchView('simcard')">
+        ${simLow.length ? `<span class="dm-lowdot">1</span>` : ""}
+        <div class="dm-top"><div class="dm-ic" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div>
+          <div class="dm-name">SimCard <span class="dm-name-sub">· ในคลัง ${sm.stock}</span></div></div>
+        <div class="dm-sim-row">
+          <div class="dm-sim-box ok${simLow.length ? " low" : ""}"><div class="k">พร้อมใช้งาน</div><div class="v">${ready}</div></div>
+          <div class="dm-sim-box wait"><div class="k">ยังไม่ Activate</div><div class="v">${waiting}</div></div>
+        </div>
+        ${issuedNotActivated > 0 ? `<div class="dm-line">⚠ เบิกออกไปแล้วแต่ยังไม่ Activate <span class="w">${issuedNotActivated}</span> ใบ — ตามกับ AIS</div>` : ""}
+      </div>`;
+  }
 
-  const donutSvg = totalStock > 0
-    ? `
-      <svg width="200" height="200" viewBox="0 0 200 200">
-        <g transform="translate(100,100) rotate(-90)">
-          <circle r="${RADIUS}" cx="0" cy="0" fill="none" stroke="#eef1ef" stroke-width="24"/>
-          ${segments.map((seg) => `<circle r="${RADIUS}" cx="0" cy="0" fill="none" stroke="${seg.color}" stroke-width="24" stroke-dasharray="${seg.arcLen.toFixed(1)} ${CIRC.toFixed(1)}" stroke-dashoffset="${seg.offset.toFixed(1)}" stroke-linecap="butt"/>`).join("")}
-        </g>
-        <text x="100" y="96" text-anchor="middle" style="font-size:26px; font-weight:700; fill:#2C4C3A; font-family:inherit;">${totalStock}</text>
-        <text x="100" y="116" text-anchor="middle" style="font-size:11px; fill:#63816F; font-family:inherit;">อยู่ในคลังทั้งหมด</text>
-      </svg>`
-    : `
-      <svg width="200" height="200" viewBox="0 0 200 200">
-        <circle r="${RADIUS}" cx="100" cy="100" fill="none" stroke="#eef1ef" stroke-width="24"/>
-        <text x="100" y="104" text-anchor="middle" style="font-size:13px; fill:#8a938d; font-family:inherit;">ยังไม่มีของในคลัง</text>
-      </svg>`;
+  const tiles = otherEntries.map(({ cfg, summary }) => ({ cfg, summary, data: mobileDashTileData(cfg, summary) }));
+  const allLow = [...simLow, ...tiles.flatMap((t) => t.data.lowItems)].sort((x, y) => x.stock - y.stock);
+  const LOW_CHIP_MAX = 8;
 
-  const legendHtml = segments.map((seg, i) => {
-    const s = summaries.filter((x) => x.summary.stock > 0)[i];
-    return `<div class="dash-legend-item"><span class="dash-legend-dot" style="background:${seg.color}"></span>${escapeHtml(s.cfg.title.replace(" (มี S/N)", ""))} ${seg.pct}%</div>`;
+  const tilesHtml = tiles.map(({ cfg, summary, data }) => {
+    const meta = DASHBOARD_CATEGORY_META[cfg.key] || { icon: "fa-box", color: "#3F654D" };
+    const title = cfg.title.replace(" (มี S/N)", "");
+    const isParts = !!PART_CATEGORY_BY_VIEW[cfg.key];
+    const isEmpty = isParts ? data.parts === 0 : summary.total === 0;
+    const lowCount = data.lowItems.length;
+    let sub = "";
+    if (isEmpty) sub = isParts ? "ยังไม่มีอะไหล่ในหมวดนี้" : "ยังไม่มีเครื่องในระบบ";
+    else if (isParts) sub = `${data.parts} รายชื่อ${lowCount ? ` · <span class="w">ใกล้หมด ${lowCount}</span>` : ""}`;
+    else if (data.lines.length) sub = data.lines.map((l) => `${escapeHtml(l.label)} ${l.isLow ? `<span class="w">${l.stock}</span>` : `<b>${l.stock}</b>`}`).join(" · ");
+    const bigLow = !isParts && !isEmpty && summary.stock <= LOW_STOCK_THRESHOLD;
+    return `
+      <div class="dm-tile${isEmpty ? " dm-empty" : ""}" onclick="switchView('${escapeAttr(cfg.key)}')">
+        ${lowCount ? `<span class="dm-lowdot">${lowCount}</span>` : ""}
+        <div class="dm-top"><div class="dm-ic" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div><div class="dm-name">${escapeHtml(title)}</div></div>
+        <div class="dm-big${bigLow ? " low" : ""}">${data.big}<small>${data.unit}</small></div>
+        ${sub ? `<div class="dm-line">${sub}</div>` : ""}
+      </div>`;
   }).join("");
-
-  // ของใกล้หมด — เฉพาะหมวดที่เคยมีของจริง (total > 0) แต่ตอนนี้เหลือน้อยกว่าหรือเท่ากับเกณฑ์ที่ตั้งไว้
-  const lowStockCats = summaries.filter(({ summary }) => summary.total > 0 && summary.stock <= LOW_STOCK_THRESHOLD);
-  const lowStockNames = lowStockCats.map((s) => s.cfg.title.replace(" (มี S/N)", ""));
-  const lowStockText = lowStockCats.length === 1
-    ? `${escapeHtml(lowStockNames[0])} เหลือในคลังแค่ ${lowStockCats[0].summary.stock} ชิ้น`
-    : `${escapeHtml(lowStockNames.join(", "))} ใกล้หมด`;
 
   const monthly = computeMonthlyIssuedComparison();
   const monthlyDiff = monthly.current - monthly.previous;
@@ -1924,6 +1966,8 @@ function renderDashboardMobile(content, summaries) {
 
   const recentActivity = computeRecentActivity(5);
 
+  // หมายเหตุ: ตัดวงแหวน "อยู่ในคลังทั้งหมด" ออก — เดิมบวกของคนละชนิด (ซิม + Gateway + อะไหล่) รวมเป็นเลขเดียว
+  // ซึ่งเอาไปตัดสินใจอะไรไม่ได้ และกินพื้นที่ครึ่งจอแรก ย้ายปุ่มเบิก/การแจ้งเตือนขึ้นมาแทน
   content.innerHTML = `
     <div class="dash-mobile-header">
       <div class="dash-mobile-title">ภาพรวมคลังอุปกรณ์</div>
@@ -1933,10 +1977,7 @@ function renderDashboardMobile(content, summaries) {
       </div>
     </div>
     <div id="dashboardReportArea">
-      <div class="dash-donut-wrap">${donutSvg}</div>
-      ${segments.length ? `<div class="dash-legend-row">${legendHtml}</div>` : ""}
-
-      <button class="dash-cta-btn no-print" onclick="switchView('issue')"><i class="fas fa-dolly"></i> เบิกอุปกรณ์</button>
+      <button class="dash-cta-btn no-print" style="margin-top:4px;" onclick="switchView('issue')"><i class="fas fa-dolly"></i> เบิกอุปกรณ์</button>
 
       ${isAdmin && pending > 0 ? `
         <div class="dash-pending-alert" onclick="switchView('approvals')">
@@ -1945,10 +1986,13 @@ function renderDashboardMobile(content, summaries) {
           <i class="fas fa-chevron-right"></i>
         </div>` : ""}
 
-      ${lowStockCats.length ? `
-        <div class="dash-lowstock-alert">
-          <div class="dash-lowstock-icon"><i class="fas fa-triangle-exclamation"></i></div>
-          <div class="dash-pending-text"><b>${lowStockText}</b><span>ใกล้หมด — ควรเตรียมสั่งเพิ่ม</span></div>
+      ${allLow.length ? `
+        <div class="dm-low-alert">
+          <div class="dm-low-icon"><i class="fas fa-triangle-exclamation"></i></div>
+          <div class="dm-low-body">
+            <b>ใกล้หมด (≤ ${LOW_STOCK_THRESHOLD}) — ควรเตรียมสั่งเพิ่ม</b>
+            <div class="dm-chips">${allLow.slice(0, LOW_CHIP_MAX).map((x) => `<span class="dm-chip">${escapeHtml(x.name)} <b>${x.stock}</b></span>`).join("")}${allLow.length > LOW_CHIP_MAX ? `<span class="dm-chip more">+${allLow.length - LOW_CHIP_MAX} รายการ</span>` : ""}</div>
+          </div>
         </div>` : ""}
 
       <div class="dash-monthly-stat">
@@ -1957,18 +2001,7 @@ function renderDashboardMobile(content, summaries) {
       </div>
 
       <div class="section-subtitle" style="margin-top:18px;">แยกตามประเภทอุปกรณ์</div>
-      <div class="dash-cat-grid">
-        ${summaries.map(({ cfg, summary }) => {
-          const meta = DASHBOARD_CATEGORY_META[cfg.key] || { icon: "fa-box", color: "#3F654D" };
-          const isLow = summary.total > 0 && summary.stock <= LOW_STOCK_THRESHOLD;
-          return `
-          <div class="dash-cat-tile" onclick="switchView('${escapeAttr(cfg.key)}')">
-            <div class="dash-cat-icon" style="background:${meta.color}"><i class="fas ${meta.icon}"></i></div>
-            <div class="dash-cat-name">${escapeHtml(cfg.title.replace(" (มี S/N)", ""))}</div>
-            <div class="dash-cat-count${isLow ? " low" : ""}">${summary.stock} ในคลัง</div>
-          </div>`;
-        }).join("")}
-      </div>
+      <div class="dm-grid">${simHtml}${tilesHtml}</div>
 
       ${recentActivity.length ? `
         <div class="section-subtitle" style="margin-top:18px;">กิจกรรมล่าสุด</div>
@@ -5012,7 +5045,7 @@ function renderGenericFormField(f, i) {
     // ค้นหา S/N แบบพิมพ์หา — ใช้กับ dropdown ยาวๆ ทุกจุด (รวมถึงฟอร์มแก้ไข Gateway/SimCard ที่ผูกกับรายการเบิก)
     return `<div class="form-field ${extraClasses}">
       <label>${labelHtml}</label>
-      <select id="gfm-field-${i}" class="searchable-select">
+      <select id="gfm-field-${i}" class="${f.plain ? "" : "searchable-select"}">
         ${(f.options || []).map((o) => `<option value="${escapeAttr(o.value)}" ${String(o.value) === String(f.value) ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
       </select>
       ${hintHtml}
@@ -8301,6 +8334,13 @@ function renderUsersView() {
   }
 
   const users = state.data.users || [];
+  const actionBtns = (u) => `
+    <button class="btn-sm btn-secondary" onclick="editUserPrompt('${escapeAttr(u.UserID)}')">แก้ไข</button>
+    ${isUserLocked(u) ? `<button class="btn-sm btn-unlock" onclick="unlockUserAction('${escapeAttr(u.UserID)}', '${escapeAttr(u.Name)}')">ปลดล็อก</button>` : ""}
+    <button class="btn-sm btn-secondary" onclick="resetUserPassword('${escapeAttr(u.UserID)}', '${escapeAttr(u.Name)}')">รีเซ็ตรหัสผ่าน</button>
+    <button class="btn-sm ${isActiveUser(u) ? "btn-reject" : "btn-approve"}" onclick="toggleUserActive('${escapeAttr(u.UserID)}', ${!isActiveUser(u)}, this)">
+      ${isActiveUser(u) ? "ปิดใช้งาน" : "เปิดใช้งาน"}
+    </button>`;
   content.innerHTML = `
     <div class="form-card">
       <h3>เพิ่มผู้ใช้งานใหม่</h3>
@@ -8317,21 +8357,21 @@ function renderUsersView() {
       <button class="btn-primary" id="createUserBtn" onclick="createUser()">เพิ่มผู้ใช้งาน</button>
     </div>
 
+    <div class="users-toolbar">
+      <span class="cache-note" style="margin:0;">ผู้ใช้ทั้งหมด ${users.length} คน</span>
+      <button class="btn-sm btn-secondary" onclick="showUserActivityLog()"><i class="fa-regular fa-clock"></i> ประวัติผู้ใช้</button>
+    </div>
+
     ${isMobileViewport()
       ? `<div class="mcard-list">
           ${users.map((u) => `
             <div class="mcard">
               <div class="mcard-head">
                 <div><div class="mcard-title">${escapeHtml(u.Name)} <span class="role-chip">${escapeHtml(u.Role)}</span></div><div class="mcard-sub">${escapeHtml(u.Username)}</div></div>
-                <span class="mcard-pill ${isActiveUser(u) ? "stock" : "used"}">${isActiveUser(u) ? "ใช้งานอยู่" : "ปิดใช้งาน"}</span>
+                <div class="ustat-wrap">${userStatusBadgeHtml(u)}</div>
               </div>
               <div class="mcard-row"><div class="mcard-label">เข้าใช้งานล่าสุด</div><div class="mcard-val">${formatDateTh(u.LastLoginAt)}</div></div>
-              <div class="mcard-actions">
-                <button class="btn-sm ${isActiveUser(u) ? "btn-reject" : "btn-approve"}" onclick="toggleUserActive('${escapeAttr(u.UserID)}', ${!isActiveUser(u)}, this)">
-                  ${isActiveUser(u) ? "ปิดใช้งาน" : "เปิดใช้งาน"}
-                </button>
-                <button class="btn-sm btn-secondary" onclick="resetUserPassword('${escapeAttr(u.UserID)}', '${escapeAttr(u.Name)}')">รีเซ็ตรหัสผ่าน</button>
-              </div>
+              <div class="mcard-actions">${actionBtns(u)}</div>
             </div>`).join("")}
         </div>`
       : `<div class="users-table-wrap">
@@ -8342,20 +8382,197 @@ function renderUsersView() {
             <tr>
               <td>${escapeHtml(u.Name)}</td>
               <td>${escapeHtml(u.Username)}</td>
-              <td>${escapeHtml(u.Role)}</td>
-              <td><span class="status-pill ${isActiveUser(u) ? "active" : "inactive"}">${isActiveUser(u) ? "ใช้งานอยู่" : "ปิดใช้งาน"}</span></td>
+              <td class="${u.Role === "Admin" ? "role-admin" : ""}">${escapeHtml(u.Role)}</td>
+              <td>${userStatusBadgeHtml(u)}</td>
               <td>${formatDateTh(u.LastLoginAt)}</td>
-              <td>
-                <button class="btn-sm ${isActiveUser(u) ? "btn-reject" : "btn-approve"}" onclick="toggleUserActive('${escapeAttr(u.UserID)}', ${!isActiveUser(u)}, this)">
-                  ${isActiveUser(u) ? "ปิดใช้งาน" : "เปิดใช้งาน"}
-                </button>
-                <button class="btn-sm btn-secondary" onclick="resetUserPassword('${escapeAttr(u.UserID)}', '${escapeAttr(u.Name)}')">รีเซ็ตรหัสผ่าน</button>
-              </td>
+              <td><div class="user-actions">${actionBtns(u)}</div></td>
             </tr>`).join("")}
         </tbody>
       </table>
     </div>`}
   `;
+}
+
+function isUserLocked(u) {
+  return isActiveUser(u) && (Number(u.LockedUntil) || 0) > Date.now();
+}
+
+/** ป้ายสถานะผู้ใช้ — มีกรอบ+จุดสี มองเห็นได้ทั้งแถวขาวและแถวสีเทา (เดิมป้ายสีเดียวกับพื้นแถวคู่จนกลืนกัน) */
+function userStatusBadgeHtml(u) {
+  if (!isActiveUser(u)) return `<span class="ustat off"><span class="dot"></span>ปิดใช้งาน</span>`;
+  if (isUserLocked(u)) {
+    const until = new Date(Number(u.LockedUntil)).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+    return `<span class="ustat lock">🔒 ล็อกชั่วคราว</span><div class="ustat-sub">รหัสผิดหลายครั้ง · ปลดล็อก ${until}</div>`;
+  }
+  if (u.MustChangePassword) return `<span class="ustat pw">🔑 รอเปลี่ยนรหัส</span>`;
+  return `<span class="ustat ok"><span class="dot"></span>ใช้งานอยู่</span>`;
+}
+
+/** แก้ไขชื่อ/สิทธิ์ผู้ใช้ — username แก้ไม่ได้ (ใช้ login และอ้างอิงในประวัติ) */
+function editUserPrompt(userId) {
+  const u = (state.data.users || []).find((x) => x.UserID === userId);
+  if (!u) return;
+  const isSelf = state.user && state.user.uid === userId;
+  openGenericFormModal("แก้ไขผู้ใช้", [
+    { label: "ชื่อ-นามสกุล *", value: u.Name },
+    { label: "Username", value: u.Username, locked: true, hint: "แก้ไม่ได้ — ถ้าต้องการ username ใหม่ให้สร้างบัญชีใหม่" },
+    { label: "สิทธิ์การใช้งาน", type: "select", plain: true, value: u.Role, options: [{ value: "Staff", label: "Staff" }, { value: "Admin", label: "Admin" }],
+      hint: isSelf ? "นี่คือบัญชีของคุณเอง — ลดสิทธิ์ตัวเองไม่ได้" : "เปลี่ยนสิทธิ์แล้วมีผลกับเมนูที่ผู้ใช้เห็นในการ login ครั้งถัดไป" },
+  ], async (values) => {
+    const msg = document.getElementById("genericFormModalMsg");
+    const name = String(values[0] || "").trim();
+    const role = values[2];
+    if (!name) { msg.className = "form-msg error"; msg.textContent = "กรุณากรอกชื่อ-นามสกุล"; return; }
+    try {
+      const res = await apiPost({ action: "updateUser", token: state.token, userId, name, role });
+      if (!res.ok) {
+        if (res.error === "unauthorized") return handleUnauthorized();
+        msg.className = "form-msg error"; msg.textContent = userErrorMessage(res.error);
+        return;
+      }
+      if (isSelf) {
+        state.user.name = name;
+        localStorage.setItem(LS_USER, JSON.stringify(state.user));
+        document.getElementById("userChip").innerHTML = escapeHtml(state.user.name) + '<span class="role-badge">' + escapeHtml(state.user.role) + "</span>";
+      }
+      closeGenericFormModal();
+      await refreshInBackground(true);
+      renderUsersView();
+    } catch (err) {
+      msg.className = "form-msg error"; msg.textContent = "เกิดข้อผิดพลาด: " + err.message;
+    }
+  });
+  // กรอบ username เป็นแบบอ่านอย่างเดียวจริง (field ทั่วไปของ modal นี้แก้ได้หมด)
+  const un = document.getElementById("gfm-field-1");
+  if (un) un.readOnly = true;
+}
+
+async function unlockUserAction(userId, userName) {
+  const ok = await showConfirm(`ปลดล็อกบัญชี "${userName}" ให้ login ได้ทันที?`, { type: "warning", okText: "ปลดล็อก" });
+  if (!ok) return;
+  try {
+    const res = await apiPost({ action: "unlockUser", token: state.token, userId });
+    if (!res.ok) {
+      if (res.error === "unauthorized") return handleUnauthorized();
+      await showAlert(userErrorMessage(res.error), "error");
+      return;
+    }
+    await refreshInBackground(true);
+    renderUsersView();
+  } catch (err) {
+    await showAlert("เกิดข้อผิดพลาด: " + err.message, "error");
+  }
+}
+
+const USER_LOG_LABELS = {
+  Created: "เพิ่มผู้ใช้", Updated: "แก้ไขข้อมูล", Disabled: "ปิดใช้งาน", Enabled: "เปิดใช้งาน",
+  PasswordReset: "รีเซ็ตรหัสผ่าน", PasswordChanged: "เปลี่ยนรหัสผ่าน", Locked: "ล็อกชั่วคราว", Unlocked: "ปลดล็อก",
+};
+const USER_LOG_ICONS = {
+  Created: '<i class="fas fa-user-plus"></i>', Updated: '<i class="fas fa-pen"></i>', Disabled: '<i class="fas fa-power-off"></i>',
+  Enabled: '<i class="fas fa-power-off"></i>', PasswordReset: '<i class="fas fa-key"></i>', PasswordChanged: '<i class="fas fa-key"></i>',
+  Locked: '<i class="fas fa-lock"></i>', Unlocked: '<i class="fas fa-lock-open"></i>',
+};
+const USER_LOG_FILTERS = [
+  { key: "all", label: "ทั้งหมด", actions: null },
+  { key: "edit", label: "เพิ่ม/แก้ไข", actions: ["Created", "Updated"] },
+  { key: "active", label: "เปิด/ปิด", actions: ["Disabled", "Enabled"] },
+  { key: "pw", label: "รหัสผ่าน", actions: ["PasswordReset", "PasswordChanged"] },
+  { key: "lock", label: "ล็อก", actions: ["Locked", "Unlocked"] },
+];
+let userLogCache = [];
+
+/** ประวัติการจัดการผู้ใช้ — ใช้ modal เดียวกับประวัติ Stock (partHistoryModal) */
+async function showUserActivityLog() {
+  try {
+    const res = await apiPost({ action: "getUserActivityLog", token: state.token });
+    if (!res.ok) {
+      if (res.error === "unauthorized") return handleUnauthorized();
+      await showAlert(userErrorMessage(res.error), "error");
+      return;
+    }
+    userLogCache = res.logs || [];
+    document.getElementById("partHistoryModalTitle").textContent = "ประวัติการจัดการผู้ใช้";
+    renderUserActivityLog("all");
+    document.getElementById("partHistoryModal").style.display = "flex";
+  } catch (err) {
+    await showAlert("เกิดข้อผิดพลาด: " + err.message, "error");
+  }
+}
+
+function renderUserActivityLog(filterKey) {
+  const f = USER_LOG_FILTERS.find((x) => x.key === filterKey) || USER_LOG_FILTERS[0];
+  const logs = userLogCache.filter((l) => !f.actions || f.actions.includes(l.Action));
+  const chips = `<div class="ulog-filters">${USER_LOG_FILTERS.map((x) =>
+    `<button type="button" class="ulog-chip ${x.key === f.key ? "on" : ""}" onclick="renderUserActivityLog('${x.key}')">${escapeHtml(x.label)}</button>`).join("")}</div>`;
+  const body = document.getElementById("partHistoryModalBody");
+  body.innerHTML = chips + (logs.length
+    ? `<div class="history-timeline">${logs.map((l) => `
+      <div class="history-entry">
+        <div class="history-entry-icon">${USER_LOG_ICONS[l.Action] || "•"}</div>
+        <div class="history-entry-body">
+          <div class="history-entry-head"><b>${escapeHtml(USER_LOG_LABELS[l.Action] || l.Action)} — ${escapeHtml(l.TargetName || "-")}${l.TargetUsername ? ` (${escapeHtml(l.TargetUsername)})` : ""}</b><span>${formatDateTh(l.Timestamp)}</span></div>
+          ${l.Detail ? `<div class="history-entry-detail">${escapeHtml(l.Detail)}</div>` : ""}
+          <div class="history-entry-actor">โดย ${escapeHtml(l.Actor || "-")}</div>
+        </div>
+      </div>`).join("")}</div>`
+    : `<div class="cache-note">${userLogCache.length ? "ไม่มีรายการในหมวดนี้" : "ยังไม่มีประวัติ — ระบบเริ่มบันทึกตั้งแต่การอัปเดตครั้งนี้"}</div>`);
+}
+
+/** หน้าบังคับตั้งรหัสผ่านใหม่ (หลัง Admin รีเซ็ตรหัสให้) — ปิดไม่ได้ ต้องตั้งรหัสใหม่หรือออกจากระบบเท่านั้น
+ * backend ก็บล็อกฟังก์ชันอื่นไว้เช่นกันจนกว่าจะตั้งรหัสใหม่ (ดู validateSession / mustChangePassword) */
+function showForcedPasswordChange() {
+  let ov = document.getElementById("forcedPwOverlay");
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.id = "forcedPwOverlay";
+    ov.className = "forced-pw-overlay";
+    document.body.appendChild(ov);
+  }
+  ov.innerHTML = `
+    <div class="forced-pw-card" role="dialog" aria-modal="true" aria-labelledby="fpw-title">
+      <div class="forced-pw-icon">🔑</div>
+      <h3 id="fpw-title">ตั้งรหัสผ่านใหม่</h3>
+      <div class="forced-pw-note">Admin รีเซ็ตรหัสผ่านของคุณ กรุณาตั้งรหัสใหม่ที่คุณจำได้เองก่อนเริ่มใช้งาน</div>
+      <div class="form-field"><label>รหัสผ่านใหม่ (อย่างน้อย 6 ตัวอักษร)</label><input type="password" id="fpw-new" autocomplete="new-password"></div>
+      <div class="form-field"><label>ยืนยันรหัสผ่านใหม่</label><input type="password" id="fpw-confirm" autocomplete="new-password"></div>
+      <div class="form-msg" id="fpw-msg"></div>
+      <button class="btn-primary forced-pw-btn" id="fpw-btn" onclick="submitForcedPasswordChange()">บันทึกและเข้าใช้งาน</button>
+      <button class="forced-pw-logout" onclick="document.getElementById('forcedPwOverlay').remove(); logout();">ออกจากระบบ</button>
+    </div>`;
+  ov.style.display = "flex";
+  setTimeout(() => { const el = document.getElementById("fpw-new"); if (el) el.focus(); }, 50);
+}
+
+async function submitForcedPasswordChange() {
+  const pw = document.getElementById("fpw-new").value;
+  const pw2 = document.getElementById("fpw-confirm").value;
+  const msg = document.getElementById("fpw-msg");
+  const btn = document.getElementById("fpw-btn");
+  msg.className = "form-msg"; msg.textContent = "";
+  if (!pw || !pw2) { msg.className = "form-msg error"; msg.textContent = "กรุณากรอกให้ครบทั้งสองช่อง"; return; }
+  if (pw.length < 6) { msg.className = "form-msg error"; msg.textContent = userErrorMessage("password_too_short"); return; }
+  if (pw !== pw2) { msg.className = "form-msg error"; msg.textContent = userErrorMessage("password_mismatch"); return; }
+  btn.disabled = true; btn.textContent = "กำลังบันทึก...";
+  try {
+    const res = await apiPost({ action: "changePassword", token: state.token, newPassword: pw });
+    if (!res.ok) {
+      if (res.error === "unauthorized") { document.getElementById("forcedPwOverlay").remove(); return handleUnauthorized(); }
+      msg.className = "form-msg error"; msg.textContent = userErrorMessage(res.error);
+      return;
+    }
+    state.user.mustChangePassword = false;
+    localStorage.setItem(LS_USER, JSON.stringify(state.user));
+    document.getElementById("forcedPwOverlay").remove();
+    await refreshInBackground(true);
+    startPolling();
+    await showAlert("ตั้งรหัสผ่านใหม่เรียบร้อย", "success");
+  } catch (err) {
+    msg.className = "form-msg error"; msg.textContent = "เกิดข้อผิดพลาด: " + err.message;
+  } finally {
+    const b = document.getElementById("fpw-btn");
+    if (b) { b.disabled = false; b.textContent = "บันทึกและเข้าใช้งาน"; }
+  }
 }
 
 function isActiveUser(u) {
@@ -8402,6 +8619,12 @@ function userErrorMessage(code) {
     case "missing_fields": return "กรอกข้อมูลไม่ครบ";
     case "cannot_disable_self": return "ไม่สามารถปิดใช้งานบัญชีของตัวเองได้";
     case "invalid_current_password": return "รหัสผ่านปัจจุบันไม่ถูกต้อง";
+    case "same_as_current": return "รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม";
+    case "cannot_demote_self": return "คุณไม่สามารถลดสิทธิ์ของตัวเองได้";
+    case "last_admin": return "ลดสิทธิ์ไม่ได้ — ต้องมี Admin ที่ใช้งานอยู่อย่างน้อย 1 คน";
+    case "invalid_role": return "สิทธิ์การใช้งานไม่ถูกต้อง";
+    case "user_not_found": return "ไม่พบผู้ใช้นี้ในระบบ";
+    case "forbidden": return "เฉพาะ Admin เท่านั้น";
     case "password_mismatch": return "รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน";
     default: return "ดำเนินการไม่สำเร็จ กรุณาลองใหม่";
   }
@@ -8434,13 +8657,14 @@ async function resetUserPassword(userId, userName) {
       return;
     }
     showPasswordResultModal(userName, res.newPassword);
+    refreshInBackground(true); // อัปเดตป้าย "รอเปลี่ยนรหัส" ในตาราง
   } catch (err) {
     await showAlert("เกิดข้อผิดพลาด: " + err.message, "error");
   }
 }
 
 function showPasswordResultModal(userName, newPassword) {
-  document.getElementById("passwordResultUserLabel").textContent = `รหัสผ่านใหม่สำหรับ "${userName}" (กรุณาแจ้งให้เจ้าของบัญชีทราบ แล้วแนะนำให้เปลี่ยนรหัสผ่านเองภายหลัง):`;
+  document.getElementById("passwordResultUserLabel").textContent = `รหัสผ่านชั่วคราวสำหรับ "${userName}" — ส่งให้เจ้าของบัญชี เมื่อเขา login ระบบจะบังคับให้ตั้งรหัสใหม่ทันที:`;
   document.getElementById("passwordResultText").textContent = newPassword;
   const msg = document.getElementById("passwordResultMsg");
   msg.className = "form-msg";
