@@ -1020,6 +1020,7 @@ function translatePartsCatalog(doc) {
     Category: d.category || "",
     HasSerial: d.hasSerial || "No",
     QuantityInStock: d.quantityInStock || 0,
+    PartDetail: d.partDetail || "", // รายละเอียด/สเปกอะไหล่ (ไม่บังคับ) — ชื่อ (PartName) เก็บแค่ชื่อสั้นๆ ไว้แสดงบน Dashboard
     PhotoUrl: d.photoUrl || "", // เหลือไว้เผื่อข้อมูลเก่าก่อนแก้บัคความปลอดภัยรูปภาพ (ดู getPartPhotoUrl ฝั่ง backend) — ของใหม่จะว่างเสมอ
     PhotoPath: d.photoPath || "",
     HasPhoto: !!(d.photoPath || d.photoUrl),
@@ -1502,6 +1503,18 @@ const DASHBOARD_CATEGORY_META = {
 // เกณฑ์ "ของใกล้หมด" บน Dashboard มือถือ — ใช้ค่าคงที่เดียวกันทุกหมวด (ปรับตัวเลขนี้ได้ถ้าต้องการ threshold ต่างจากนี้)
 const LOW_STOCK_THRESHOLD = 5;
 
+// ชื่ออะไหล่ควรสั้น (ใช้แสดงบน Dashboard/แถบแจ้งเตือน) ส่วนสเปก/ขนาด/รุ่นที่ใช้ได้ให้ใส่ใน "รายละเอียด"
+// ชื่อเกิน PART_NAME_SOFT_MAX แค่เตือน (ไม่บล็อก — อะไหล่เดิมที่ชื่อยาวยังบันทึกได้) รายละเอียดจำกัดที่ PART_DETAIL_MAX
+const PART_NAME_SOFT_MAX = 30;
+const PART_DETAIL_MAX = 200;
+
+/** รายละเอียดอะไหล่จาก PartsCatalog ตาม PartID (ว่าง = ยังไม่ได้กรอก) */
+function getPartDetail(partId) {
+  if (!partId) return "";
+  const p = (state.data.partsCatalog || []).find((x) => x.PartID === partId);
+  return p ? String(p.PartDetail || "") : "";
+}
+
 // Phase 17: รวมอะไหล่ทุกชื่อ (ทั้งแบบมี S/N และแบบนับจำนวน) ของหมวดหนึ่ง เป็นรายการเดียว เรียงจากเหลือน้อยสุดก่อน
 // ใช้แทนตัวเลขรวมก้อนเดียวเดิมบน Dashboard (ซึ่งปนทุกชื่อเข้าด้วยกันและไม่รวมอะไหล่แบบนับจำนวนเลย)
 function computePartsBreakdown(viewKey) {
@@ -1510,7 +1523,7 @@ function computePartsBreakdown(viewKey) {
 
   // อะไหล่แบบนับจำนวน (ไม่มี S/N) — เอายอดคงเหลือจาก PartsCatalog ตรงๆ
   const qtyItems = getQtyPartsForCategory(category).map((p) => ({
-    name: p.PartName, type: "qty", stock: Number(p.QuantityInStock) || 0, used: null,
+    name: p.PartName, detail: p.PartDetail || "", type: "qty", stock: Number(p.QuantityInStock) || 0, used: null,
   }));
 
   // อะไหล่แบบมี S/N — รวมรายชิ้นจาก state.data[cfg.key] เป็นยอดต่อชื่ออะไหล่ (คงเหลือ/เบิกแล้ว)
@@ -1518,7 +1531,7 @@ function computePartsBreakdown(viewKey) {
   (state.data[cfg.key] || []).forEach((r) => {
     const name = r.PartName;
     if (!name) return;
-    if (!grouped[name]) grouped[name] = { name, type: "serial", stock: 0, used: 0 };
+    if (!grouped[name]) grouped[name] = { name, detail: getPartDetail(r.PartID), type: "serial", stock: 0, used: 0 };
     if (isStockRow(r, cfg.stockField, cfg.stockRequiresField)) grouped[name].stock++;
     else grouped[name].used++;
   });
@@ -1544,7 +1557,7 @@ function partsBreakdownListHtml(items, accentColor) {
   return `<div class="parts-list">${items.map((p) => {
     const isLow = p.stock <= LOW_STOCK_THRESHOLD;
     return `
-    <div class="part-row">
+    <div class="part-row"${p.detail ? ` title="${escapeAttr(p.detail)}"` : ""}>
       <div class="part-name">
         <span class="part-name-text">${escapeHtml(p.name)}</span>
         <span class="part-type-tag">${p.type === "serial" ? "มี S/N" : "นับจำนวน"}</span>
@@ -3451,7 +3464,8 @@ function renderRows(cfg, rows, isAdmin) {
   const statusFilter = document.getElementById("statusFilter").value;
 
   const filtered = rows.filter((row) => {
-    const matchesSearch = !search || cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(search));
+    const matchesSearch = !search || cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(search))
+      || (!!cfg.partCategory && getPartDetail(row.PartID).toLowerCase().includes(search));
     const stock = isPhysicalStockRow(row, cfg.stockField);
     const matchesStatus = statusFilter === "all" || (statusFilter === "stock" ? stock : !stock);
     return matchesSearch && matchesStatus;
@@ -3566,6 +3580,10 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
         val = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(val || ""))}</span>${pendingActivate ? `<div class="cell-sub">รอ Activate — ยังเบิกไม่ได้</div>` : ""}`;
         return `<td>${val}</td>`;
       }
+      if (cfg.partCategory && c.field === "PartName") {
+        const detail = getPartDetail(row.PartID);
+        return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}${detail ? `<div class="cell-sub">${escapeHtml(detail)}</div>` : ""}</td>`;
+      }
       return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}</td>`;
     }).join("");
     const serial = String(row[cfg.serialField] || "");
@@ -3588,7 +3606,7 @@ function buildAssetRowActionButtonsHtml(cfg, row, isAdmin) {
   // ไม่งั้นโมดัลใหม่ (เช่นฟอร์มแก้ไข) จะซ้อนอยู่ "หลัง" โมดัลรายละเอียดเพราะ z-index เท่ากันและ assetDetailModal
   // มาทีหลังใน DOM — ผู้ใช้กดแก้ไขแล้วมองไม่เห็นฟอร์มที่เพิ่งเปิด
   const historyBtn = cfg.partCategory
-    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
+    ? `${isAdmin ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); renamePartPrompt('${escapeAttr(row.PartID)}')">แก้ไขชื่อ/รายละเอียด</button>` : ""}<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
     : "";
   const photoBtn = cfg.partCategory
     ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openChangePartPhotoModal('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}', ${hasPartPhotoByPartId(row.PartID)})">เพิ่ม/เปลี่ยนรูป</button>`
@@ -3639,7 +3657,8 @@ function buildAssetDetailFieldsHtml(cfg, row) {
       valHtml = escapeHtml(String(val === undefined || val === null ? "" : val));
     }
     return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${valHtml}</div></div>`;
-  }).join("");
+  }).join("") + (cfg.partCategory && getPartDetail(row.PartID)
+    ? `<div class="mcard-row"><div class="mcard-label">รายละเอียด</div><div class="mcard-val">${escapeHtml(getPartDetail(row.PartID))}</div></div>` : "");
 }
 
 // Phase: มือถือ — แปลงแถวข้อมูลเป็นการ์ด (แทนตารางที่ต้องเลื่อนซ้าย-ขวา) ใช้ร่วมกันทุกประเภทอุปกรณ์/อะไหล่แบบมี S/N
@@ -3663,7 +3682,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
     const issued = isTransferClaimType && !claimed && !writtenOff && !stock;
 
-    const bodyRows = cfg.columns
+    let bodyRows = cfg.columns
       // หมายเหตุ: เดิมซ่อนคอลัมน์ field "No" ออกจากการ์ดมือถือทุกประเภท เพราะของ MoisturLyzer เป็นแค่เลขลำดับ
       // เก่าจากสเปรดชีต ไม่มีความหมายกับผู้ใช้ — จำกัดการซ่อนนี้ไว้เฉพาะ MoisturLyzer เท่านั้น เพราะ SimCard ใช้ field
       // "No" เก็บ "ลำดับ SIM" จริงที่ AIS อ้างถึง (เช่น "ซิมลำดับที่ 30-40") ซึ่งเป็นข้อมูลสำคัญที่ต้องโชว์บนมือถือด้วย
@@ -3678,9 +3697,12 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
         if (val === undefined || val === null || val === "") return "";
         return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${escapeHtml(String(val))}</div></div>`;
       }).join("");
+    if (cfg.partCategory && getPartDetail(row.PartID)) {
+      bodyRows += `<div class="mcard-row"><div class="mcard-label">รายละเอียด</div><div class="mcard-val">${escapeHtml(getPartDetail(row.PartID))}</div></div>`;
+    }
 
     const historyBtn = cfg.partCategory
-      ? `<button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
+      ? `${isAdmin ? `<button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(row.PartID)}')">แก้ไขชื่อ/รายละเอียด</button>` : ""}<button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(row.PartID)}', '${escapeAttr(row.PartName)}')">ประวัติ</button>`
       : "";
     const hasPhoto = cfg.partCategory ? hasPartPhotoByPartId(row.PartID) : false;
     const photoBtn = cfg.partCategory
@@ -3813,7 +3835,7 @@ function renderPartsListView(viewKey, cfg) {
     const pending = computePartPendingQty(p.PartID, qtyAssetType);
     const actionsHtml = isAdmin
       ? `<div class="mcard-actions">
-           <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">แก้ไขชื่อ</button>
+           <button class="btn-sm btn-secondary" onclick="renamePartPrompt('${escapeAttr(p.PartID)}')">แก้ไขชื่อ/รายละเอียด</button>
            <button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button>
            <button class="btn-sm btn-secondary" onclick="openChangePartPhotoModal('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}', ${!!p.HasPhoto})">เพิ่ม/เปลี่ยนรูป</button>
            <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
@@ -3827,6 +3849,7 @@ function renderPartsListView(viewKey, cfg) {
         ${photoHtml}
         <div class="mcard-body">
           <div class="mcard-title">${escapeHtml(p.PartName)}</div>
+          ${p.PartDetail ? `<div class="mcard-detail">${escapeHtml(p.PartDetail)}</div>` : ""}
           <div class="mcard-stat-row">
             <div class="mcard-stat"><div class="num">${escapeHtml(String(p.QuantityInStock))}</div><div class="lbl">คงเหลือ</div></div>
             <div class="mcard-stat${issued > 0 ? " warn" : ""}"><div class="num">${issued}</div><div class="lbl">กำลังเบิก</div></div>
@@ -3862,14 +3885,22 @@ function renderPartsListView(viewKey, cfg) {
   renderRows(cfg, rows, isAdmin);
 }
 
-async function renamePartPrompt(partId, currentName) {
-  openGenericFormModal(`แก้ไขชื่ออะไหล่`, [{ key: "PartName", label: "ชื่ออะไหล่", value: currentName }], async (values) => {
+async function renamePartPrompt(partId) {
+  const part = (state.data.partsCatalog || []).find((p) => p.PartID === partId);
+  const currentName = part ? part.PartName : "";
+  const currentDetail = part ? (part.PartDetail || "") : "";
+  openGenericFormModal(`แก้ไขชื่อ/รายละเอียดอะไหล่`, [
+    { key: "PartName", label: "ชื่ออะไหล่", value: currentName, counterMax: PART_NAME_SOFT_MAX, hint: "ตั้งชื่อให้สั้น กระชับ — ใช้แสดงบน Dashboard ส่วนสเปก/ขนาด/รุ่นที่ใช้ได้ให้ใส่ในรายละเอียด" },
+    { key: "PartDetail", label: "รายละเอียด (ไม่บังคับ)", value: currentDetail, type: "textarea", counterMax: PART_DETAIL_MAX, maxLength: PART_DETAIL_MAX },
+  ], async (values) => {
     const msg = document.getElementById("genericFormModalMsg");
     try {
-      const res = await apiPost({ action: "updatePartCatalog", token: state.token, partId, updates: { PartName: values[0] } });
+      const newName = String(values[0] || "").trim();
+      if (!newName) throw new Error("กรุณากรอกชื่ออะไหล่");
+      const res = await apiPost({ action: "updatePartCatalog", token: state.token, partId, updates: { PartName: newName, PartDetail: String(values[1] || "").trim() } });
       if (!res.ok) {
         if (res.error === "unauthorized") return handleUnauthorized();
-        throw new Error(res.error === "part_name_taken" ? "ชื่ออะไหล่นี้มีอยู่แล้วในหมวดเดียวกัน" : "บันทึกไม่สำเร็จ กรุณาลองใหม่");
+        throw new Error(res.error === "part_name_taken" ? "ชื่ออะไหล่นี้มีอยู่แล้วในหมวดเดียวกัน" : "บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
       }
       await refreshInBackground(true);
       closeGenericFormModal();
@@ -3963,17 +3994,30 @@ function onChangePartPhotoSelected(input) {
 function partErrorMessage(code) {
   switch (code) {
     case "part_has_units": return "ไม่สามารถลบได้ — อะไหล่นี้ยังมีชิ้นที่มี S/N เหลืออยู่ในระบบ กรุณาลบทีละชิ้นให้หมดก่อน";
-    case "part_in_use": return "ไม่สามารถลบได้ — อะไหล่นี้ยังมีสต็อกเหลืออยู่ หรือมีคำขอเบิกที่ยังไม่ปิดจบอ้างอิงถึงอยู่";
+    case "part_in_use": return "ไม่สามารถลบได้ — มีคำขอเบิกที่ยังไม่ปิดจบ (รออนุมัติ/เบิกอยู่) อ้างอิงอะไหล่นี้อยู่ กรุณาปิดจบหรือยกเลิกคำขอนั้นก่อน";
     case "part_not_found": return "ไม่พบอะไหล่นี้ในระบบ (อาจถูกลบไปแล้ว)";
     default: return "ดำเนินการไม่สำเร็จ กรุณาลองใหม่";
   }
 }
 
 async function deletePartHandler(partId) {
-  const confirmed = await showConfirm("ยืนยันลบอะไหล่นี้ออกจากรายการทั้งหมด? การลบไม่สามารถย้อนกลับได้", { type: "warning", okText: "ลบเลย", danger: true });
+  const part = (state.data.partsCatalog || []).find((p) => p.PartID === partId);
+  const isQty = part && String(part.HasSerial).toLowerCase() !== "yes";
+  const stock = isQty ? (Number(part.QuantityInStock) || 0) : 0;
+  const name = part ? part.PartName : "อะไหล่นี้";
+  const msg = stock > 0
+    ? `อะไหล่ "${name}" ยังเหลือในสต็อก ${stock} ชิ้น — ลบแล้วจำนวนที่เหลือจะหายไปและกู้คืนไม่ได้ ยืนยันลบหรือไม่?`
+    : `ยืนยันลบอะไหล่ "${name}" ออกจากรายการทั้งหมด? การลบไม่สามารถย้อนกลับได้`;
+  const confirmed = await showConfirm(msg, { type: "warning", okText: stock > 0 ? `ลบ (ทิ้งสต็อก ${stock} ชิ้น)` : "ลบเลย", danger: true });
   if (!confirmed) return;
   try {
-    const res = await apiPost({ action: "deletePart", token: state.token, partId });
+    // ส่ง confirmStockLoss เฉพาะเมื่อผู้ใช้เห็นและยืนยันจำนวนสต็อกแล้ว — ถ้าสต็อกเปลี่ยนระหว่างนั้น backend จะตอบ part_has_stock ให้ถามใหม่
+    let res = await apiPost({ action: "deletePart", token: state.token, partId, confirmStockLoss: stock > 0 });
+    if (!res.ok && res.error === "part_has_stock") {
+      const again = await showConfirm(`สต็อกอะไหล่นี้มีการเปลี่ยนแปลง ตอนนี้เหลือ ${res.remaining} ชิ้น — ยืนยันลบพร้อมทิ้งสต็อกทั้งหมดหรือไม่?`, { type: "warning", okText: `ลบ (ทิ้งสต็อก ${res.remaining} ชิ้น)`, danger: true });
+      if (!again) return;
+      res = await apiPost({ action: "deletePart", token: state.token, partId, confirmStockLoss: true });
+    }
     if (!res.ok) {
       if (res.error === "unauthorized") return handleUnauthorized();
       await showAlert(partErrorMessage(res.error), "error");
@@ -3993,12 +4037,12 @@ const PART_HISTORY_ACTION_LABELS = {
   Added: "เพิ่มอะไหล่ใหม่", Restocked: "เติมของเข้าสต็อก", Renamed: "แก้ไขชื่อ",
   Deleted: "ลบอะไหล่", Issued: "เบิกออก", Returned: "คืนของ",
   StockAdded: "รับเข้าสต๊อก", // Phase 16: MoisturLyzer/Gateway/SimCard รับเข้าสต๊อกผ่านหน้า "จัดการ Stock/อะไหล่"
-  PhotoUpdated: "เพิ่ม/เปลี่ยนรูป",
+  PhotoUpdated: "เพิ่ม/เปลี่ยนรูป", DetailUpdated: "แก้ไขรายละเอียด",
 };
 const PART_HISTORY_ACTION_ICONS = {
   Added: '<i class="fas fa-plus"></i>', Restocked: '<i class="fas fa-box"></i>', Renamed: '<i class="fas fa-pen"></i>',
   Deleted: '<i class="fas fa-trash"></i>', Issued: '<i class="fas fa-arrow-up"></i>', Returned: '<i class="fas fa-arrow-down"></i>',
-  StockAdded: '<i class="fas fa-dolly"></i>', PhotoUpdated: '<i class="fas fa-camera"></i>',
+  StockAdded: '<i class="fas fa-dolly"></i>', PhotoUpdated: '<i class="fas fa-camera"></i>', DetailUpdated: '<i class="fas fa-pen"></i>',
 };
 
 function closePartHistoryModal() {
@@ -4203,7 +4247,7 @@ function compressImageFileToDataUrl(file, maxDim, quality, callback) {
   reader.readAsDataURL(file);
 }
 
-let managePartsForm = { mode: "new", partName: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
+let managePartsForm = { mode: "new", partName: "", partDetail: "", category: "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
 
 // ============================================================
 // หน้า "จัดการ Stock/อะไหล่" แบบตัวช่วยทีละขั้น (3 ขั้น: เลือกประเภท → กรอกข้อมูล → ตรวจสอบ/บันทึก)
@@ -4333,7 +4377,7 @@ function mpGoStep(n) {
     footer.innerHTML = "";
   } else if (n === 2) {
     if (mpRenderedType !== mpAssetType) {
-      managePartsForm = { mode: "new", partName: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
+      managePartsForm = { mode: "new", partName: "", partDetail: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
       mpSimTab = "addstock";
       renderMpSubArea();
       mpRenderedType = mpAssetType;
@@ -4370,7 +4414,7 @@ function mpBuildDraft() {
       if (!f.partName.trim()) return { error: "กรุณากรอกชื่ออะไหล่", msgId: "mp-msg" };
       if (hasSerial && !serials.length) return { error: "กรุณากรอก S/N อย่างน้อย 1 ชิ้น", msgId: "mp-msg" };
       if (!hasSerial && (!f.quantity || Number(f.quantity) <= 0)) return { error: "กรุณากรอกจำนวนเริ่มต้นให้มากกว่า 0", msgId: "mp-msg" };
-      rows.push(["การทำรายการ", "เพิ่มอะไหล่ใหม่"], ["ชื่ออะไหล่", f.partName.trim()], ["ประเภทอะไหล่", mpTypeLabel(key)], ["การนับ", hasSerial ? "มี S/N ทีละชิ้น" : "นับจำนวนรวม"]);
+      rows.push(["การทำรายการ", "เพิ่มอะไหล่ใหม่"], ["ชื่ออะไหล่", f.partName.trim()], ["รายละเอียด", (f.partDetail || "").trim() || "-"], ["ประเภทอะไหล่", mpTypeLabel(key)], ["การนับ", hasSerial ? "มี S/N ทีละชิ้น" : "นับจำนวนรวม"]);
       rows.push(["รูปอะไหล่", f.photoBase64 ? "แนบรูปแล้ว" : "ไม่มีรูป"]);
     } else {
       if (!f.restockPartId) return { error: "กรุณาเลือกอะไหล่ที่จะเติมของ", msgId: "mp-msg" };
@@ -4697,7 +4741,8 @@ function renderManagePartsFormArea() {
       <div class="form-grid">
         <div class="form-field">
           <label>ชื่ออะไหล่ *</label>
-          <input type="text" id="mp-partName" value="${escapeAttr(f.partName)}" placeholder="เช่น สายพาน Color Sorter">
+          <input type="text" id="mp-partName" value="${escapeAttr(f.partName)}" placeholder="เช่น สายพานลำเลียง">
+          <div class="hint">ตั้งชื่อสั้นๆ ใช้แสดงบน Dashboard <span class="fld-counter" id="mp-nameCount"></span></div>
         </div>
         <div class="form-field">
           <label>มี S/N (Serial Number) เฉพาะชิ้นหรือไม่? *</label>
@@ -4706,6 +4751,11 @@ function renderManagePartsFormArea() {
             <option value="yes" ${f.hasSerial === "yes" ? "selected" : ""}>มี — ต้องกรอก S/N ทีละชิ้น</option>
           </select>
         </div>
+      </div>
+      <div class="form-field" style="grid-column:1/-1;">
+        <label>รายละเอียด (ไม่บังคับ) <span class="fld-counter" id="mp-detailCount"></span></label>
+        <textarea id="mp-partDetail" rows="3" maxlength="${PART_DETAIL_MAX}" placeholder="เช่น สายพาน PU กว้าง 120 mm ยาว 2,400 mm สำหรับ Master8">${escapeHtml(f.partDetail || "")}</textarea>
+        <div class="hint">ใส่สเปก ขนาด รุ่นที่ใช้ได้ หรือหมายเหตุอื่นๆ ได้ตามต้องการ</div>
       </div>
       <div id="mp-qtyOrSerialArea"></div>
       <div class="form-field" style="margin-top:4px;">
@@ -4719,7 +4769,15 @@ function renderManagePartsFormArea() {
         </label>
       </div>
     `;
-    document.getElementById("mp-partName").addEventListener("input", (e) => { f.partName = e.target.value; });
+    const mpCount = () => {
+      const nl = f.partName.length, dl = (f.partDetail || "").length;
+      const nc = document.getElementById("mp-nameCount"), dc = document.getElementById("mp-detailCount");
+      if (nc) { nc.textContent = `${nl} / ${PART_NAME_SOFT_MAX}${nl > PART_NAME_SOFT_MAX ? " ⚠ ชื่อยาวเกินแนะนำ — ย้ายสเปกไปไว้ในรายละเอียดได้" : ""}`; nc.classList.toggle("over", nl > PART_NAME_SOFT_MAX); }
+      if (dc) dc.textContent = `${dl} / ${PART_DETAIL_MAX}`;
+    };
+    document.getElementById("mp-partName").addEventListener("input", (e) => { f.partName = e.target.value; mpCount(); });
+    document.getElementById("mp-partDetail").addEventListener("input", (e) => { f.partDetail = e.target.value; mpCount(); });
+    mpCount();
     document.getElementById("mp-hasSerial").addEventListener("change", (e) => { f.hasSerial = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
     document.getElementById("mp-photoInput").addEventListener("change", (e) => onManagePartsPhotoSelected(e.target));
     renderQtyOrSerialArea();
@@ -4892,7 +4950,7 @@ async function submitManagePartsForm() {
       res = await apiPost({
         action: "addPart", token: state.token,
         payload: {
-          partName: f.partName.trim(), category: f.category, hasSerial, quantity: Number(f.quantity) || 0, serials: cleanSerials,
+          partName: f.partName.trim(), partDetail: (f.partDetail || "").trim(), category: f.category, hasSerial, quantity: Number(f.quantity) || 0, serials: cleanSerials,
           photoBase64: f.photoBase64 || "", photoMimeType: f.photoMimeType || "",
         },
       });
@@ -4914,7 +4972,7 @@ async function submitManagePartsForm() {
     }
 
     await refreshInBackground(true);
-    managePartsForm = { mode: "new", partName: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
+    managePartsForm = { mode: "new", partName: "", partDetail: "", category: mpAssetType === "panolyzerParts" ? "Panolyzer" : "ColorSorter", hasSerial: "no", quantity: "", serials: [""], restockPartId: "", photoBase64: "", photoMimeType: "" };
     renderManagePartsView();
     const freshMsg = document.getElementById("mp-msg");
     freshMsg.className = "form-msg success";
@@ -4964,11 +5022,32 @@ function renderGenericFormField(f, i) {
   // Phase 21: รองรับ field แบบวันที่ (type: "date") — ใช้ตัวเลือกวันที่ของเบราว์เซอร์แทนพิมพ์ข้อความเอง (ดู
   // thaiDateToIso/isoDateToThai ที่แปลงกลับไปมากับรูปแบบ "วัน/เดือน/ปี" ที่ระบบเก็บจริงในฐานข้อมูล)
   const inputType = f.type === "password" ? "password" : f.type === "date" ? "date" : "text";
+  // ตัวนับตัวอักษร (ไม่บังคับ): f.counterMax — เกินแล้วขึ้น ⚠ (เตือนเฉยๆ) ถ้าใส่ f.maxLength ด้วยจะจำกัดการพิมพ์จริง
+  const curLen = String(f.value === undefined || f.value === null ? "" : f.value).length;
+  const counterHtml = f.counterMax ? ` <span class="fld-counter ${curLen > f.counterMax ? "over" : ""}" id="gfm-count-${i}">${curLen} / ${f.counterMax}${curLen > f.counterMax ? " ⚠" : ""}</span>` : "";
+  const counterAttr = f.counterMax ? ` oninput="gfmUpdateCounter(${i}, ${f.counterMax})"` : "";
+  if (f.type === "textarea") {
+    return `<div class="form-field ${extraClasses}">
+      <label>${labelHtml}${counterHtml}</label>
+      <textarea id="gfm-field-${i}" rows="3" ${f.maxLength ? `maxlength="${f.maxLength}"` : ""}${counterAttr}>${escapeHtml(f.value === undefined || f.value === null ? "" : String(f.value))}</textarea>
+      ${hintHtml}
+    </div>`;
+  }
   return `<div class="form-field ${extraClasses}">
-    <label>${labelHtml}</label>
-    <input type="${inputType}" id="gfm-field-${i}" autocomplete="${f.type === "password" ? "new-password" : "off"}" value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
+    <label>${labelHtml}${counterHtml}</label>
+    <input type="${inputType}" id="gfm-field-${i}" autocomplete="${f.type === "password" ? "new-password" : "off"}"${counterAttr} value="${escapeAttr(f.value === undefined || f.value === null ? "" : String(f.value))}">
     ${hintHtml}
   </div>`;
+}
+
+/** อัปเดตตัวนับตัวอักษรของช่องในฟอร์มทั่วไป (ดู counterMax ใน renderGenericFormField) */
+function gfmUpdateCounter(i, max) {
+  const el = document.getElementById(`gfm-field-${i}`);
+  const c = document.getElementById(`gfm-count-${i}`);
+  if (!el || !c) return;
+  const len = el.value.length;
+  c.textContent = `${len} / ${max}${len > max ? " ⚠" : ""}`;
+  c.classList.toggle("over", len > max);
 }
 
 /** เปิด modal ฟอร์มทั่วไปสำหรับแก้ไขข้อมูล — fields: [{key,label,value,type?,locked?,span2?,hint?,group?}], onSave(values[])
@@ -6053,7 +6132,8 @@ function getAvailableItems(cfg, search) {
     if (pendingKeys.has(key) || basketKeys.has(key)) return false;
     if (search) {
       const s = search.toLowerCase();
-      return cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(s));
+      return cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(s))
+        || (!!cfg.partCategory && getPartDetail(row.PartID).toLowerCase().includes(s));
     }
     return true;
   });
@@ -6432,9 +6512,10 @@ function renderPickerList() {
       if (it.kind === "unit") {
         const serial = String(it.row[cfg.serialField] || "");
         const label = `${escapeHtml(it.row.PartName || cfg.title)} — S/N ${escapeHtml(serial)}`;
+        const unitDetail = getPartDetail(it.row.PartID);
         return `
           <div class="picker-list-item">
-            <span>${label}</span>
+            <span>${label}${unitDetail ? `<div class="cache-note picker-detail">${escapeHtml(unitDetail)}</div>` : ""}</span>
             <button class="btn-sm btn-add" onclick="addToBasket('${assetKey}', '${escapeAttr(serial)}')">+ เพิ่ม</button>
           </div>`;
       }
@@ -6442,7 +6523,7 @@ function renderPickerList() {
       const inputId = "qty-input-" + escapeAttr(p.PartID);
       return `
         <div class="picker-list-item">
-          <span>${escapeHtml(p.PartName)} <span class="cache-note">(คงเหลือให้เบิก ${it.available} ชิ้น — นับจำนวน ไม่มี S/N)</span></span>
+          <span>${escapeHtml(p.PartName)} <span class="cache-note">(คงเหลือให้เบิก ${it.available} ชิ้น — นับจำนวน ไม่มี S/N)</span>${p.PartDetail ? `<div class="cache-note picker-detail">${escapeHtml(p.PartDetail)}</div>` : ""}</span>
           <span class="picker-qty-controls">
             <input type="number" id="${inputId}" class="qty-input-sm" min="1" max="${it.available}" value="1">
             <button class="btn-sm btn-add" onclick="addQtyToBasket('${assetKey}', '${escapeAttr(p.PartID)}', document.getElementById('${inputId}').value)">+ เพิ่ม</button>
@@ -6507,7 +6588,7 @@ function getAvailablePartsCombined(assetKey, search) {
       return { kind: "qty", part: p, available };
     })
     .filter((q) => q.available > 0)
-    .filter((q) => !s || q.part.PartName.toLowerCase().includes(s));
+    .filter((q) => !s || q.part.PartName.toLowerCase().includes(s) || String(q.part.PartDetail || "").toLowerCase().includes(s));
 
   return [...unitItems, ...qtyItems];
 }
@@ -7123,7 +7204,7 @@ function renderBasket() {
           // อะไหล่แบบนับจำนวน (ไม่มี S/N)
           if (item.quantity !== undefined) {
             return `<tr>
-              <td>${escapeHtml(item.partName)} <span class="cache-note">(นับจำนวน)</span></td>
+              <td>${escapeHtml(item.partName)} <span class="cache-note">(นับจำนวน)</span>${getPartDetail(item.serialNo) ? `<div class="cache-note picker-detail">${escapeHtml(getPartDetail(item.serialNo))}</div>` : ""}</td>
               <td>${qtyInput(item, idx)}</td>
               <td><span class="cache-note">-</span></td>
               <td>${removeBtn(idx)}</td>
@@ -7185,6 +7266,7 @@ function renderBasketMobile(area) {
             <div>
               <div class="basket-card-title">${escapeHtml(item.partName)}</div>
               <div class="basket-card-serial">แบบนับจำนวน (ไม่มี S/N)</div>
+              ${getPartDetail(item.serialNo) ? `<div class="basket-card-serial">${escapeHtml(getPartDetail(item.serialNo))}</div>` : ""}
             </div>
             <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
           </div>
