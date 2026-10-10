@@ -1969,7 +1969,7 @@ function renderDashboardMobile(content, summaries) {
   // หมายเหตุ: ตัดวงแหวน "อยู่ในคลังทั้งหมด" ออก — เดิมบวกของคนละชนิด (ซิม + Gateway + อะไหล่) รวมเป็นเลขเดียว
   // ซึ่งเอาไปตัดสินใจอะไรไม่ได้ และกินพื้นที่ครึ่งจอแรก ย้ายปุ่มเบิก/การแจ้งเตือนขึ้นมาแทน
   content.innerHTML = `
-    <div class="dash-mobile-header">
+    <div class="dash-mobile-header no-print">
       <div class="dash-mobile-title">ภาพรวมคลังอุปกรณ์</div>
       <div class="dash-mobile-actions no-print">
         <button class="dash-icon-btn" onclick="printDashboard()" title="พิมพ์รายงาน"><i class="fas fa-print"></i></button>
@@ -2017,7 +2017,13 @@ function renderDashboardMobile(content, summaries) {
           }).join("")}
         </div>` : ""}
     </div>
+    <!-- แก้บั๊ก "กดพิมพ์รายงานบนมือถือได้หน้าว่าง" — เดิมรายงานพิมพ์ (#formalReportArea) สร้างเฉพาะใน Dashboard
+         หน้า PC เท่านั้น บนมือถือจึงไม่มีอะไรให้พิมพ์ (มีแค่หัวข้อหลุดมา) ตอนนี้สร้างให้ทั้งสองจอ -->
+    <div id="formalReportArea" class="formal-report-print-only">
+      ${buildFormalDashboardReportHtml(summaries)}
+    </div>
   `;
+  state.__dashboardSummaries = summaries;
 }
 
 // ============================================================
@@ -2179,11 +2185,11 @@ function buildFormalDashboardReportHtml(summaries) {
 
     <div class="rp-charts">
       <div class="rp-chart-box">
-        <canvas id="formalChartTrend"></canvas>
+        ${formalTrendSvg()}
         <div class="rp-fig-caption">รูปที่ 1 — แนวโน้มการเบิกรายเดือน (ธุรกรรมที่อนุมัติแล้ว)</div>
       </div>
       <div class="rp-chart-box">
-        <canvas id="formalChartStock"></canvas>
+        ${formalStockSvg(rows)}
         <div class="rp-fig-caption">รูปที่ 2 — สัดส่วนคงคลัง ณ ปัจจุบัน</div>
       </div>
     </div>
@@ -2231,55 +2237,63 @@ function fixCanvasSizeForPrint(canvas) {
 /** วาดกราฟ 2 อันในรายงานทางการ (โทนสีสุภาพ เขียว/เทา เหมาะกับพิมพ์ขาวดำด้วย) — ข้อมูลรายเดือนใช้ชุดเดียวกับ
  * กราฟบนจอปกติ (computeMonthlyTrend) ส่วนกราฟแท่งใช้ rows ที่คำนวณโดย computeFormalReportRows (ไม่ใช้ summaries
  * ตรงๆ เพราะหมวดอะไหล่ต้องรวมยอด qty-part เข้าไปด้วย ไม่งั้นตัวเลขจะไม่ตรงกับตารางด้านบนในรายงานเดียวกัน) */
-function renderFormalReportCharts(rows) {
-  const trendCanvas = document.getElementById("formalChartTrend");
-  const stockCanvas = document.getElementById("formalChartStock");
-  if (typeof Chart === "undefined") return;
-  fixCanvasSizeForPrint(trendCanvas);
-  fixCanvasSizeForPrint(stockCanvas);
+/** กราฟในรายงานพิมพ์ — เปลี่ยนจาก Chart.js (canvas) มาเป็น SVG ที่สร้างเป็น HTML ตรงๆ (แก้บั๊ก "กราฟว่างตอนพิมพ์")
+ * เดิมต้องวาด canvas ใหม่ตอน beforeprint ซึ่งบางเบราว์เซอร์ (โดยเฉพาะ Chrome บนมือถือ) ไม่รอให้วาดเสร็จก่อนจับภาพหน้า
+ * พิมพ์ กราฟจึงออกมาว่าง SVG เป็นส่วนหนึ่งของเอกสารตั้งแต่แรก ไม่ต้องรอวาด จึงพิมพ์ได้ทุกเบราว์เซอร์และทุกขนาดจอ
+ * (คงชื่อ renderFormalReportCharts ไว้เป็น no-op เพราะมีจุดเรียกใช้เดิมอยู่หลายที่) */
+function renderFormalReportCharts() { /* กราฟเป็น SVG แล้ว — ไม่ต้องวาดใหม่ */ }
 
-  if (trendCanvas) {
-    const { months, monthly } = computeMonthlyTrend();
-    if (state.charts.formalTrend) state.charts.formalTrend.destroy();
-    if (months.length) {
-      const formalColors = ["#3F654D", "#63816F", "#9AA79E", "#0EA5A5", "#475569"];
-      state.charts.formalTrend = new Chart(trendCanvas.getContext("2d"), {
-        type: "line",
-        data: {
-          labels: months,
-          datasets: ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer", "ColorSorter"].map((assetType, i) => ({
-            label: assetType, data: months.map((m) => monthly[m][assetType] || 0),
-            borderColor: formalColors[i], backgroundColor: formalColors[i] + "22",
-            tension: 0.35, fill: false, pointRadius: 2, borderWidth: 2,
-          })),
-        },
-        options: {
-          responsive: false, maintainAspectRatio: false, animation: false,
-          plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 9 } } } },
-          scales: { x: { ticks: { font: { size: 9 } }, grid: { display: false } }, y: { beginAtZero: true, ticks: { font: { size: 9 }, precision: 0 }, grid: { color: "#eee" } } },
-        },
-      });
-    }
-  }
-  if (stockCanvas) {
-    if (state.charts.formalStock) state.charts.formalStock.destroy();
-    state.charts.formalStock = new Chart(stockCanvas.getContext("2d"), {
-      type: "bar",
-      data: {
-        labels: rows.map((r) => r.label),
-        datasets: [
-          { label: "ในคลัง", data: rows.map((r) => r.stock), backgroundColor: "#3F654D" },
-          { label: "เบิกแล้ว", data: rows.map((r) => r.used), backgroundColor: "#C9CFC9" },
-        ],
-      },
-      options: {
-        responsive: false, maintainAspectRatio: false, animation: false,
-        plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 9 } } } },
-        scales: { x: { stacked: true, ticks: { font: { size: 8 } }, grid: { display: false } }, y: { stacked: true, ticks: { font: { size: 9 }, precision: 0 }, grid: { color: "#eee" } } },
-      },
-    });
-  }
+const FORMAL_CHART_COLORS = ["#3F654D", "#2f6fb0", "#c27a06", "#0EA5A5", "#7A5AA6"];
+const FORMAL_TREND_TYPES = ["MoisturLyzer", "Gateway", "SimCard", "Panolyzer", "ColorSorter"];
+
+function formalSvgLegend(items) {
+  return `<div class="rp-svg-legend">${items.map((it) => `<span><i style="background:${it.color}"></i>${escapeHtml(it.label)}</span>`).join("")}</div>`;
 }
+
+/** รูปที่ 1 — แนวโน้มการเบิกรายเดือน (6 เดือนล่าสุด) เส้นละประเภทอุปกรณ์ */
+function formalTrendSvg() {
+  const { months: allMonths, monthly } = computeMonthlyTrend();
+  const months = allMonths.slice(-6);
+  if (!months.length) return `<div class="rp-chart-empty">ยังไม่มีข้อมูลการเบิกที่อนุมัติแล้ว</div>`;
+  const types = FORMAL_TREND_TYPES.filter((t) => months.some((m) => (monthly[m][t] || 0) > 0));
+  const W = 360, H = 150, L = 26, R = 8, T = 8, B = 22;
+  const max = Math.max(1, ...months.flatMap((m) => types.map((t) => monthly[m][t] || 0)));
+  const step = Math.max(1, Math.ceil(max / 4));
+  const yMax = step * 4;
+  const x = (i) => L + (months.length === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (months.length - 1));
+  const y = (v) => T + (H - T - B) * (1 - v / yMax);
+  const grid = [0, 1, 2, 3, 4].map((k) => `<line x1="${L}" x2="${W - R}" y1="${y(k * step)}" y2="${y(k * step)}" stroke="#E3E8E5" stroke-width="0.6"/><text x="${L - 4}" y="${y(k * step) + 3}" text-anchor="end" class="rp-ax">${k * step}</text>`).join("");
+  const xl = months.map((m, i) => { const [yy, mm] = m.split("-"); return `<text x="${x(i)}" y="${H - 7}" text-anchor="middle" class="rp-ax">${THAI_MONTH_SHORT[Number(mm) - 1]} ${String(Number(yy) + 543).slice(-2)}</text>`; }).join("");
+  const lines = types.map((t) => {
+    const color = FORMAL_CHART_COLORS[FORMAL_TREND_TYPES.indexOf(t)];
+    const pts = months.map((m, i) => `${x(i).toFixed(1)},${y(monthly[m][t] || 0).toFixed(1)}`);
+    return `<polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>` +
+      pts.map((p) => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="1.8" fill="${color}"/>`).join("");
+  }).join("");
+  return `<svg class="rp-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="แนวโน้มการเบิกรายเดือน">${grid}${xl}${lines}</svg>` +
+    formalSvgLegend(types.map((t) => ({ label: t, color: FORMAL_CHART_COLORS[FORMAL_TREND_TYPES.indexOf(t)] })));
+}
+
+/** รูปที่ 2 — สัดส่วนคงคลัง: แท่งแนวนอนต่อประเภท (ในคลัง / เบิกแล้ว) */
+function formalStockSvg(rows) {
+  const list = rows.filter((r) => r.total > 0);
+  if (!list.length) return `<div class="rp-chart-empty">ยังไม่มีข้อมูลคงคลัง</div>`;
+  const W = 300, rowH = 17, L = 92, R = 30, T = 4;
+  const H = T + list.length * rowH + 4;
+  const max = Math.max(1, ...list.map((r) => r.total));
+  const bars = list.map((r, i) => {
+    const yy = T + i * rowH;
+    const ws = ((W - L - R) * r.stock) / max, wu = ((W - L - R) * r.used) / max;
+    const label = r.label.replace(/ \(\d+ รายชื่อ\)$/, "");
+    return `<text x="${L - 5}" y="${yy + 11}" text-anchor="end" class="rp-ax">${escapeHtml(label.length > 18 ? label.slice(0, 17) + "…" : label)}</text>` +
+      `<rect x="${L}" y="${yy + 3}" width="${ws.toFixed(1)}" height="10" fill="#3F654D"/>` +
+      `<rect x="${(L + ws).toFixed(1)}" y="${yy + 3}" width="${wu.toFixed(1)}" height="10" fill="#C9CFC9"/>` +
+      `<text x="${(L + ws + wu + 4).toFixed(1)}" y="${yy + 11}" class="rp-ax">${r.stock}/${r.total}</text>`;
+  }).join("");
+  return `<svg class="rp-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="สัดส่วนคงคลัง">${bars}</svg>` +
+    formalSvgLegend([{ label: "ในคลัง", color: "#3F654D" }, { label: "เบิกแล้ว", color: "#C9CFC9" }]);
+}
+const THAI_MONTH_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
 // ============================================================
 // Phase 4: กราฟ Dashboard (Chart.js)

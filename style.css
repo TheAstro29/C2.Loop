@@ -1492,6 +1492,16 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
      เดิมตอนสั่งพิมพ์จริงเท่านั้น (ดู buildFormalDashboardReportHtml ใน script.js) */
   body.print-dashboard-active #dashboardReportArea { display: none !important; }
   body.print-dashboard-active .formal-report-print-only { display: block !important; }
+  /* แก้บั๊ก "ช่องลงนาม/ท้ายกระดาษหายตอนพิมพ์" — โครงแอปบนจอสูงเท่าจอ (100vh) และ .main เลื่อนในตัวเอง (overflow)
+     ตอนพิมพ์จึงถูกตัดเหลือแค่ความสูงจอ ปลดความสูง/การตัดขอบทั้งหมดตอนพิมพ์รายงาน + พื้นขาวทั้งหน้า (ประหยัดหมึก) */
+  body.print-dashboard-active,
+  body.print-dashboard-active #app-shell,
+  body.print-dashboard-active .main,
+  body.print-dashboard-active #viewContent { height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; background: #fff !important; }
+  html:has(body.print-dashboard-active) { background: #fff !important; }
+  body.print-dashboard-active .mh-tabbar,
+  body.print-dashboard-active #mobileHomeScreen,
+  body.print-dashboard-active .dash-mobile-header { display: none !important; }
 
   .signature-row-3 { flex-direction: row !important; }
   .signature-row-3 .signature-box { width: 32% !important; }
@@ -1658,3 +1668,26 @@ table.rp-table tr:nth-child(even) td { background: #F6F8F7; }
 .dm-chip { background: #fff; border: 1px solid #F3D29A; border-radius: 99px; padding: 2px 9px; font-size: 11.5px; color: var(--text); }
 .dm-chip b { color: #9a5b00; }
 .dm-chip.more { color: var(--gray); }
+
+/* ===== รายงานพิมพ์: กราฟ SVG + บีบระยะให้พอดี A4 หน้าเดียว ===== */
+.rp-page { background: #fff; color: var(--text); padding: 13mm 16mm 10mm; }
+.rp-header { padding-bottom: 4.5mm; }
+.rp-metabar { padding: 3mm 0; margin-bottom: 5mm; }
+.rp-exec-grid { margin-bottom: 5.5mm; }
+.rp-exec-cell { padding: 3mm 4mm 3mm 0; }
+.rp-exec-label { margin-bottom: 1.5mm; }
+table.rp-table { margin-bottom: 5.5mm; }
+table.rp-table th, table.rp-table td { padding: 1.9mm 3mm; }
+.rp-charts { gap: 6mm; margin-bottom: 5.5mm; }
+.rp-chart-box { padding: 3mm 3.5mm; min-width: 0; break-inside: avoid; }
+.rp-svg { display: block; width: 100%; height: 34mm; }
+.rp-svg .rp-ax { font-size: 7px; fill: #6b746e; font-family: inherit; }
+.rp-svg-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 1mm 3.5mm; font-size: 8px; color: var(--gray); margin-top: 1.5mm; }
+.rp-svg-legend span { display: inline-flex; align-items: center; gap: 1.2mm; }
+.rp-svg-legend i { width: 2.4mm; height: 2.4mm; border-radius: 1px; display: inline-block; }
+.rp-chart-empty { height: 34mm; display: flex; align-items: center; justify-content: center; font-size: 9px; color: var(--gray); }
+.rp-fig-caption { margin-top: 1.5mm; }
+.rp-attn { padding: 3mm 4.5mm; margin-bottom: 5mm; break-inside: avoid; }
+.rp-sign { margin-top: 6mm; gap: 8mm; break-inside: avoid; }
+.rp-sign-line { height: 10mm; }
+.rp-footer { break-inside: avoid; }
