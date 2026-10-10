@@ -2544,62 +2544,89 @@ function printDashboard() {
 }
 
 /**
- * ทางเลือกสำรองสำหรับตอนแอปถูกฝังใน iframe (เช่น Google Sites): ใช้ html2canvas ถ่ายภาพ
- * พื้นที่ Dashboard (รวมกราฟ Chart.js ที่เป็น canvas สดๆ) เป็นรูปเดียว แล้วเปิดหน้าต่างใหม่
- * ใส่รูปนั้นเต็มหน้าแล้วสั่งพิมพ์จากหน้าต่างนั้น — ไม่ต้องสร้างกราฟใหม่ในหน้าต่าง popup ให้ซับซ้อน
+ * ทางเลือกสำรองสำหรับตอนแอปถูกฝังใน iframe (เช่น Google Sites) — window.print() ใน iframe ที่ถูก sandbox ใช้ไม่ได้
+ * จึงเปิดหน้าต่างใหม่แล้ววาง "รายงานพิมพ์แบบทางการ" (#formalReportArea) ลงไปเป็น HTML จริงๆ แล้วสั่งพิมพ์จากหน้าต่างนั้น
+ *
+ * แก้บั๊ก "กดพิมพ์รายงานบน Google Sites แล้วแท็บใหม่ค้างที่ 'กำลังเตรียมข้อมูลสำหรับพิมพ์...' ตลอด" — เดิมถ่ายภาพรายงาน
+ * ด้วย html2canvas ในแท็บเดิม แต่ทันทีที่เปิดแท็บใหม่ แท็บเดิม (ที่มีแอป) จะกลายเป็นแท็บเบื้องหลัง และเบราว์เซอร์จะ
+ * "หยุด" requestAnimationFrame ของแท็บเบื้องหลังทั้งหมด โค้ดเดิมรอ requestAnimationFrame ก่อนถ่ายภาพ จึงค้างตรงนั้น
+ * ตลอดไป (ตัวจับเวลา timeout ยังไม่ทันเริ่มด้วยซ้ำ) — ตอนนี้กราฟในรายงานเป็น SVG ทั้งหมดแล้ว ไม่ต้องถ่ายภาพอีกต่อไป
+ * คัดลอก HTML ของรายงานไปวางในหน้าต่างใหม่ได้ทันที (ไม่ต้องรออะไรในแท็บเดิมเลย) ได้ทั้งตัวหนังสือคมชัดแบบเวกเตอร์
+ * และพิมพ์/บันทึกเป็น PDF ได้ตรงตามแบบเดียวกับการพิมพ์ปกติ
  */
-async function printDashboardViaPopup() {
-  if (typeof html2canvas === "undefined") {
-    await showAlert("ไม่สามารถโหลดไลบรารีสำหรับสร้างรูปเพื่อพิมพ์ได้ กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่", "error");
+function printDashboardViaPopup() {
+  const area = document.getElementById("formalReportArea");
+  if (!area || !area.innerHTML.trim()) {
+    showAlert("ยังไม่มีข้อมูลรายงานสำหรับพิมพ์ กรุณารอให้ Dashboard โหลดข้อมูลเสร็จก่อนแล้วลองใหม่", "error");
     return;
   }
   const popup = window.open("", "_blank");
   if (!popup) {
-    await showAlert("เบราว์เซอร์บล็อกการเปิดหน้าต่างใหม่ กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้แล้วลองอีกครั้ง", "error");
+    showAlert("เบราว์เซอร์บล็อกการเปิดหน้าต่างใหม่ กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้แล้วลองอีกครั้ง", "error");
     return;
   }
-  popup.document.write('<!DOCTYPE html><html><head><title>C2 LOOP — พิมพ์ Dashboard</title><style>body{margin:0;padding:16px;text-align:center;background:#fff;}img{max-width:100%;}</style></head><body><p>กำลังเตรียมข้อมูลสำหรับพิมพ์...</p></body></html>');
-  popup.document.close();
-  // Phase: ถ่ายภาพ "รายงานพิมพ์แบบทางการ" (#formalReportArea) แทน #dashboardReportArea เดิม เพื่อให้ทางเลือก
-  // สำรองนี้ (ตอนแอปถูกฝังใน iframe เช่น Google Sites) ได้ผลลัพธ์แบบเดียวกับ window.print() ปกติ — #formalReportArea
-  // ซ่อนอยู่บนจอปกติ (.formal-report-print-only) จึงต้องเปิดโชว์ชั่วคราวด้วย body.print-dashboard-active ก่อน
-  // ถ่ายภาพ แล้วปิดกลับทันทีหลังถ่ายเสร็จ (ไม่งั้น html2canvas จะได้ภาพว่างเปล่าจากอิลิเมนต์ที่ display:none อยู่)
-  document.body.classList.add("print-dashboard-active");
-  try {
-    const area = document.getElementById("formalReportArea") || document.getElementById("dashboardReportArea");
-    // เหตุผลเดียวกับใน printDashboard(): ต้องวาดกราฟรายงานทางการใหม่หลังจากเปิดโชว์ container แล้วเท่านั้น
-    // ไม่งั้น Chart.js จะได้ขนาด canvas ผิดเพราะรอบแรกวาดตอน container ยัง display:none อยู่
-    if (area && area.id === "formalReportArea") {
-      renderFormalReportCharts(computeFormalReportRows(state.__dashboardSummaries || []));
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  // คัดลอกรายงาน แล้วแปลง src ของรูป (โลโก้) เป็น URL เต็ม เพราะหน้าต่างใหม่เป็น about:blank ไม่มี path ฐานเดียวกับแอป
+  const clone = area.cloneNode(true);
+  clone.querySelectorAll("img").forEach((img, i) => {
+    const orig = area.querySelectorAll("img")[i];
+    if (orig && orig.src) img.setAttribute("src", orig.src);
+  });
+  // ใช้สไตล์ชุดเดียวกับแอป — คัดลอกกฎ CSS ของ style.css ไปฝังในหน้าต่างใหม่ตรงๆ (ไม่ต้องโหลดไฟล์ซ้ำ จึงไม่พึ่ง
+  // การเชื่อมต่อ/สิทธิ์ของหน้าต่างใหม่) ส่วนสไตล์ข้ามโดเมนที่อ่านกฎไม่ได้ (Google Fonts) ใส่เป็นลิงก์ URL เต็มแทน
+  const inlineCss = [];
+  const linkHrefs = [];
+  Array.from(document.styleSheets).forEach((sh) => {
+    try {
+      inlineCss.push(Array.from(sh.cssRules).map((r) => r.cssText).join("\n"));
+    } catch (e) {
+      if (sh.href) linkHrefs.push(sh.href);
     }
-    // แก้บั๊ก "กดพิมพ์รายงานแล้วค้างที่ 'กำลังเตรียมข้อมูลสำหรับพิมพ์...' ตลอดไป" (พบเฉพาะตอนเปิดแอปผ่าน
-    // Google Sites ที่ฝังแอปนี้ไว้ใน iframe แบบ sandbox) — เดิม await html2canvas(...) ตรงๆ ไม่มี timeout เลย
-    // html2canvas สร้าง iframe ซ่อนของตัวเองขึ้นมาเพื่อ clone หน้าเว็บไปถ่ายภาพ ถ้า iframe ที่ซ้อนกันแบบนี้
-    // (iframe ของ html2canvas อยู่ข้างใน iframe ของ Google Sites ที่ sandbox จำกัดสิทธิ์อยู่แล้วอีกที) เริ่ม
-    // ทำงานไม่สมบูรณ์ promise ของ html2canvas จะไม่ resolve/reject เลยตลอดไป โค้ดเดิมเลยค้างที่ข้อความแรกสุด
-    // ใน popup ไปเรื่อยๆ ไม่มีทาง fallback ออกมาได้เลย — ใส่ Promise.race กับ timeout กันไว้ เหมือน pattern
-    // setTimeout กันเหนียวที่ printSlipViaPopup/printAfterImagesLoad ใช้อยู่แล้ว เพื่อให้อย่างน้อยก็มีข้อความ
-    // แจ้ง error ให้ผู้ใช้เห็นแทนที่จะค้างเฉยๆ ไม่มีทางออก และเปิด useCORS/allowTaint เผื่อกรณีรูปภาพในรายงาน
-    // โหลดข้าม origin (ลดโอกาสที่ html2canvas จะ throw เพราะ canvas ถูก taint)
-    const HTML2CANVAS_TIMEOUT_MS = 10000;
-    const canvas = await Promise.race([
-      html2canvas(area, { backgroundColor: "#ffffff", scale: 2, useCORS: true, allowTaint: true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("html2canvas timeout")), HTML2CANVAS_TIMEOUT_MS)),
-    ]);
-    const dataUrl = canvas.toDataURL("image/png");
-    popup.document.body.innerHTML = `<img src="${dataUrl}" alt="C2 LOOP Dashboard">`;
-    popup.document.title = "C2 LOOP — พิมพ์ Dashboard";
-    setTimeout(() => {
-      popup.focus();
-      popup.print();
-    }, 300);
-  } catch (err) {
-    popup.close();
-    await showAlert("สร้างรูปสำหรับพิมพ์ไม่สำเร็จ (มักเกิดจากการฝังแอปไว้ใน iframe ของ Google Sites ที่จำกัดสิทธิ์) กรุณาลองเปิดแอปนี้ในแท็บเบราว์เซอร์แยกต่างหาก (ไม่ผ่าน Google Sites) แล้วลองพิมพ์อีกครั้ง", "error");
-  } finally {
-    document.body.classList.remove("print-dashboard-active");
+  });
+  const cssLinks = linkHrefs.map((href) => `<link rel="stylesheet" href="${escapeAttr(href)}">`).join("")
+    + `<style>${inlineCss.join("\n").replace(/<\/style/gi, "<\\/style")}</style>`;
+  const title = "C2 LOOP — รายงานสรุปคลังอุปกรณ์";
+  popup.document.open();
+  popup.document.write(`<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"><title>${title}</title>${cssLinks}
+<style>
+  @page { size: A4; margin: 0; }
+  html, body { margin: 0; padding: 0; background: #e9ecea; }
+  #popupReportRoot { display: block; }
+  #popupReportRoot .rp-page { background: #fff; margin: 12px auto; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
+  .popup-print-bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 10px; background: #fff; border-bottom: 1px solid #dfe5e1; font-family: "Chakra Petch", sans-serif; font-size: 14px; color: #555; }
+  .popup-print-bar button { font: inherit; font-weight: 700; padding: 9px 18px; border-radius: 8px; border: none; background: #3F654D; color: #fff; cursor: pointer; }
+  @media print {
+    html, body { background: #fff; }
+    .popup-print-bar { display: none !important; }
+    #popupReportRoot .rp-page { margin: 0; box-shadow: none; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
   }
+</style></head><body>
+<div class="popup-print-bar">หน้าต่างพิมพ์ไม่ขึ้น? <button type="button" onclick="window.print()">พิมพ์ / บันทึกเป็น PDF</button></div>
+<div id="popupReportRoot">${clone.innerHTML}</div>
+</body></html>`);
+  popup.document.close();
+
+  // รอสไตล์/ฟอนต์/โลโก้ในหน้าต่างใหม่โหลดเสร็จก่อนค่อยเปิดกล่องพิมพ์ (มี timeout กันเหนียว — พิมพ์แน่นอนภายใน ~3 วินาที)
+  // ตัวจับเวลาทำงานในหน้าต่างใหม่ซึ่งเป็นแท็บที่เปิดอยู่ด้านหน้า จึงไม่โดนเบราว์เซอร์หยุดเหมือนแท็บเบื้องหลัง
+  let printed = false;
+  const doPrint = () => {
+    if (printed || popup.closed) return;
+    printed = true;
+    try { popup.focus(); popup.print(); } catch (e) { /* ผู้ใช้ยังกดปุ่มพิมพ์ในแถบด้านบนเองได้ */ }
+  };
+  const waitAll = () => {
+    const doc = popup.document;
+    const sheets = Array.from(doc.querySelectorAll('link[rel="stylesheet"]'));
+    const imgs = Array.from(doc.images);
+    const pend = [
+      ...sheets.filter((l) => !l.sheet).map((l) => new Promise((r) => { l.addEventListener("load", r, { once: true }); l.addEventListener("error", r, { once: true }); })),
+      ...imgs.filter((im) => !im.complete).map((im) => new Promise((r) => { im.addEventListener("load", r, { once: true }); im.addEventListener("error", r, { once: true }); })),
+    ];
+    const fontsReady = doc.fonts && doc.fonts.ready ? doc.fonts.ready.catch(() => {}) : Promise.resolve();
+    Promise.all(pend).then(() => fontsReady).then(() => popup.setTimeout(doPrint, 200));
+  };
+  try { waitAll(); } catch (e) { /* ignore */ }
+  popup.setTimeout(doPrint, 3000);
 }
 
 /** พิมพ์ใบตามประเภทธุรกรรม — เบิกปกติ/ย้าย/เคลม ใช้ปุ่มเดิมปุ่มเดียว ระบบเลือกฟอร์มให้อัตโนมัติตาม MovementType
