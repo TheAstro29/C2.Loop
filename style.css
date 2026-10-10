@@ -350,6 +350,14 @@ h1, h2, h3, .brand-title, .kpi-value, .report-doc-title, .chart-card h3, .txn-ti
 .photo-upload:hover { border-color: var(--green); background: var(--green-light); }
 .photo-upload .photo-upload-lab { font-size: 12px; color: var(--gray); margin-top: 6px; }
 .photo-upload .photo-upload-icon { font-size: 20px; color: var(--green); }
+/* ปุ่มแหล่งรูป: ถ่ายรูป (กล้อง) / เลือกจากอัลบั้ม — ปุ่มใหญ่พอสำหรับนิ้ว แบ่งครึ่งความกว้างบนมือถือ */
+.photo-src-btns { display: flex; gap: 8px; margin-top: 8px; }
+/* ใช้ selector ที่เจาะจงกว่า .form-field label (display:block / ตัวอักษรเทา 12px) ไม่ให้ทับหน้าตาปุ่ม */
+.photo-src-btns label.photo-src-btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; margin: 0; cursor: pointer; text-align: center; font-size: 14px; font-weight: 600; }
+.photo-src-btns label.photo-src-btn.btn-primary { color: #fff; }
+.photo-src-btns label.photo-src-btn.btn-secondary { color: var(--green-dark); }
+/* คอมที่ไม่มีจอสัมผัส: ไม่มีกล้องให้ถ่าย ซ่อนปุ่มถ่ายรูป เหลือปุ่มเลือกไฟล์ */
+@media (hover: hover) and (pointer: fine) { .photo-src-btns label.photo-src-btn.cam { display: none; } }
 .photo-preview { width: 100%; max-width: 140px; border-radius: 10px; margin: 0 auto; display: block; box-shadow: var(--shadow); }
 .role-chip {
   font-size: 9.5px; background: var(--green-light); color: var(--green-dark); padding: 2px 8px; border-radius: 20px;
@@ -1695,6 +1703,10 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 
 /* ลำดับซิมในรายการเลือกตอนเบิก */
 .sim-no-chip { display: inline-block; background: #EDE7FB; color: #5B3FB0; border: 1px solid #D8CCF6; font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 99px; margin-right: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* ลำดับ stock — ยังไม่มีลำดับ (แสดง "—" สีจาง) และ chip ในรายการ S/N ที่จะเพิ่ม (หน้าตรวจสอบก่อนบันทึก) */
+.sim-no-chip.empty { background: #f3f3f3; color: #aaa; border-color: #e3e3e3; }
+.mp-sn .sim-no-chip { margin-right: 5px; font-size: 11px; padding: 0 6px; }
+.mcard-title .sim-no-chip { vertical-align: 2px; }
 
 /* ===== นำเข้าซิมจาก CSV ===== */
 .csv-import-bar { margin-top: 14px; border: 1.5px dashed #b9c9bf; border-radius: 12px; padding: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: #FAFCFB; }

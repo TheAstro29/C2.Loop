@@ -68,6 +68,7 @@ const VIEW_CONFIG = {
     // Phase (ตัดตามคำขอผู้ใช้): เอาคอลัมน์ "No" ออก — เป็นแค่เลขลำดับเก่าจากสเปรดชีตต้นฉบับ ไม่ได้เรียงตาม S/N
     // หรือลำดับที่มีความหมายอะไรกับผู้ใช้เลย (การ์ดมือถือซ่อนคอลัมน์นี้อยู่แล้วด้วยเหตุผลเดียวกัน — ดู renderRowsAsCards)
     columns: [
+      { field: "StockNo", label: "ลำดับ" },
       { field: "Products_Name", label: "สินค้า" },
       { field: "Model", label: "รุ่น" },
       { field: "Product ID", label: "Product ID" },
@@ -89,6 +90,7 @@ const VIEW_CONFIG = {
     deviceSerialField: "S/N Device",
     connectOptions: ["Panolyzer (L)", "Panolyzer (RT)", "MoisturLyzer", "Other"],
     columns: [
+      { field: "StockNo", label: "ลำดับ" },
       { field: "Model", label: "รุ่น" },
       { field: "S/N Gateway", label: "S/N Gateway" },
       { field: "Customer_name", label: "ลูกค้า" },
@@ -134,6 +136,7 @@ const VIEW_CONFIG = {
     connectField: null,
     partCategory: "ColorSorter",
     columns: [
+      { field: "StockNo", label: "ลำดับ" },
       { field: "PartName", label: "ชื่ออะไหล่" },
       { field: "SerialNo", label: "S/N" },
       { field: "Customer_name", label: "ลูกค้า" },
@@ -149,6 +152,7 @@ const VIEW_CONFIG = {
     connectField: null,
     partCategory: "Panolyzer",
     columns: [
+      { field: "StockNo", label: "ลำดับ" },
       { field: "PartName", label: "ชื่ออะไหล่" },
       { field: "SerialNo", label: "S/N" },
       { field: "Customer_name", label: "ลูกค้า" },
@@ -165,6 +169,7 @@ const VIEW_CONFIG = {
     connectField: null,
     partCategory: "MoisturLyzer",
     columns: [
+      { field: "StockNo", label: "ลำดับ" },
       { field: "PartName", label: "ชื่ออะไหล่" },
       { field: "SerialNo", label: "S/N" },
       { field: "Customer_name", label: "ลูกค้า" },
@@ -194,6 +199,60 @@ const PART_QTY_DEVICE_LABEL = {
   PanolyzerPartQty: "Panolyzer",
   MoisturLyzerPartQty: "MoisturLyzer",
 };
+
+// ===== ลำดับ stock ถาวร (เลข 1, 2, 3… ต่อกันในแต่ละหมวด กำหนดที่เซิร์ฟเวอร์ตอนรับเข้า stock) =====
+// SimCard ใช้ฟิลด์ "No" เดิม ประเภทอื่นใช้ "StockNo" (MoisturLyzer มี "No" เก่าจากสเปรดชีตที่ไม่ใช้แล้ว จึงไม่ใช้ชื่อนี้ซ้ำ)
+// ต้องตรงกับ STOCK_NO_FIELD ฝั่ง functions/index.js (อะไหล่ S/N เก็บเป็น stockNo ในเอกสาร แปลงเป็น StockNo ใน translatePartUnit)
+const STOCK_NO_FIELD_BY_VIEW = {
+  simcard: "No", moisturlyzer: "StockNo", gateway: "StockNo",
+  colorSorterParts: "StockNo", panolyzerParts: "StockNo", moisturlyzerParts: "StockNo",
+};
+// หน่วยนับที่ใช้ในข้อความ (ซิม = ใบ, เครื่อง = เครื่อง, อะไหล่ = ชิ้น)
+const STOCK_NO_UNIT_BY_VIEW = { simcard: "ใบ", moisturlyzer: "เครื่อง", gateway: "เครื่อง", colorSorterParts: "ชิ้น", panolyzerParts: "ชิ้น", moisturlyzerParts: "ชิ้น" };
+function hasStockNo(viewKey) { return !!STOCK_NO_FIELD_BY_VIEW[viewKey]; }
+/** ลำดับ stock ของแถว (ข้อความ, ว่าง = ยังไม่มี) */
+function stockNoOf(viewKey, row) {
+  const f = STOCK_NO_FIELD_BY_VIEW[viewKey];
+  if (!f || !row) return "";
+  const v = row[f];
+  return String(v === undefined || v === null ? "" : v).trim();
+}
+/** หาแถวจาก serial ของหมวดนั้นๆ แล้วคืนลำดับ (ใช้ในตะกร้า/รายการเลือกตอนเบิก) */
+function stockNoOfSerial(viewKey, serial) {
+  const cfg = VIEW_CONFIG[viewKey];
+  if (!cfg || !hasStockNo(viewKey)) return "";
+  const row = (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField]) === String(serial));
+  return stockNoOf(viewKey, row);
+}
+/** เลขลำดับสูงสุดของหมวด (0 = ยังไม่มี) — ใช้แสดงตัวอย่างลำดับที่จะได้ (เลขจริงกำหนดที่เซิร์ฟเวอร์ตอนบันทึก) */
+function getMaxStockNo(viewKey) {
+  const cfg = VIEW_CONFIG[viewKey];
+  if (!cfg) return 0;
+  return (state.data[cfg.key] || []).reduce((m, r) => {
+    const n = parseInt(stockNoOf(viewKey, r), 10);
+    return !isNaN(n) && n > m ? n : m;
+  }, 0);
+}
+/** เรียงตามลำดับจากน้อยไปมาก — แถวที่ยังไม่มีลำดับไว้ท้ายสุด (desc = มาก→น้อย แต่ที่ไม่มีลำดับยังอยู่ท้ายเสมอ) */
+function sortRowsByStockNo(viewKey, rows, desc) {
+  const asc = rows.slice().sort((a, b) => {
+    const na = parseFloat(stockNoOf(viewKey, a)), nb = parseFloat(stockNoOf(viewKey, b));
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    if (!isNaN(na)) return -1;
+    if (!isNaN(nb)) return 1;
+    return 0;
+  });
+  if (!desc) return asc;
+  return [...asc.filter((r) => stockNoOf(viewKey, r)).reverse(), ...asc.filter((r) => !stockNoOf(viewKey, r))];
+}
+/** chip "ลำดับ" (escape แล้ว) — ว่าง = ยังไม่มีลำดับ แสดงเป็น "—" สีจาง */
+function stockNoChipHtml(no, withLabel) {
+  return no
+    ? `<span class="sim-no-chip">${withLabel ? "ลำดับ " : ""}${escapeHtml(no)}</span>`
+    : `<span class="sim-no-chip empty" title="ยังไม่มีลำดับ">—</span>`;
+}
+/** ลำดับรูปแบบช่วง เช่น "5" หรือ "5 – 8" */
+function stockNoRangeText(from, to) { return from === to ? `${from}` : `${from} – ${to}`; }
 
 // ประเภทอุปกรณ์ที่สามารถเลือก Serial เจาะจงมาผูก (เชื่อมโยง/sync) ตอนเบิก Gateway/SimCard ได้ — ต้องตรงกับ
 // LINKABLE_TARGET_ASSET_TYPE ฝั่ง Code.gs (Phase 5)
@@ -1069,6 +1128,7 @@ function translatePartUnit(doc) {
     SerialNo: doc.id,
     Customer_name: d.customerName || "",
     Location: d.location || "",
+    StockNo: d.stockNo === undefined || d.stockNo === null ? "" : d.stockNo,
   };
 }
 
@@ -3498,6 +3558,28 @@ function openAttachGatewayToPanolyzerModal(panolyzerSerial) {
   });
 }
 
+/** แบนเนอร์ "มี … ยังไม่มีลำดับ" + ปุ่มเติมลำดับย้อนหลัง (Admin เท่านั้น, ขึ้นเฉพาะตอนที่ยังมีรายการไม่มีลำดับ) */
+function stockNoBannerHtml(viewKey, isAdmin) {
+  if (!isAdmin || !hasStockNo(viewKey)) return "";
+  const missing = getRowsMissingStockNo(viewKey).length;
+  if (!missing) return "";
+  const what = stockNoWhatLabel(viewKey);
+  const unit = STOCK_NO_UNIT_BY_VIEW[viewKey];
+  return `
+    <div class="simno-banner no-print">
+      <div class="simno-ic">#</div>
+      <div class="simno-t"><b>มี${viewKey === "simcard" ? "" : " "}${escapeHtml(what)} ${missing} ${unit}ยังไม่มีลำดับ</b><span>เติมลำดับให้ครั้งเดียว ใช้อ้างอิงตอนเบิก — ${unit === "ใบ" ? "ซิม" : "รายการ"}ที่มีลำดับแล้วจะไม่ถูกเปลี่ยน</span></div>
+      <button type="button" class="btn-primary" onclick="openStockNoBackfillModal('${viewKey}')">เติมลำดับให้อัตโนมัติ</button>
+    </div>`;
+}
+function stockNoSortSelectHtml(viewKey) {
+  if (!hasStockNo(viewKey)) return "";
+  return `<select id="sortFilter" aria-label="เรียงลำดับ">
+        <option value="noAsc">เรียงตามลำดับ: น้อย → มาก</option>
+        <option value="noDesc">เรียงตามลำดับ: มาก → น้อย (ใหม่ล่าสุดก่อน)</option>
+      </select>`;
+}
+
 function renderListView(cfg) {
   const content = document.getElementById("viewContent");
   const rows = state.data[cfg.key] || [];
@@ -3507,25 +3589,16 @@ function renderListView(cfg) {
   const saved = getListViewFilterState(filterKey);
 
   // Phase 15: ปุ่ม "+ เพิ่มสต๊อก" ถูกย้ายไปรวมไว้ที่หน้า "จัดการ Stock/อะไหล่" หน้าเดียวแล้ว (ไม่มีปุ่มแยกในหน้านี้อีกต่อไป)
-  const missingSimNo = cfg.key === "simcard" && isAdmin ? getSimsMissingNo().length : 0;
   content.innerHTML = `
-    ${missingSimNo ? `
-    <div class="simno-banner no-print">
-      <div class="simno-ic">#</div>
-      <div class="simno-t"><b>มีซิม ${missingSimNo} ใบยังไม่มีลำดับ</b><span>เติมลำดับให้ครั้งเดียว ใช้อ้างอิงตอนเบิก — ซิมที่มีลำดับแล้วจะไม่ถูกเปลี่ยน</span></div>
-      <button type="button" class="btn-primary" onclick="openSimBackfillModal()">เติมลำดับให้อัตโนมัติ</button>
-    </div>` : ""}
+    ${stockNoBannerHtml(cfg.key, isAdmin)}
     <div class="controls-row">
-      <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)" value="${escapeAttr(saved.search)}">
+      <input type="text" id="searchBox" placeholder="${hasStockNo(cfg.key) ? "ค้นหา (ลำดับ, S/N, ลูกค้า, สถานะ...)" : "ค้นหา (S/N, ลูกค้า, สถานะ...)"}" value="${escapeAttr(saved.search)}">
       <select id="statusFilter">
         <option value="all">-- สถานะทั้งหมด --</option>
         <option value="stock">อยู่ในคลัง (Stock)</option>
         <option value="used">เบิกออกไปแล้ว</option>
       </select>
-      ${cfg.key === "simcard" ? `<select id="sortFilter" aria-label="เรียงลำดับ">
-        <option value="noAsc">เรียงตามลำดับ: น้อย → มาก</option>
-        <option value="noDesc">เรียงตามลำดับ: มาก → น้อย (ใหม่ล่าสุดก่อน)</option>
-      </select>` : ""}
+      ${stockNoSortSelectHtml(cfg.key)}
     </div>
     ${mobile
       ? `<div id="listCards" class="mcard-list"></div>`
@@ -3561,15 +3634,11 @@ function renderRows(cfg, rows, isAdmin) {
     const matchesStatus = statusFilter === "all" || (statusFilter === "stock" ? stock : !stock);
     return matchesSearch && matchesStatus;
   });
-  // SimCard: เรียงตามลำดับ (No) — เดิมไม่ได้เรียง ลำดับขึ้นกับที่ฐานข้อมูลส่งมา ทำให้ใบใหม่ไปแทรกอยู่ด้านบน
-  // ซิมที่ยังไม่มีลำดับไว้ท้ายสุดเสมอ (ทั้งสองทิศ) — ใช้ sortSimRowsByNo ตัวเดียวกับรายการเลือกตอนเบิก
-  if (cfg.key === "simcard") {
+  // ทุกหมวดที่มีลำดับ stock (SimCard / MoisturLyzer / Gateway / อะไหล่ S/N): เรียงตามลำดับ — เดิมไม่ได้เรียง ลำดับขึ้นกับ
+  // ที่ฐานข้อมูลส่งมา ทำให้ของใหม่ไปแทรกอยู่ด้านบน ของที่ยังไม่มีลำดับไว้ท้ายสุดเสมอ (ทั้งสองทิศ)
+  if (hasStockNo(cfg.key)) {
     const sortSel = document.getElementById("sortFilter");
-    const asc = sortSimRowsByNo(filtered);
-    const ordered = sortSel && sortSel.value === "noDesc"
-      ? [...asc.filter((r) => simNoOf(r)).reverse(), ...asc.filter((r) => !simNoOf(r))]
-      : asc;
-    filtered.splice(0, filtered.length, ...ordered);
+    filtered.splice(0, filtered.length, ...sortRowsByStockNo(cfg.key, filtered, !!(sortSel && sortSel.value === "noDesc")));
   }
 
   // หน้าอะไหล่ Color Sorter/Panolyzer (cfg.partCategory) ใช้การ์ด "ไม่มีเบิก" แม้บนจอ PC ด้วย (ไม่ใช่แค่มือถือ)
@@ -3681,6 +3750,9 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
         val = `<span class="${stock ? "badge-stock" : "badge-used"}">${escapeHtml(String(val || ""))}</span>${pendingActivate ? `<div class="cell-sub">รอ Activate — ยังเบิกไม่ได้</div>` : ""}`;
         return `<td>${val}</td>`;
       }
+      if (hasStockNo(cfg.key) && c.field === STOCK_NO_FIELD_BY_VIEW[cfg.key]) {
+        return `<td class="no-wrap">${stockNoChipHtml(stockNoOf(cfg.key, row))}</td>`;
+      }
       if (cfg.partCategory && c.field === "PartName") {
         const detail = getPartDetail(row.PartID);
         return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}${detail ? `<div class="cell-sub">${escapeHtml(detail)}</div>` : ""}</td>`;
@@ -3749,6 +3821,9 @@ function buildAssetDetailFieldsHtml(cfg, row) {
     if (c.computed) {
       const linked = (c.compute || computeLinkedAccessories)(row);
       valHtml = linked.length ? linked.map(renderLinkedBadge).join(" ") : `<span class="cache-note">-</span>`;
+    } else if (hasStockNo(cfg.key) && c.field === STOCK_NO_FIELD_BY_VIEW[cfg.key]) {
+      const no = stockNoOf(cfg.key, row);
+      valHtml = no ? stockNoChipHtml(no) : `<span class="cache-note">ยังไม่มีลำดับ</span>`;
     } else if (c.field === cfg.stockField) {
       const val = row[c.field];
       const stock = isStockRow(row, cfg.stockField, cfg.stockRequiresField);
@@ -3782,12 +3857,15 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     const claimed = isTransferClaimType && isClaimedRow(row, cfg);
     const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
     const issued = isTransferClaimType && !claimed && !writtenOff && !stock;
+    const noChip = hasStockNo(cfg.key) ? stockNoChipHtml(stockNoOf(cfg.key, row)) : "";
 
     let bodyRows = cfg.columns
       // หมายเหตุ: เดิมซ่อนคอลัมน์ field "No" ออกจากการ์ดมือถือทุกประเภท เพราะของ MoisturLyzer เป็นแค่เลขลำดับ
       // เก่าจากสเปรดชีต ไม่มีความหมายกับผู้ใช้ — จำกัดการซ่อนนี้ไว้เฉพาะ MoisturLyzer เท่านั้น เพราะ SimCard ใช้ field
       // "No" เก็บ "ลำดับ SIM" จริงที่ AIS อ้างถึง (เช่น "ซิมลำดับที่ 30-40") ซึ่งเป็นข้อมูลสำคัญที่ต้องโชว์บนมือถือด้วย
-      .filter((c) => c.field !== cfg.serialField && !(c.field === "No" && cfg.key === "moisturlyzer") && c.field !== cfg.stockField)
+      // ลำดับ stock ไม่แสดงเป็นแถวในการ์ด — ขึ้นเป็น chip หน้าชื่อการ์ดแทน (ดู noChip ด้านล่าง)
+      .filter((c) => c.field !== cfg.serialField && !(c.field === "No" && cfg.key === "moisturlyzer") && c.field !== cfg.stockField
+        && !(hasStockNo(cfg.key) && c.field === STOCK_NO_FIELD_BY_VIEW[cfg.key]))
       .map((c) => {
         if (c.computed) {
           const linked = (c.compute || computeLinkedAccessories)(row);
@@ -3858,7 +3936,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
           ${photoHtml}
           <div class="mcard-body">
             <div class="mcard-head">
-              <div class="mcard-title">${escapeHtml(serial || "-")}</div>
+              <div class="mcard-title">${noChip}${escapeHtml(serial || "-")}</div>
               <span class="mcard-pill ${stock ? "stock" : "used"}">${stock ? "อยู่ในคลัง" : "เบิกออกแล้ว"}</span>
             </div>
             ${bodyRows}
@@ -3870,7 +3948,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     return `
       <div class="mcard">
         <div class="mcard-head">
-          <div class="mcard-title">${escapeHtml(serial || "-")}</div>
+          <div class="mcard-title">${noChip}${escapeHtml(serial || "-")}</div>
           ${pillHtml}
         </div>
         ${claimSubHtml}
@@ -3967,18 +4045,25 @@ function renderPartsListView(viewKey, cfg) {
     ${qtyPartsSectionHtml}
 
     <h3 class="section-subtitle" style="margin-top:22px;">อะไหล่แบบมี S/N (รายชิ้น)</h3>
+    ${stockNoBannerHtml(cfg.key, isAdmin)}
     <div class="controls-row">
-      <input type="text" id="searchBox" placeholder="ค้นหา (S/N, ลูกค้า, สถานะ...)" value="${escapeAttr(saved.search)}">
+      <input type="text" id="searchBox" placeholder="ค้นหา (ลำดับ, S/N, ลูกค้า, สถานะ...)" value="${escapeAttr(saved.search)}">
       <select id="statusFilter">
         <option value="all">-- สถานะทั้งหมด --</option>
         <option value="stock">อยู่ในคลัง (Stock)</option>
         <option value="used">เบิกออกไปแล้ว</option>
       </select>
+      ${stockNoSortSelectHtml(cfg.key)}
     </div>
     <div id="listCards" class="mcard-list${mobile ? "" : " pcard-grid"}"></div>
     ${isAdmin ? `<div class="cache-note" style="margin-top:10px;">ต้องการเพิ่มอะไหล่ใหม่หรือเติมสต็อก? ไปที่เมนู "จัดการ Stock/อะไหล่"</div>` : ""}
   `;
   document.getElementById("statusFilter").value = saved.status;
+  const partsSortSel = document.getElementById("sortFilter");
+  if (partsSortSel) {
+    partsSortSel.value = saved.sort || "noAsc";
+    partsSortSel.addEventListener("change", () => { saveListViewFilterState(filterKey); renderRows(cfg, rows, isAdmin); });
+  }
   hydratePartPhotoThumbnails(content); // เติมรูปของ "อะไหล่แบบนับจำนวน" (qtyPartsSectionHtml) ที่ set ไว้ข้างบนนี้ก่อน
 
   document.getElementById("searchBox").addEventListener("input", () => { saveListViewFilterState(filterKey); renderRows(cfg, rows, isAdmin); });
@@ -4022,15 +4107,10 @@ function openChangePartPhotoModal(partId, partName, hasPhoto) {
   document.getElementById("genericFormModalTitle").textContent = `เพิ่ม/เปลี่ยนรูป — ${partName}`;
   const body = document.getElementById("genericFormModalBody");
   body.innerHTML = `
-    <label class="photo-upload" id="cpp-photoUploadBox">
-      <div id="cpp-photoUploadInner">
-        ${hasPhoto ? `<div class="photo-upload-icon">⏳</div>` : `<div class="photo-upload-icon">📷</div>`}
-        <div class="photo-upload-lab">${hasPhoto ? "แตะเพื่อเปลี่ยนรูป" : "แตะเพื่อถ่ายรูป หรือเลือกรูปจากอัลบั้ม"}</div>
-      </div>
-      <input type="file" accept="image/*" id="cpp-photoInput" style="display:none;">
-    </label>
+    ${photoPickerHtml("cpp", `${hasPhoto ? `<div class="photo-upload-icon">⏳</div>` : `<div class="photo-upload-icon">📷</div>`}
+        <div class="photo-upload-lab">${hasPhoto ? "รูปปัจจุบัน — ถ่ายใหม่หรือเลือกจากอัลบั้มเพื่อเปลี่ยน" : "ถ่ายรูปด้วยกล้อง หรือเลือกรูปจากอัลบั้ม"}</div>`)}
   `;
-  document.getElementById("cpp-photoInput").addEventListener("change", (e) => onChangePartPhotoSelected(e.target));
+  bindPhotoPickerInputs("cpp", onChangePartPhotoSelected);
 
   // รูปเดิม (ถ้ามี) ต้องขอ signed URL จากเซิร์ฟเวอร์แบบ async แล้วค่อยเติมภาพเข้าไป (ไม่ใช่ URL สาธารณะที่รู้ตรงๆ
   // อีกต่อไป) — เช็ค changePartPhotoState.partId ตอนได้ผลลัพธ์กลับมาด้วย เผื่อผู้ใช้ปิดโมดัลนี้ไปเปิดของอะไหล่อื่น
@@ -4039,7 +4119,7 @@ function openChangePartPhotoModal(partId, partName, hasPhoto) {
     fetchPartPhotoUrl(partId).then((url) => {
       if (!url || changePartPhotoState.partId !== partId) return;
       const inner = document.getElementById("cpp-photoUploadInner");
-      if (inner) inner.innerHTML = `<img src="${escapeAttr(url)}" class="photo-preview"><div class="photo-upload-lab">แตะเพื่อเปลี่ยนรูป</div>`;
+      if (inner) inner.innerHTML = `<img src="${escapeAttr(url)}" class="photo-preview"><div class="photo-upload-lab">ถ่ายใหม่หรือเลือกจากอัลบั้มเพื่อเปลี่ยนรูป</div>`;
     });
   }
 
@@ -4080,6 +4160,28 @@ function openChangePartPhotoModal(partId, partName, hasPhoto) {
   document.getElementById("genericFormModal").style.display = "flex";
 }
 
+/** ช่องแนบรูปอะไหล่ + ปุ่มแยก "ถ่ายรูป" (เปิดกล้องหลังทันทีด้วย capture) / "เลือกจากอัลบั้ม"
+ * เดิมมีแค่ input เดียว (accept="image/*") ซึ่ง Android รุ่นใหม่มักเปิดเฉพาะตัวเลือกรูปภาพ ไม่มีกล้องให้เลือก
+ * กรอบด้านบนยังแตะได้เหมือนเดิม (เปิดตัวเลือกไฟล์/อัลบั้ม) และใช้แสดงรูปตัวอย่าง — ปุ่มถ่ายรูปซ่อนบนคอมที่ไม่มีจอสัมผัส (ดู style.css)
+ * id ที่ใช้: <prefix>-photoUploadBox / -photoUploadInner (ตัวอย่างรูป) / -photoInput (กรอบ) / -photoCamera / -photoAlbum */
+function photoPickerHtml(prefix, innerHtml) {
+  return `<label class="photo-upload" id="${prefix}-photoUploadBox">
+      <div id="${prefix}-photoUploadInner">${innerHtml}</div>
+      <input type="file" accept="image/*" id="${prefix}-photoInput" style="display:none;">
+    </label>
+    <div class="photo-src-btns">
+      <label class="btn-sm btn-primary photo-src-btn cam"><i class="fa-solid fa-camera"></i> ถ่ายรูป<input type="file" accept="image/*" capture="environment" id="${prefix}-photoCamera" hidden></label>
+      <label class="btn-sm btn-secondary photo-src-btn"><i class="fa-solid fa-images"></i> เลือกจากอัลบั้ม<input type="file" accept="image/*" id="${prefix}-photoAlbum" hidden></label>
+    </div>`;
+}
+/** ผูก change ของทั้ง 3 input เข้ากับ handler เดียวกัน — ล้างค่า input หลังอ่านไฟล์แล้ว ให้เลือก/ถ่ายรูปเดิมซ้ำได้ */
+function bindPhotoPickerInputs(prefix, handler) {
+  ["photoInput", "photoCamera", "photoAlbum"].forEach((suffix) => {
+    const el = document.getElementById(`${prefix}-${suffix}`);
+    if (el) el.addEventListener("change", (e) => { handler(e.target); setTimeout(() => { e.target.value = ""; }, 0); });
+  });
+}
+
 function onChangePartPhotoSelected(input) {
   if (!input.files || !input.files[0]) return;
   const file = input.files[0];
@@ -4088,7 +4190,7 @@ function onChangePartPhotoSelected(input) {
     changePartPhotoState.mimeType = mimeType;
     changePartPhotoState.base64 = dataUrl.slice(commaIdx + 1);
     const inner = document.getElementById("cpp-photoUploadInner");
-    if (inner) inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">แตะเพื่อเปลี่ยนรูป</div>`;
+    if (inner) inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">ถ่ายใหม่หรือเลือกจากอัลบั้มเพื่อเปลี่ยนรูป</div>`;
   });
 }
 
@@ -4138,12 +4240,12 @@ const PART_HISTORY_ACTION_LABELS = {
   Added: "เพิ่มอะไหล่ใหม่", Restocked: "เติมของเข้าสต็อก", Renamed: "แก้ไขชื่อ",
   Deleted: "ลบอะไหล่", Issued: "เบิกออก", Returned: "คืนของ",
   StockAdded: "รับเข้าสต๊อก", // Phase 16: MoisturLyzer/Gateway/SimCard รับเข้าสต๊อกผ่านหน้า "จัดการ Stock/อะไหล่"
-  PhotoUpdated: "เพิ่ม/เปลี่ยนรูป", DetailUpdated: "แก้ไขรายละเอียด", SimNoBackfilled: "เติมลำดับซิม",
+  PhotoUpdated: "เพิ่ม/เปลี่ยนรูป", DetailUpdated: "แก้ไขรายละเอียด", SimNoBackfilled: "เติมลำดับซิม", StockNoBackfilled: "เติมลำดับ",
 };
 const PART_HISTORY_ACTION_ICONS = {
   Added: '<i class="fas fa-plus"></i>', Restocked: '<i class="fas fa-box"></i>', Renamed: '<i class="fas fa-pen"></i>',
   Deleted: '<i class="fas fa-trash"></i>', Issued: '<i class="fas fa-arrow-up"></i>', Returned: '<i class="fas fa-arrow-down"></i>',
-  StockAdded: '<i class="fas fa-dolly"></i>', PhotoUpdated: '<i class="fas fa-camera"></i>', DetailUpdated: '<i class="fas fa-pen"></i>', SimNoBackfilled: '<i class="fas fa-list-ol"></i>',
+  StockAdded: '<i class="fas fa-dolly"></i>', PhotoUpdated: '<i class="fas fa-camera"></i>', DetailUpdated: '<i class="fas fa-pen"></i>', SimNoBackfilled: '<i class="fas fa-list-ol"></i>', StockNoBackfilled: '<i class="fas fa-list-ol"></i>',
 };
 
 function closePartHistoryModal() {
@@ -4525,7 +4627,11 @@ function mpBuildDraft() {
       const part = (state.data.partsCatalog || []).find((p) => p.PartID === f.restockPartId);
       rows.push(["การทำรายการ", "เติมของอะไหล่ที่มีอยู่"], ["อะไหล่", part ? part.PartName : f.restockPartId]);
     }
-    if (hasSerial) return { rows, serials, total: serials.length, msgId: "mp-msg" };
+    if (hasSerial) {
+      const base = getMaxStockNo(key);
+      rows.push(["ลำดับ (อัตโนมัติ)", stockNoRangeText(base + 1, base + serials.length)]);
+      return { rows, serials, serialNoBase: base, total: serials.length, msgId: "mp-msg" };
+    }
     rows.push(["จำนวนที่เพิ่ม", `${Number(f.quantity)} ชิ้น`]);
     return { rows, total: Number(f.quantity), msgId: "mp-msg" };
   }
@@ -4546,6 +4652,11 @@ function mpBuildDraft() {
     rows.push(["ลำดับซิม (อัตโนมัติ)", items.length === 1 ? `${base + 1}` : `${base + 1} – ${base + items.length}`]);
     return { rows, table: { head: ["ลำดับ", ...itemFields.map((f) => f.label), "วันเปิดใช้บริการ"], body: items.map((it, i) => [String(base + i + 1), ...itemFields.map((f) => it[f.field]), it.Activate_date || "รอ Activate"]) }, total: items.length, msgId: "as-msg" };
   }
+  if (hasStockNo(addStockForm.assetKey)) {
+    const base = getMaxStockNo(addStockForm.assetKey);
+    rows.push(["ลำดับ (อัตโนมัติ)", stockNoRangeText(base + 1, base + items.length)]);
+    return { rows, table: { head: ["ลำดับ", ...itemFields.map((f) => f.label)], body: items.map((it, i) => [String(base + i + 1), ...itemFields.map((f) => it[f.field])]) }, total: items.length, msgId: "as-msg" };
+  }
   return { rows, table: { head: itemFields.map((f) => f.label), body: items.map((it) => itemFields.map((f) => it[f.field])) }, total: items.length, msgId: "as-msg" };
 }
 
@@ -4562,7 +4673,7 @@ function mpToReview() {
   if (d.table) {
     listHtml = `<div class="table-card" style="margin-top:12px;"><div class="table-scroll"><table><thead><tr><th>#</th>${d.table.head.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${d.table.body.map((r, i) => `<tr><td>${i + 1}</td>${r.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
   } else if (d.serials) {
-    listHtml = `<div class="mp-sn-list"><div class="cache-note" style="margin-bottom:6px;">${escapeHtml(d.serialLabel || "S/N ที่จะเพิ่ม")}</div>${d.serials.map((s) => `<span class="mp-sn">${escapeHtml(s)}</span>`).join("")}</div>`;
+    listHtml = `<div class="mp-sn-list"><div class="cache-note" style="margin-bottom:6px;">${escapeHtml(d.serialLabel || "S/N ที่จะเพิ่ม")}</div>${d.serials.map((s, i) => `<span class="mp-sn">${d.serialNoBase !== undefined ? `<span class="sim-no-chip">${d.serialNoBase + i + 1}</span>` : ""}${escapeHtml(s)}</span>`).join("")}</div>`;
   }
   const isAdd = !(mpAssetType === "simcard" && mpSimTab === "activate");
   document.getElementById("mp-p3").innerHTML = `
@@ -4868,13 +4979,7 @@ function renderManagePartsFormArea() {
       <div id="mp-qtyOrSerialArea"></div>
       <div class="form-field" style="margin-top:4px;">
         <label>รูปอะไหล่ (ไม่บังคับ) — ช่วยให้จำได้จากรูปร่างแม้จำชื่อไม่ได้</label>
-        <label class="photo-upload" id="mp-photoUploadBox">
-          <div id="mp-photoUploadInner">
-            <div class="photo-upload-icon">📷</div>
-            <div class="photo-upload-lab">แตะเพื่อถ่ายรูป หรือเลือกรูปจากอัลบั้ม</div>
-          </div>
-          <input type="file" accept="image/*" id="mp-photoInput" style="display:none;">
-        </label>
+        ${photoPickerHtml("mp", `<div class="photo-upload-icon">📷</div><div class="photo-upload-lab">ถ่ายรูปด้วยกล้อง หรือเลือกรูปจากอัลบั้ม</div>`)}
       </div>
     `;
     const mpCount = () => {
@@ -4887,7 +4992,7 @@ function renderManagePartsFormArea() {
     document.getElementById("mp-partDetail").addEventListener("input", (e) => { f.partDetail = e.target.value; mpCount(); });
     mpCount();
     document.getElementById("mp-hasSerial").addEventListener("change", (e) => { f.hasSerial = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
-    document.getElementById("mp-photoInput").addEventListener("change", (e) => onManagePartsPhotoSelected(e.target));
+    bindPhotoPickerInputs("mp", onManagePartsPhotoSelected);
     renderQtyOrSerialArea();
   } else {
     const allParts = Object.keys(PART_VIEW_BY_CATEGORY).flatMap((cat) => [...getQtyPartsForCategory(cat), ...getSerialPartsForCategory(cat)]);
@@ -4924,7 +5029,7 @@ function onManagePartsPhotoSelected(input) {
     f.photoBase64 = dataUrl.slice(commaIdx + 1);
     const inner = document.getElementById("mp-photoUploadInner");
     if (inner) {
-      inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">แตะเพื่อเปลี่ยนรูป</div>`;
+      inner.innerHTML = `<img src="${dataUrl}" class="photo-preview"><div class="photo-upload-lab" style="margin-top:8px;">ถ่ายใหม่หรือเลือกจากอัลบั้มเพื่อเปลี่ยนรูป</div>`;
     }
   });
 }
@@ -4965,7 +5070,7 @@ function renderQtyOrSerialArea() {
         <div class="table-card" style="margin-top:8px;">
           <div class="table-scroll">
             <table>
-              <thead><tr><th>#</th><th>S/N</th><th></th></tr></thead>
+              <thead><tr><th>ลำดับ (อัตโนมัติ)</th><th>S/N</th><th></th></tr></thead>
               <tbody id="mp-serialBasketBody"></tbody>
             </table>
           </div>
@@ -5030,10 +5135,11 @@ function renderManagePartsSerialBasket() {
   const tbody = document.getElementById("mp-serialBasketBody");
   if (!tbody) return;
   const serials = managePartsForm.serials.filter((s) => s.trim());
+  const base = getMaxStockNo(mpAssetType);
   tbody.innerHTML = serials.length
-    ? serials.map((s, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(s)}</td><td class="no-wrap"><button type="button" class="btn-sm btn-remove" onclick="removeManagePartsSerial(${i})">ลบ</button></td></tr>`).join("")
+    ? serials.map((s, i) => `<tr><td><span class="sim-no-chip">${base + i + 1}</span></td><td>${escapeHtml(s)}</td><td class="no-wrap"><button type="button" class="btn-sm btn-remove" onclick="removeManagePartsSerial(${i})">ลบ</button></td></tr>`).join("")
     : `<tr><td colspan="3" class="cache-note" style="text-align:center; padding:12px;">ยังไม่มีรายการ — กรอก S/N แล้วกด "+ เพิ่ม"</td></tr>`;
-  document.getElementById("mp-serialCountNote").textContent = `รวมทั้งหมด ${serials.length} ชิ้น`;
+  document.getElementById("mp-serialCountNote").textContent = `รวมทั้งหมด ${serials.length} ชิ้น · ลำดับระบบกำหนดให้ต่อจากเลขล่าสุดของหมวดนี้ (ตอนนี้ล่าสุดคือ ${base || "-"})`;
 }
 
 async function submitManagePartsForm() {
@@ -5083,9 +5189,10 @@ async function submitManagePartsForm() {
     renderManagePartsView();
     const freshMsg = document.getElementById("mp-msg");
     freshMsg.className = "form-msg success";
+    const noText = res.noFrom ? ` — ได้ลำดับ ${stockNoRangeText(res.noFrom, res.noTo)}` : "";
     freshMsg.textContent = res.photoError
-      ? "บันทึกสำเร็จ — แต่อัปโหลดรูปไม่สำเร็จ เพิ่มรูปภายหลังได้ที่ปุ่ม \"เพิ่ม/เปลี่ยนรูป\" ในหน้าอะไหล่"
-      : "บันทึกสำเร็จ";
+      ? `บันทึกสำเร็จ${noText} — แต่อัปโหลดรูปไม่สำเร็จ เพิ่มรูปภายหลังได้ที่ปุ่ม "เพิ่ม/เปลี่ยนรูป" ในหน้าอะไหล่`
+      : `บันทึกสำเร็จ${noText}`;
   } catch (err) {
     msg.className = "form-msg error";
     msg.textContent = err.message;
@@ -5303,7 +5410,9 @@ function openEditAsset(assetKey, serial) {
     if (!(c.field in row)) row[c.field] = "";
   });
 
-  const fields = Object.keys(row).filter((k) => !k.startsWith("_")).map((k) => {
+  // ลำดับ stock (StockNo) ระบบกำหนดให้เท่านั้น — ไม่ใส่ในฟอร์มแก้ไข และไม่ส่งกลับไปเขียนทับ (กันเขียนค่าว่างทับลำดับ
+  // ที่เพิ่งเติมไประหว่างเปิดฟอร์มค้างไว้) ส่วน "No" ของ SimCard ยังเป็นแบบเดิม (แสดงแบบล็อกไว้)
+  const fields = Object.keys(row).filter((k) => !k.startsWith("_") && k !== "StockNo").map((k) => {
     const rawVal = row[k];
     // ใช้ตัวเลือกวันที่ได้เฉพาะตอนค่าที่มีอยู่ว่างเปล่า หรือตรงรูปแบบ วัน/เดือน/ปี เป๊ะเท่านั้น — ถ้าข้อมูลเก่าเก็บ
     // มาผิดรูปแบบ (พิมพ์มือแบบอื่น) ให้ fallback เป็นช่องข้อความธรรมดาแทน กันข้อมูลเพี้ยน/หายตอนแปลงกลับไปมา
@@ -5977,26 +6086,46 @@ function confirmSimCsvImport() {
 
 
 // ============================================================
-// เติมลำดับซิม (No) ย้อนหลัง — สำหรับซิมที่เพิ่มเข้าระบบก่อนมีระบบลำดับอัตโนมัติ
-// เรียงตามประวัติ Stock (รอบที่รับเข้าก่อนได้เลขก่อน ในรอบเดียวกันเรียงตามที่กรอก) ใบที่หาประวัติไม่เจอต่อท้าย เรียงตาม S/N
+// เติมลำดับ stock ย้อนหลัง — ทุกหมวดที่มีลำดับ (SimCard / MoisturLyzer / Gateway / อะไหล่ S/N 3 หมวด) สำหรับของที่เพิ่มเข้า
+// ระบบก่อนมีระบบลำดับอัตโนมัติ เรียงตามประวัติการรับเข้า (รอบที่รับเข้าก่อนได้เลขก่อน ในรอบเดียวกันเรียงตามที่กรอก)
+// รายการที่หาประวัติไม่เจอต่อท้าย เรียงตาม S/N — Admin ตรวจในหน้ายืนยันก่อนเสมอ เซิร์ฟเวอร์ตรวจซ้ำอีกรอบตอนบันทึก
 // ============================================================
-let simBackfillState = { plan: [], filter: "all" };
-
-function getSimsMissingNo() {
-  return (state.data.simcard || []).filter((r) => !simNoOf(r) && String(r["S/N"] || "").trim());
+let stockNoBackfillState = { viewKey: "simcard", plan: [], filter: "all" };
+// ชื่อเรียกแต่ละหมวดในข้อความ
+function stockNoWhatLabel(viewKey) {
+  return { simcard: "ซิม", moisturlyzer: "MoisturLyzer", gateway: "Gateway", colorSorterParts: "อะไหล่ Color Sorter (มี S/N)", panolyzerParts: "อะไหล่ Panolyzer (มี S/N)", moisturlyzerParts: "อะไหล่ MoisturLyzer (มี S/N)" }[viewKey] || viewKey;
 }
 
-/** อ่านประวัติ "รับเข้าสต๊อก" ของซิม → { S/N(lowercase): { ts, pos, actor, batchKey, batchSize } } (ถ้าเพิ่มซ้ำหลายรอบ ใช้รอบล่าสุด) */
-function buildSimAddHistoryIndex() {
+function getRowsMissingStockNo(viewKey) {
+  const cfg = VIEW_CONFIG[viewKey];
+  if (!cfg || !hasStockNo(viewKey)) return [];
+  return (state.data[cfg.key] || []).filter((r) => !stockNoOf(viewKey, r) && String(r[cfg.serialField] || "").trim());
+}
+function getSimsMissingNo() { return getRowsMissingStockNo("simcard"); }
+
+/** อ่านประวัติ "รับเข้าสต๊อก" ของหมวด → { S/N(lowercase): { ts, pos, actor, batchKey, batchSize } } (เพิ่มซ้ำหลายรอบ ใช้รอบล่าสุด)
+ * - SimCard / MoisturLyzer / Gateway: log action "StockAdded" (รายละเอียดหลัง "—" คือ "#ลำดับ S/N / ..., ...")
+ * - อะไหล่ S/N: log action "Added"/"Restocked" ของหมวดนั้น ที่มีรายการ S/N (ข้อความหลัง "S/N:" หรือ "S/N ใหม่:") */
+function buildStockAddHistoryIndex(viewKey) {
+  const cfg = VIEW_CONFIG[viewKey];
   const idx = {};
+  const partCategory = cfg && cfg.partCategory;
   (state.data.partsActivityLog || [])
-    .filter((l) => l.Action === "StockAdded" && (l.Category === "SimCard" || l.PartName === "SimCard"))
+    .filter((l) => partCategory
+      ? (l.Action === "Added" || l.Action === "Restocked") && l.Category === partCategory && /S\/N(?: ใหม่)?:/.test(String(l.Detail || ""))
+      : l.Action === "StockAdded" && (l.Category === cfg.assetType || l.PartName === cfg.assetType))
     .slice().sort((a, b) => String(a.Timestamp).localeCompare(String(b.Timestamp)))
     .forEach((l) => {
       const detail = String(l.Detail || "");
-      const at = detail.indexOf("—");
-      if (at < 0) return;
-      const parts = detail.slice(at + 1).split(",").map((x) => x.trim()).filter(Boolean);
+      let listText;
+      if (partCategory) {
+        const m = /S\/N(?: ใหม่)?:\s*(.*)$/.exec(detail);
+        listText = m ? m[1] : "";
+      } else {
+        const at = detail.indexOf("—");
+        listText = at < 0 ? "" : detail.slice(at + 1);
+      }
+      const parts = listText.split(",").map((x) => x.trim()).filter(Boolean);
       parts.forEach((p, pos) => {
         const sn = p.replace(/^#\S+\s+/, "").split(" / ")[0].trim().toLowerCase();
         if (sn) idx[sn] = { ts: l.Timestamp, pos, actor: l.Actor || "", batchKey: l.Timestamp + "|" + (l.Actor || ""), batchSize: parts.length };
@@ -6004,21 +6133,28 @@ function buildSimAddHistoryIndex() {
     });
   return idx;
 }
+function buildSimAddHistoryIndex() { return buildStockAddHistoryIndex("simcard"); }
 
-function computeSimBackfillPlan() {
-  const hist = buildSimAddHistoryIndex();
-  const missing = getSimsMissingNo().map((r) => ({ row: r, sn: String(r["S/N"]).trim(), h: hist[String(r["S/N"]).trim().toLowerCase()] || null }));
+function computeStockNoBackfillPlan(viewKey) {
+  const cfg = VIEW_CONFIG[viewKey];
+  const hist = buildStockAddHistoryIndex(viewKey);
+  const missing = getRowsMissingStockNo(viewKey).map((r) => {
+    const sn = String(r[cfg.serialField]).trim();
+    return { row: r, sn, h: hist[sn.toLowerCase()] || null };
+  });
   const withH = missing.filter((m) => m.h).sort((a, b) => String(a.h.ts).localeCompare(String(b.h.ts)) || a.h.pos - b.h.pos);
   const noH = missing.filter((m) => !m.h).sort((a, b) => a.sn.localeCompare(b.sn, undefined, { numeric: true }));
-  const base = getMaxSimNo();
+  const base = getMaxStockNo(viewKey);
   const batchOrder = [];
   withH.forEach((m) => { if (!batchOrder.includes(m.h.batchKey)) batchOrder.push(m.h.batchKey); });
   return [...withH, ...noH].map((m, i) => ({ ...m, no: base + 1 + i, batchIdx: m.h ? batchOrder.indexOf(m.h.batchKey) + 1 : 0 }));
 }
+function computeSimBackfillPlan() { return computeStockNoBackfillPlan("simcard"); }
 
-function openSimBackfillModal() {
-  simBackfillState = { plan: computeSimBackfillPlan(), filter: "all" };
-  if (!simBackfillState.plan.length) { showAlert("ซิมทุกใบมีลำดับแล้ว", "success"); return; }
+function openStockNoBackfillModal(viewKey) {
+  viewKey = viewKey || "simcard";
+  stockNoBackfillState = { viewKey, plan: computeStockNoBackfillPlan(viewKey), filter: "all" };
+  if (!stockNoBackfillState.plan.length) { showAlert(`${stockNoWhatLabel(viewKey)}ทุก${STOCK_NO_UNIT_BY_VIEW[viewKey]}มีลำดับแล้ว`, "success"); return; }
   let ov = document.getElementById("simBackfillOverlay");
   if (!ov) {
     ov = document.createElement("div");
@@ -6033,90 +6169,112 @@ function openSimBackfillModal() {
   renderSimBackfillModal();
   ov.classList.add("open");
 }
+function openSimBackfillModal() { openStockNoBackfillModal("simcard"); }
 function closeSimBackfillModal() {
   const ov = document.getElementById("simBackfillOverlay");
   if (ov) ov.classList.remove("open");
 }
-function setSimBackfillFilter(f) { simBackfillState.filter = f; renderSimBackfillModal(); }
+function setSimBackfillFilter(f) { stockNoBackfillState.filter = f; renderSimBackfillModal(); }
 
 function simBackfillStatusText(r) {
   const cfg = VIEW_CONFIG.simcard;
   if (isPhysicalStockRow(r, cfg.stockField)) return String(r[cfg.stockRequiresField] || "").trim() ? "ในคลัง · พร้อมเบิก" : "ในคลัง · รอ Activate";
   return `ใส่ใน ${String(r[cfg.stockField] || "-")}`;
 }
+function stockNoBackfillStatusText(viewKey, r) {
+  if (viewKey === "simcard") return simBackfillStatusText(r);
+  const cfg = VIEW_CONFIG[viewKey];
+  if (isPhysicalStockRow(r, cfg.stockField)) return "ในคลัง";
+  const where = String(r.Customer_name || "").trim() || String(r[cfg.stockField] || "").trim();
+  return where ? `เบิกแล้ว · ${where}` : "เบิกแล้ว";
+}
+// คอลัมน์เสริมในหน้ายืนยัน (ช่วยให้ Admin จำได้ว่าเป็นชิ้นไหน)
+function stockNoBackfillExtraCol(viewKey) {
+  if (viewKey === "simcard") return { label: "เบอร์โทร", get: (r) => r["Mobile No."] };
+  if (viewKey === "moisturlyzer" || viewKey === "gateway") return { label: "รุ่น", get: (r) => r.Model };
+  return { label: "ชื่ออะไหล่", get: (r) => r.PartName };
+}
 
 function renderSimBackfillModal() {
   const ov = document.getElementById("simBackfillOverlay");
-  const { plan, filter } = simBackfillState;
+  const { viewKey, plan, filter } = stockNoBackfillState;
+  const cfg = VIEW_CONFIG[viewKey];
+  const isSim = viewKey === "simcard";
+  const unit = STOCK_NO_UNIT_BY_VIEW[viewKey];
+  const what = stockNoWhatLabel(viewKey);
+  const extra = stockNoBackfillExtraCol(viewKey);
+  const serialLabel = isSim ? "S/N ซิม" : ((cfg.columns.find((c) => c.field === cfg.serialField) || {}).label || "S/N");
   const nHist = plan.filter((p) => p.h).length, nSn = plan.length - nHist;
-  const base = getMaxSimNo();
+  const base = getMaxStockNo(viewKey);
   const from = base + 1, to = base + plan.length;
   const list = plan.filter((p) => filter === "all" || (filter === "hist" ? !!p.h : !p.h));
   const groupLabel = (p) => p.h
-    ? `รับเข้าสต๊อก ${formatDateTh(p.h.ts).replace(/(\d{1,2}:\d{2}):\d{2}$/, "$1")}${p.h.actor ? ` · โดย ${p.h.actor}` : ""} (${plan.filter((x) => x.h && x.h.batchKey === p.h.batchKey).length} ใบ)`
-    : `ไม่พบประวัติการรับเข้า — เรียงตาม S/N (${nSn} ใบ)`;
+    ? `${cfg.partCategory ? "เพิ่ม/เติมอะไหล่" : "รับเข้าสต๊อก"} ${formatDateTh(p.h.ts).replace(/(\d{1,2}:\d{2}):\d{2}$/, "$1")}${p.h.actor ? ` · โดย ${p.h.actor}` : ""} (${plan.filter((x) => x.h && x.h.batchKey === p.h.batchKey).length} ${unit})`
+    : `ไม่พบประวัติการรับเข้า — เรียงตาม S/N (${nSn} ${unit})`;
   let lastGroup = null;
   const rowsHtml = list.map((p) => {
     const g = p.h ? p.h.batchKey : "__nohist";
     const head = g !== lastGroup ? `<tr class="simno-grp"><td colspan="5">${escapeHtml(groupLabel(p))}</td></tr>` : "";
     lastGroup = g;
-    return head + `<tr><td><span class="sim-no-chip">${p.no}</span></td><td class="csv-mono">${escapeHtml(p.sn)}</td><td class="csv-mono">${escapeHtml(String(p.row["Mobile No."] || "-"))}</td><td class="csv-why" style="margin:0">${escapeHtml(simBackfillStatusText(p.row))}</td><td>${p.h ? `<span class="simno-src hist">✓ ประวัติรอบที่ ${p.batchIdx}</span>` : `<span class="simno-src sn">≈ เรียงตาม S/N</span>`}</td></tr>`;
+    const ex = extra.get(p.row);
+    return head + `<tr><td><span class="sim-no-chip">${p.no}</span></td><td class="csv-mono">${escapeHtml(p.sn)}</td><td${isSim ? ' class="csv-mono"' : ""}>${escapeHtml(String(ex === undefined || ex === null || ex === "" ? "-" : ex))}</td><td class="csv-why" style="margin:0">${escapeHtml(stockNoBackfillStatusText(viewKey, p.row))}</td><td>${p.h ? `<span class="simno-src hist">✓ ประวัติรอบที่ ${p.batchIdx}</span>` : `<span class="simno-src sn">≈ เรียงตาม S/N</span>`}</td></tr>`;
   }).join("");
   ov.innerHTML = `
     <div class="csv-modal">
-      <h3 class="csv-h">ยืนยันเติมลำดับซิม <button type="button" class="csv-x" onclick="closeSimBackfillModal()">✕ ปิด</button></h3>
+      <h3 class="csv-h">ยืนยันเติมลำดับ${escapeHtml(what)} <button type="button" class="csv-x" onclick="closeSimBackfillModal()">✕ ปิด</button></h3>
       <div class="csv-file">ลำดับสูงสุดตอนนี้: <b>${base || "ยังไม่มี"}</b> → จะเติมเลข <b>${from}${to !== from ? ` – ${to}` : ""}</b></div>
       <div class="csv-sum">
-        <div class="csv-sbox simno-all"><div class="k">ซิมที่จะได้ลำดับ</div><div class="v">${plan.length}</div></div>
+        <div class="csv-sbox simno-all"><div class="k">${isSim ? "ซิม" : "รายการ"}ที่จะได้ลำดับ</div><div class="v">${plan.length}</div></div>
         <div class="csv-sbox s-ok"><div class="k">เรียงจากประวัติ</div><div class="v">${nHist}</div></div>
         <div class="csv-sbox s-fix"><div class="k">ไม่พบประวัติ (เรียงตาม S/N)</div><div class="v">${nSn}</div></div>
       </div>
-      <div class="csv-map"><b>ลำดับมาจากไหน:</b> รอบที่รับเข้าสต๊อกก่อนได้เลขก่อน และในรอบเดียวกันเรียงตามที่กรอก · ใบที่ไม่พบประวัติต่อท้าย เรียงตาม S/N</div>
+      <div class="csv-map"><b>ลำดับมาจากไหน:</b> รอบที่รับเข้าสต๊อกก่อนได้เลขก่อน และในรอบเดียวกันเรียงตามที่กรอก · ${unit === "ใบ" ? "ใบ" : "รายการ"}ที่ไม่พบประวัติต่อท้าย เรียงตาม S/N</div>
       <div class="csv-filters">${[["all", "ทั้งหมด"], ["hist", "เรียงจากประวัติ"], ["sn", "ไม่พบประวัติ"]].map(([k, l]) => `<button type="button" class="csv-fc ${filter === k ? "on" : ""}" onclick="setSimBackfillFilter('${k}')">${l}</button>`).join("")}</div>
-      <div class="csv-tw"><table class="csv-table"><thead><tr><th>ลำดับใหม่</th><th>S/N ซิม</th><th>เบอร์โทร</th><th>สถานะ</th><th>ที่มาของลำดับ</th></tr></thead><tbody>${rowsHtml || `<tr><td colspan="5" class="cache-note" style="text-align:center;">ไม่มีรายการ</td></tr>`}</tbody></table></div>
-      <div class="csv-tip">ตรวจดูว่าลำดับตรงกับซิมจริงหรือไม่ — ถ้าบางใบไม่ตรง ยืนยันไปก่อนแล้วแก้ทีละใบในหน้าแก้ไขซิมได้</div>
+      <div class="csv-tw"><table class="csv-table"><thead><tr><th>ลำดับใหม่</th><th>${escapeHtml(serialLabel)}</th><th>${escapeHtml(extra.label)}</th><th>สถานะ</th><th>ที่มาของลำดับ</th></tr></thead><tbody>${rowsHtml || `<tr><td colspan="5" class="cache-note" style="text-align:center;">ไม่มีรายการ</td></tr>`}</tbody></table></div>
+      <div class="csv-tip">${isSim ? "ตรวจดูว่าลำดับตรงกับซิมจริงหรือไม่ — ถ้าบางใบไม่ตรง ยืนยันไปก่อนแล้วแก้ทีละใบในหน้าแก้ไขซิมได้" : "ตรวจดูว่าลำดับตรงกับของจริงหรือไม่ก่อนกดยืนยัน — ลำดับที่เติมแล้วระบบจะไม่เปลี่ยนอีก"}</div>
       <div class="form-msg" id="simBackfillMsg"></div>
-      <div class="csv-foot"><div class="csv-hint">ระบบจะเติมเฉพาะช่องลำดับที่ว่าง ไม่เปลี่ยนข้อมูลอื่นของซิม</div>
-        <div class="csv-acts"><button type="button" class="btn-secondary" onclick="closeSimBackfillModal()">ยกเลิก</button><button type="button" class="btn-primary" id="simBackfillBtn" onclick="confirmSimBackfill()">ยืนยัน เติมลำดับ ${plan.length} ใบ</button></div></div>
+      <div class="csv-foot"><div class="csv-hint">ระบบจะเติมเฉพาะช่องลำดับที่ว่าง ไม่เปลี่ยนข้อมูลอื่น${isSim ? "ของซิม" : ""}</div>
+        <div class="csv-acts"><button type="button" class="btn-secondary" onclick="closeSimBackfillModal()">ยกเลิก</button><button type="button" class="btn-primary" id="simBackfillBtn" onclick="confirmSimBackfill()">ยืนยัน เติมลำดับ ${plan.length} ${unit}</button></div></div>
     </div>`;
 }
 
 async function confirmSimBackfill() {
   const btn = document.getElementById("simBackfillBtn");
   const msg = document.getElementById("simBackfillMsg");
-  const plan = simBackfillState.plan;
-  if (plan.length > 450) { msg.className = "form-msg error"; msg.textContent = "เติมได้ครั้งละไม่เกิน 450 ใบ — กรุณาติดต่อผู้ดูแลระบบ"; return; }
+  const { viewKey, plan } = stockNoBackfillState;
+  const cfg = VIEW_CONFIG[viewKey];
+  const unit = STOCK_NO_UNIT_BY_VIEW[viewKey];
+  const what = viewKey === "simcard" ? stockNoWhatLabel(viewKey) : ` ${stockNoWhatLabel(viewKey)} `;
+  if (plan.length > 450) { msg.className = "form-msg error"; msg.textContent = `เติมได้ครั้งละไม่เกิน 450 ${unit} — กรุณาติดต่อผู้ดูแลระบบ`; return; }
   btn.disabled = true; btn.textContent = "กำลังบันทึก...";
   try {
-    const res = await apiPost({ action: "backfillSimNo", token: state.token, assignments: plan.map((p) => ({ serial: p.sn, no: p.no })) });
+    const assignments = plan.map((p) => ({ serial: p.sn, no: p.no }));
+    // SimCard ยังเรียก backfillSimNo ตัวเดิม (ใช้ได้แม้ยังไม่ deploy functions ชุดใหม่) ประเภทอื่นใช้ backfillStockNo
+    const res = viewKey === "simcard"
+      ? await apiPost({ action: "backfillSimNo", token: state.token, assignments })
+      : await apiPost({ action: "backfillStockNo", token: state.token, assetType: cfg.assetType, assignments });
     if (!res.ok) {
       if (res.error === "unauthorized") { closeSimBackfillModal(); return handleUnauthorized(); }
       msg.className = "form-msg error";
       msg.textContent = res.error === "stale"
-        ? "ข้อมูลซิมเพิ่งมีการเปลี่ยนแปลง (มีคนเพิ่มซิมหรือแก้ลำดับ) — ปิดหน้านี้แล้วกด \"เติมลำดับให้อัตโนมัติ\" ใหม่อีกครั้ง"
+        ? `ข้อมูล${what}เพิ่งมีการเปลี่ยนแปลง (มีคนเพิ่มของหรือแก้ลำดับ) — ปิดหน้านี้แล้วกด "เติมลำดับให้อัตโนมัติ" ใหม่อีกครั้ง`
         : assetErrorMessage(res.error);
       return;
     }
     closeSimBackfillModal();
     await refreshInBackground(true);
     renderCurrentView();
-    await showAlert(`เติมลำดับซิมเรียบร้อย — ได้ลำดับ ${res.noFrom}${res.noTo !== res.noFrom ? ` – ${res.noTo}` : ""} (${res.count} ใบ)`, "success");
+    await showAlert(`เติมลำดับ${what}เรียบร้อย — ได้ลำดับ ${stockNoRangeText(res.noFrom, res.noTo)} (${res.count} ${unit})`, "success");
   } catch (err) {
     msg.className = "form-msg error"; msg.textContent = "เกิดข้อผิดพลาด: " + err.message;
   } finally {
     const b = document.getElementById("simBackfillBtn");
-    if (b) { b.disabled = false; b.textContent = `ยืนยัน เติมลำดับ ${plan.length} ใบ`; }
+    if (b) { b.disabled = false; b.textContent = `ยืนยัน เติมลำดับ ${plan.length} ${unit}`; }
   }
 }
 
-/** เลขลำดับซิมสูงสุดที่มีในระบบตอนนี้ (0 = ยังไม่มี) — ใช้แสดงตัวอย่างลำดับที่จะได้ตอนรับซิมเข้าสต๊อก
- * (เลขจริงกำหนดที่เซิร์ฟเวอร์ตอนบันทึก — ถ้ามีคนบันทึกซิมพร้อมกัน เลขอาจเลื่อนไปจากตัวอย่างนี้) */
-function getMaxSimNo() {
-  return (state.data.simcard || []).reduce((m, r) => {
-    const n = parseInt(String(r.No === undefined || r.No === null ? "" : r.No).trim(), 10);
-    return !isNaN(n) && n > m ? n : m;
-  }, 0);
-}
+/** เลขลำดับซิมสูงสุดที่มีในระบบตอนนี้ (0 = ยังไม่มี) — ตัวเดิม ปัจจุบันใช้ getMaxStockNo ร่วมกับทุกหมวด */
+function getMaxSimNo() { return getMaxStockNo("simcard"); }
 
 let addStockForm = { assetKey: null, cfg: null, commonFields: [], common: {}, itemFields: [], items: [] };
 
@@ -6208,14 +6366,14 @@ function renderAddStockInlineUI(area, assetKey) {
     <div class="table-card" style="margin-top:10px;">
       <div class="table-scroll">
         <table>
-          <thead><tr><th>${assetKey === "simcard" ? "ลำดับ (อัตโนมัติ)" : "#"}</th>${itemFields.map((f) => `<th>${escapeHtml(f.label)}</th>`).join("")}${assetKey === "simcard" ? "<th>วันเปิดใช้บริการ</th>" : ""}<th></th></tr></thead>
+          <thead><tr><th>${hasStockNo(assetKey) ? "ลำดับ (อัตโนมัติ)" : "#"}</th>${itemFields.map((f) => `<th>${escapeHtml(f.label)}</th>`).join("")}${assetKey === "simcard" ? "<th>วันเปิดใช้บริการ</th>" : ""}<th></th></tr></thead>
           <tbody id="as-basketBody"></tbody>
         </table>
       </div>
     </div>
     <div class="cache-note" id="as-countNote" style="margin-top:8px;"></div>
     <div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">
-      ${escapeHtml(cfg.title)}ทุกชิ้นที่เพิ่มจะเข้าสถานะ "Stock" ทันที — พร้อมให้เลือกเบิกได้เลยโดยไม่ต้องรออนุมัติ${assetKey === "simcard" ? `<br>ลำดับซิมระบบกำหนดให้อัตโนมัติต่อจากเลขล่าสุด (ตอนนี้ล่าสุดคือ ${getMaxSimNo() || "-"}) — ซิมที่มีวันเปิดใช้บริการจะพร้อมเบิกทันที ที่ไม่มีจะรอ Activate ทีหลัง` : ""}
+      ${escapeHtml(cfg.title)}ทุกชิ้นที่เพิ่มจะเข้าสถานะ "Stock" ทันที — พร้อมให้เลือกเบิกได้เลยโดยไม่ต้องรออนุมัติ${assetKey === "simcard" ? `<br>ลำดับซิมระบบกำหนดให้อัตโนมัติต่อจากเลขล่าสุด (ตอนนี้ล่าสุดคือ ${getMaxSimNo() || "-"}) — ซิมที่มีวันเปิดใช้บริการจะพร้อมเบิกทันที ที่ไม่มีจะรอ Activate ทีหลัง` : hasStockNo(assetKey) ? `<br>ลำดับระบบกำหนดให้อัตโนมัติต่อจากเลขล่าสุด (ตอนนี้ล่าสุดคือ ${getMaxStockNo(assetKey) || "-"})` : ""}
     </div>
     ${assetKey === "gateway" ? `<div class="form-msg" id="as-gatewayWarn" style="display:none; background:#FFF4E5; color:#8a5300; margin-top:8px;">
       รุ่น EPG-001S ยังไม่ถูกดึงมาใช้ในขั้นตอนเบิก Panolyzer (ระบบเบิกยังใช้การกรอก S/N อิสระเหมือนเดิม) — เพิ่มไว้ก่อนเพื่อการนับสต็อกเท่านั้น
@@ -6322,7 +6480,7 @@ function renderAddStockBasketOnly() {
   const tbody = document.getElementById("as-basketBody");
   const isSim = addStockForm.assetKey === "simcard";
   const colCount = itemFields.length + 2 + (isSim ? 1 : 0);
-  const simBase = addStockForm.assetKey === "simcard" ? getMaxSimNo() : null;
+  const simBase = hasStockNo(addStockForm.assetKey) ? getMaxStockNo(addStockForm.assetKey) : null;
   tbody.innerHTML = items.length
     ? items.map((it, i) => `<tr><td>${simBase !== null ? `<span class="sim-no-chip">${simBase + i + 1}</span>` : i + 1}</td>${itemFields.map((f) => `<td>${escapeHtml(it[f.field])}</td>`).join("")}${isSim ? `<td>${it.Activate_date ? escapeHtml(it.Activate_date) : `<span class="cache-note">รอ Activate</span>`}</td>` : ""}<td class="no-wrap"><button type="button" class="btn-sm btn-remove" onclick="removeAddStockItem(${i})">ลบ</button></td></tr>`).join("")
     : `<tr><td colspan="${colCount}" class="cache-note" style="text-align:center; padding:14px;">ยังไม่มีรายการ — กรอก${itemFields.map((f) => f.label).join("/")}แล้วกด "+ เพิ่ม"</td></tr>`;
@@ -6366,7 +6524,7 @@ async function submitAddStockBasket() {
     const freshMsg = document.getElementById("as-msg");
     if (freshMsg) {
       freshMsg.className = "form-msg success";
-      freshMsg.textContent = res.noFrom ? `บันทึกสำเร็จ — ได้ลำดับซิม ${res.noFrom === res.noTo ? res.noFrom : `${res.noFrom} – ${res.noTo}`}` : "บันทึกสำเร็จ";
+      freshMsg.textContent = res.noFrom ? `บันทึกสำเร็จ — ได้ลำดับ${cfg.key === "simcard" ? "ซิม" : ""} ${stockNoRangeText(res.noFrom, res.noTo)}` : "บันทึกสำเร็จ";
     }
   } catch (err) {
     msg.className = "form-msg error";
@@ -6861,6 +7019,13 @@ function simMetaText(serialOrRow) {
   if (tel) parts.push(tel);
   return escapeHtml(parts.join(" · "));
 }
+/** ข้อความเสริมใต้ S/N ในตะกร้าเบิก — ซิม: "ลำดับ 12 · เบอร์", ประเภทอื่นที่มีลำดับ: "ลำดับ 5" (escape แล้ว, ว่าง = ไม่มี) */
+function basketItemMetaText(item) {
+  if (!item) return "";
+  if (item.assetType === "SimCard") return simMetaText(item.serialNo);
+  const no = item.assetKey && hasStockNo(item.assetKey) ? stockNoOfSerial(item.assetKey, item.serialNo) : "";
+  return no ? escapeHtml(`ลำดับ ${no}`) : "";
+}
 /** เรียงซิมตามลำดับ (No) จากน้อยไปมาก — ซิมที่ไม่มีลำดับไว้ท้ายสุด */
 function sortSimRowsByNo(rows) {
   return rows.slice().sort((a, b) => {
@@ -6876,7 +7041,7 @@ function renderPickerList() {
   const assetKey = document.getElementById("f-assetType").value;
   const searchInput = document.getElementById("f-itemSearch");
   const listEl = document.getElementById("pickerList");
-  if (searchInput) searchInput.placeholder = assetKey === "simcard" ? "ค้นหา ลำดับ / S/N / เบอร์..." : "ค้นหา Serial / รุ่น...";
+  if (searchInput) searchInput.placeholder = assetKey === "simcard" ? "ค้นหา ลำดับ / S/N / เบอร์..." : hasStockNo(assetKey) ? "ค้นหา ลำดับ / Serial / รุ่น..." : "ค้นหา Serial / รุ่น...";
 
   // Filter chips "ทั้งหมด / ใช้กับ MoisturLyzer / ใช้กับ Panolyzer" — โชว์เฉพาะตอนเลือกประเภท Gateway เท่านั้น
   // (ตอนเลือกประเภทอื่นซ่อนไว้ — ไม่รีเซ็ต gatewayPickerFilter ตอนสลับไปประเภทอื่น เผื่อผู้ใช้สลับกลับมาดู Gateway อีกที
@@ -6985,7 +7150,8 @@ function renderPickerList() {
     listEl.innerHTML = items.slice(0, 50).map((it) => {
       if (it.kind === "unit") {
         const serial = String(it.row[cfg.serialField] || "");
-        const label = `${escapeHtml(it.row.PartName || cfg.title)} — S/N ${escapeHtml(serial)}`;
+        const unitNo = stockNoOf(assetKey, it.row);
+        const label = `${unitNo ? stockNoChipHtml(unitNo, true) : ""}${escapeHtml(it.row.PartName || cfg.title)} — S/N ${escapeHtml(serial)}`;
         const unitDetail = getPartDetail(it.row.PartID);
         return `
           <div class="picker-list-item">
@@ -7014,7 +7180,7 @@ function renderPickerList() {
     items = items.filter((row) => normalizeGatewayModel(row[GATEWAY_MODEL_FIELD]) === gatewayPickerFilter);
   }
 
-  if (assetKey === "simcard") items = sortSimRowsByNo(items);
+  if (hasStockNo(assetKey)) items = sortRowsByStockNo(assetKey, items);
 
   if (!items.length) {
     listEl.innerHTML = `<div class="picker-empty">ไม่พบอุปกรณ์ที่พร้อมเบิก</div>`;
@@ -7027,7 +7193,7 @@ function renderPickerList() {
     const simTel = assetKey === "simcard" ? String(row["Mobile No."] || "").trim() : "";
     const label = assetKey === "simcard"
       ? `${simNo ? `<span class="sim-no-chip">ลำดับ ${escapeHtml(simNo)}</span>` : ""}SimCard — ${escapeHtml(serial)}${simTel ? ` <span class="cache-note">${escapeHtml(simTel)}</span>` : ""}`
-      : `${escapeHtml(cfg.title)} — ${escapeHtml(serial)}${row.Model ? " (" + escapeHtml(row.Model) + ")" : ""}`;
+      : `${hasStockNo(assetKey) && stockNoOf(assetKey, row) ? stockNoChipHtml(stockNoOf(assetKey, row), true) : ""}${escapeHtml(cfg.title)} — ${escapeHtml(serial)}${row.Model ? " (" + escapeHtml(row.Model) + ")" : ""}`;
     return `
       <div class="picker-list-item">
         <span>${label}</span>
@@ -7702,7 +7868,7 @@ function renderBasket() {
           }
           return `<tr>
             <td><b>${escapeHtml(title)}</b></td>
-            <td>${escapeHtml(item.serialNo)}${item.assetType === "SimCard" && simMetaText(item.serialNo) ? `<div class="cache-note">${simMetaText(item.serialNo)}</div>` : ""}${serialExtra}</td>
+            <td>${escapeHtml(item.serialNo)}${basketItemMetaText(item) ? `<div class="cache-note">${basketItemMetaText(item)}</div>` : ""}${serialExtra}</td>
             <td>${locationInput(item, idx)}</td>
             <td>${removeBtn(idx)}</td>
           </tr>`;
@@ -7834,7 +8000,7 @@ function renderBasketMobile(area) {
         <div class="basket-card-head">
           <div>
             <div class="basket-card-title">${escapeHtml(cfg.title)}</div>
-            <div class="basket-card-serial">S/N ${escapeHtml(item.serialNo)}${item.assetType === "SimCard" && simMetaText(item.serialNo) ? ` · ${simMetaText(item.serialNo)}` : ""}</div>
+            <div class="basket-card-serial">S/N ${escapeHtml(item.serialNo)}${basketItemMetaText(item) ? ` · ${basketItemMetaText(item)}` : ""}</div>
           </div>
           <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
         </div>
