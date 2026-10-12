@@ -1602,9 +1602,89 @@ const LOW_STOCK_THRESHOLD = 5;
 // ชื่ออะไหล่ควรสั้น (ใช้แสดงบน Dashboard/แถบแจ้งเตือน) ส่วนสเปก/ขนาด/รุ่นที่ใช้ได้ให้ใส่ใน "รายละเอียด"
 // ชื่อเกิน PART_NAME_SOFT_MAX แค่เตือน (ไม่บล็อก — อะไหล่เดิมที่ชื่อยาวยังบันทึกได้) รายละเอียดจำกัดที่ PART_DETAIL_MAX
 const PART_NAME_SOFT_MAX = 30;
-const PART_DETAIL_MAX = 200;
+const PART_SPEC_PLACEHOLDER = "เช่น\nผู้ผลิต: DELTA ELECTRONICS\nรุ่น: DRL-24V240W1EN\nInput: 100-240V ~ 3A 50-60Hz\nOutput: 24V 10A (240W)";
+const PART_SPEC_HINT_TEXT = "พิมพ์ทีละบรรทัดแบบ  หัวข้อ: ค่า  ระบบจะจัดเป็นตารางสเปกให้อัตโนมัติ (บรรทัดที่ไม่มี : จะแสดงเป็นข้อความปกติ)";
+const PART_SPEC_HINT = "พิมพ์ทีละบรรทัดแบบ <b>หัวข้อ: ค่า</b> ระบบจะจัดเป็นตารางสเปกให้อัตโนมัติ (บรรทัดที่ไม่มี : จะแสดงเป็นข้อความปกติ)";
+/** ตัวอย่างสดใต้ช่องกรอกสเปก — ให้เห็นว่าบนการ์ด/หน้าต่างรายละเอียดจะออกมาหน้าตาแบบไหน */
+function renderSpecPreview(elId, detail) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = String(detail || "").trim() ? `<div class="spec-preview-lbl">ตัวอย่างที่จะแสดง</div>${partSpecHtml(detail)}` : "";
+}
+const DETAIL_TOO_LONG_MSG = `รายละเอียดยาวเกินที่เซิร์ฟเวอร์รับได้ (สูงสุด ${1000} ตัวอักษร) — ถ้าเพิ่งอัปเดตระบบ ให้ผู้ดูแล deploy Cloud Functions ก่อน`;
+const PART_DETAIL_MAX = 1000; // ต้องตรงกับฝั่ง Cloud Functions (addPart / updatePartCatalog)
 
 /** รายละเอียดอะไหล่จาก PartsCatalog ตาม PartID (ว่าง = ยังไม่ได้กรอก) */
+/** แยกรายละเอียดอะไหล่เป็นแถวสเปก: บรรทัดแบบ "หัวข้อ: ค่า" เป็นตาราง 2 ช่อง บรรทัดอื่นแสดงเป็นข้อความเต็มแถว
+ * (รายละเอียดเก่าที่พิมพ์ต่อกันบรรทัดเดียวจะออกมาเป็นข้อความธรรมดาเหมือนเดิม ไม่ต้องแก้ข้อมูล)
+ * กันลิงก์ "https://..." ไม่ให้ถูกตีความเป็นหัวข้อ "https" */
+function partSpecRows(detail) {
+  return String(detail || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line) => {
+    const m = line.match(/^([^:：]{1,30})[:：]\s*(.+)$/);
+    if (m && !/^\/\//.test(m[2])) return { k: m[1].trim(), v: m[2].trim() };
+    return { raw: line };
+  });
+}
+function partSpecHtml(detail) {
+  const rows = partSpecRows(detail);
+  if (!rows.length) return "";
+  return `<div class="part-spec">${rows.map((r) => r.raw !== undefined
+    ? `<div class="part-spec-row raw"><span>${escapeHtml(r.raw)}</span></div>`
+    : `<div class="part-spec-row"><span class="k">${escapeHtml(r.k)}</span><span class="v">${escapeHtml(r.v)}</span></div>`).join("")}</div>`;
+}
+/** ปุ่ม "ดูสเปกทั้งหมด" บนการ์ด — โผล่เฉพาะอะไหล่ที่มีรายละเอียด */
+function partSpecButtonHtml(partId, detail) {
+  if (!detail) return "";
+  const n = partSpecRows(detail).length;
+  if (n < 2 && String(detail).trim().length <= 60) return ""; // บรรทัดเดียวสั้นๆ เห็นครบบนการ์ดอยู่แล้ว (กดรูป/ชื่อยังเปิดดูได้)
+  return `<button type="button" class="part-spec-btn" onclick="event.stopPropagation(); openPartDetailModal('${escapeAttr(partId)}')">📋 ดูสเปกทั้งหมด <small>${n} รายการ ›</small></button>`;
+}
+/** หน้าต่างรายละเอียดอะไหล่: รูปใหญ่ + จำนวน + สเปกเต็ม + คัดลอก (ใช้โมดัล assetDetailModal ตัวเดิม) */
+function openPartDetailModal(partId) {
+  const p = (state.data.partsCatalog || []).find((x) => x.PartID === partId);
+  if (!p) { showAlert("ไม่พบข้อมูลอะไหล่นี้ (อาจถูกลบไปแล้ว)", "error"); return; }
+  let statsHtml = "";
+  if (String(p.HasSerial) !== "Yes") {
+    const viewKey = Object.keys(PART_CATEGORY_BY_VIEW).find((k) => PART_CATEGORY_BY_VIEW[k] === p.Category);
+    const assetType = viewKey ? PART_QTY_ASSET_TYPE_BY_VIEW[viewKey] : "";
+    const issued = assetType ? computePartIssuedQty(p.PartID, assetType) : 0;
+    const pending = assetType ? computePartPendingQty(p.PartID, assetType) : 0;
+    statsHtml = `<div class="mcard-stat-row part-modal-stats">
+      <div class="mcard-stat"><div class="num">${escapeHtml(String(p.QuantityInStock))}</div><div class="lbl">คงเหลือ</div></div>
+      <div class="mcard-stat${issued > 0 ? " warn" : ""}"><div class="num">${issued}</div><div class="lbl">กำลังเบิก</div></div>
+      <div class="mcard-stat"><div class="num">${pending}</div><div class="lbl">รออนุมัติ</div></div></div>`;
+  }
+  document.getElementById("assetDetailModalTitle").textContent = p.PartName;
+  const body = document.getElementById("assetDetailModalBody");
+  body.innerHTML = `
+    ${p.HasPhoto ? `<div class="part-modal-photo photo-loading" data-photo-wrap><img data-photo-partid="${escapeAttr(p.PartID)}" alt="${escapeAttr(p.PartName)}"></div>` : ""}
+    ${statsHtml}
+    ${p.PartDetail ? partSpecHtml(p.PartDetail) : `<div class="cache-note" style="margin:10px 0;">ยังไม่มีรายละเอียด/สเปก</div>`}
+    <div class="part-modal-actions">
+      ${p.PartDetail ? `<button class="btn-sm btn-secondary" id="partSpecCopyBtn" onclick="copyPartSpec('${escapeAttr(p.PartID)}')">📋 คัดลอกสเปก</button>` : ""}
+      <button class="btn-sm btn-secondary" onclick="closeAssetDetailModal()">ปิด</button>
+    </div>`;
+  hydratePartPhotoThumbnails(body);
+  document.getElementById("assetDetailModal").style.display = "flex";
+}
+async function copyPartSpec(partId) {
+  const p = (state.data.partsCatalog || []).find((x) => x.PartID === partId);
+  const btn = document.getElementById("partSpecCopyBtn");
+  if (!p || !btn) return;
+  const text = `${p.PartName}\n${p.PartDetail || ""}`.trim();
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+    else {
+      const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    }
+    btn.textContent = "✅ คัดลอกแล้ว";
+  } catch (e) {
+    btn.textContent = "คัดลอกไม่ได้ — เลือกข้อความเอง";
+  }
+  setTimeout(() => { if (document.getElementById("partSpecCopyBtn")) btn.textContent = "📋 คัดลอกสเปก"; }, 1600);
+}
+
 function getPartDetail(partId) {
   if (!partId) return "";
   const p = (state.data.partsCatalog || []).find((x) => x.PartID === partId);
@@ -3782,7 +3862,7 @@ function renderRowsAsTable(cfg, filtered, isAdmin) {
       }
       if (cfg.partCategory && c.field === "PartName") {
         const detail = getPartDetail(row.PartID);
-        return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}${detail ? `<div class="cell-sub">${escapeHtml(detail)}</div>` : ""}</td>`;
+        return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}${detail ? `<div class="cell-sub part-detail-clamp">${escapeHtml(detail)}</div>` : ""}</td>`;
       }
       return `<td>${escapeHtml(String(val === undefined || val === null ? "" : val))}</td>`;
     }).join("");
@@ -3861,7 +3941,7 @@ function buildAssetDetailFieldsHtml(cfg, row) {
     }
     return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${valHtml}</div></div>`;
   }).join("") + (cfg.partCategory && getPartDetail(row.PartID)
-    ? `<div class="mcard-row"><div class="mcard-label">รายละเอียด</div><div class="mcard-val">${escapeHtml(getPartDetail(row.PartID))}</div></div>` : "");
+    ? `<div class="mcard-row part-spec-in-modal"><div class="mcard-label">รายละเอียด / สเปก</div><div class="mcard-val">${partSpecHtml(getPartDetail(row.PartID))}</div></div>` : "");
 }
 
 // Phase: มือถือ — แปลงแถวข้อมูลเป็นการ์ด (แทนตารางที่ต้องเลื่อนซ้าย-ขวา) ใช้ร่วมกันทุกประเภทอุปกรณ์/อะไหล่แบบมี S/N
@@ -3904,7 +3984,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
         return `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${escapeHtml(String(val))}</div></div>`;
       }).join("");
     if (cfg.partCategory && getPartDetail(row.PartID)) {
-      bodyRows += `<div class="mcard-row"><div class="mcard-label">รายละเอียด</div><div class="mcard-val">${escapeHtml(getPartDetail(row.PartID))}</div></div>`;
+      bodyRows += `<div class="mcard-row"><div class="mcard-label">รายละเอียด</div><div class="mcard-val"><div class="part-detail-clamp">${escapeHtml(getPartDetail(row.PartID))}</div>${partSpecButtonHtml(row.PartID, getPartDetail(row.PartID))}</div></div>`;
     }
 
     const historyBtn = cfg.partCategory
@@ -4047,15 +4127,17 @@ function renderPartsListView(viewKey, cfg) {
            <button class="btn-sm btn-remove" onclick="deletePartHandler('${escapeAttr(p.PartID)}')">ลบ</button>
          </div>`
       : `<div class="mcard-actions"><button class="btn-sm btn-secondary" onclick="showPartHistory('${escapeAttr(p.PartID)}', '${escapeAttr(p.PartName)}')">ดูประวัติ</button></div>`;
+    // กดรูปหรือชื่อ = เปิดหน้าต่างรายละเอียดอะไหล่ (รูปใหญ่ + สเปกเต็ม)
+    const openAttr = `onclick="openPartDetailModal('${escapeAttr(p.PartID)}')"`;
     const photoHtml = p.HasPhoto
-      ? `<div class="mcard-photo" data-photo-wrap><img data-photo-partid="${escapeAttr(p.PartID)}" alt=""></div>`
-      : `<div class="mcard-photo">📦</div>`;
+      ? `<div class="mcard-photo part-open" data-photo-wrap ${openAttr} title="ดูรายละเอียด"><img data-photo-partid="${escapeAttr(p.PartID)}" alt=""></div>`
+      : `<div class="mcard-photo part-open" ${openAttr} title="ดูรายละเอียด">📦</div>`;
     return `
       <div class="mcard mcard-with-photo">
         ${photoHtml}
         <div class="mcard-body">
-          <div class="mcard-title">${escapeHtml(p.PartName)}</div>
-          ${p.PartDetail ? `<div class="mcard-detail">${escapeHtml(p.PartDetail)}</div>` : ""}
+          <div class="mcard-title part-open" ${openAttr}>${escapeHtml(p.PartName)}</div>
+          ${p.PartDetail ? `<div class="mcard-detail">${escapeHtml(p.PartDetail)}</div>${partSpecButtonHtml(p.PartID, p.PartDetail)}` : ""}
           <div class="mcard-stat-row">
             <div class="mcard-stat"><div class="num">${escapeHtml(String(p.QuantityInStock))}</div><div class="lbl">คงเหลือ</div></div>
             <div class="mcard-stat${issued > 0 ? " warn" : ""}"><div class="num">${issued}</div><div class="lbl">กำลังเบิก</div></div>
@@ -4104,7 +4186,7 @@ async function renamePartPrompt(partId) {
   const currentDetail = part ? (part.PartDetail || "") : "";
   openGenericFormModal(`แก้ไขชื่อ/รายละเอียดอะไหล่`, [
     { key: "PartName", label: "ชื่ออะไหล่", value: currentName, counterMax: PART_NAME_SOFT_MAX, hint: "ตั้งชื่อให้สั้น กระชับ — ใช้แสดงบน Dashboard ส่วนสเปก/ขนาด/รุ่นที่ใช้ได้ให้ใส่ในรายละเอียด" },
-    { key: "PartDetail", label: "รายละเอียด (ไม่บังคับ)", value: currentDetail, type: "textarea", counterMax: PART_DETAIL_MAX, maxLength: PART_DETAIL_MAX },
+    { key: "PartDetail", label: "รายละเอียด / สเปก (ไม่บังคับ)", value: currentDetail, type: "textarea", counterMax: PART_DETAIL_MAX, maxLength: PART_DETAIL_MAX, rows: 7, placeholder: PART_SPEC_PLACEHOLDER, hint: PART_SPEC_HINT_TEXT, specPreview: true },
   ], async (values) => {
     const msg = document.getElementById("genericFormModalMsg");
     try {
@@ -4113,7 +4195,7 @@ async function renamePartPrompt(partId) {
       const res = await apiPost({ action: "updatePartCatalog", token: state.token, partId, updates: { PartName: newName, PartDetail: String(values[1] || "").trim() } });
       if (!res.ok) {
         if (res.error === "unauthorized") return handleUnauthorized();
-        throw new Error(res.error === "part_name_taken" ? "ชื่ออะไหล่นี้มีอยู่แล้วในหมวดเดียวกัน" : "บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+        throw new Error(res.error === "part_name_taken" ? "ชื่ออะไหล่นี้มีอยู่แล้วในหมวดเดียวกัน" : res.error === "detail_too_long" ? DETAIL_TOO_LONG_MSG : "บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
       }
       await refreshInBackground(true);
       closeGenericFormModal();
@@ -5000,8 +5082,9 @@ function renderManagePartsFormArea() {
       </div>
       <div class="form-field" style="grid-column:1/-1;">
         <label>รายละเอียด (ไม่บังคับ) <span class="fld-counter" id="mp-detailCount"></span></label>
-        <textarea id="mp-partDetail" rows="3" maxlength="${PART_DETAIL_MAX}" placeholder="เช่น สายพาน PU กว้าง 120 mm ยาว 2,400 mm สำหรับ Master8">${escapeHtml(f.partDetail || "")}</textarea>
-        <div class="hint">ใส่สเปก ขนาด รุ่นที่ใช้ได้ หรือหมายเหตุอื่นๆ ได้ตามต้องการ</div>
+        <textarea id="mp-partDetail" rows="6" maxlength="${PART_DETAIL_MAX}" placeholder="${escapeAttr(PART_SPEC_PLACEHOLDER)}">${escapeHtml(f.partDetail || "")}</textarea>
+        <div class="hint">${PART_SPEC_HINT}</div>
+        <div class="spec-preview" id="mp-specPreview"></div>
       </div>
       <div id="mp-qtyOrSerialArea"></div>
       <div class="form-field" style="margin-top:4px;">
@@ -5016,8 +5099,9 @@ function renderManagePartsFormArea() {
       if (dc) dc.textContent = `${dl} / ${PART_DETAIL_MAX}`;
     };
     document.getElementById("mp-partName").addEventListener("input", (e) => { f.partName = e.target.value; mpCount(); });
-    document.getElementById("mp-partDetail").addEventListener("input", (e) => { f.partDetail = e.target.value; mpCount(); });
+    document.getElementById("mp-partDetail").addEventListener("input", (e) => { f.partDetail = e.target.value; mpCount(); renderSpecPreview("mp-specPreview", f.partDetail); });
     mpCount();
+    renderSpecPreview("mp-specPreview", f.partDetail);
     document.getElementById("mp-hasSerial").addEventListener("change", (e) => { f.hasSerial = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
     bindPhotoPickerInputs("mp", onManagePartsPhotoSelected);
     renderQtyOrSerialArea();
@@ -5231,6 +5315,7 @@ async function submitManagePartsForm() {
 function managePartErrorMessage(code) {
   switch (code) {
     case "part_name_taken": return "ชื่ออะไหล่นี้มีอยู่แล้วในหมวดเดียวกัน";
+    case "detail_too_long": return DETAIL_TOO_LONG_MSG;
     case "duplicate_serial": return "S/N ที่กรอกมาซ้ำกับที่มีอยู่แล้วในระบบ (หรือซ้ำกันเองในชุดที่กรอก)";
     case "part_not_found": return "ไม่พบอะไหล่นี้ในระบบ (อาจถูกลบไปแล้ว)";
     case "forbidden": return "เฉพาะ Admin เท่านั้นที่จัดการอะไหล่ได้";
@@ -5272,8 +5357,9 @@ function renderGenericFormField(f, i) {
   if (f.type === "textarea") {
     return `<div class="form-field ${extraClasses}">
       <label>${labelHtml}${counterHtml}</label>
-      <textarea id="gfm-field-${i}" rows="3" ${f.maxLength ? `maxlength="${f.maxLength}"` : ""}${counterAttr}>${escapeHtml(f.value === undefined || f.value === null ? "" : String(f.value))}</textarea>
+      <textarea id="gfm-field-${i}" rows="${f.rows || 3}" ${f.maxLength ? `maxlength="${f.maxLength}"` : ""}${f.placeholder ? ` placeholder="${escapeAttr(f.placeholder)}"` : ""}${counterAttr}>${escapeHtml(f.value === undefined || f.value === null ? "" : String(f.value))}</textarea>
       ${hintHtml}
+      ${f.specPreview ? `<div class="spec-preview" id="gfm-preview-${i}"></div>` : ""}
     </div>`;
   }
   return `<div class="form-field ${extraClasses}">
@@ -5327,6 +5413,12 @@ function openGenericFormModal(title, fields, onSave, opts) {
     body.innerHTML = fields.map((f, i) => renderGenericFormField(f, i)).join("");
   }
   enhanceSearchableSelects(body);
+  fields.forEach((f, i) => {
+    if (!f.specPreview) return;
+    const ta = document.getElementById(`gfm-field-${i}`);
+    const upd = () => renderSpecPreview(`gfm-preview-${i}`, ta.value);
+    ta.addEventListener("input", upd); upd();
+  });
   const msgEl = document.getElementById("genericFormModalMsg");
   msgEl.className = "form-msg";
   msgEl.textContent = "";
@@ -7182,7 +7274,7 @@ function renderPickerList() {
         const unitDetail = getPartDetail(it.row.PartID);
         return `
           <div class="picker-list-item">
-            <span>${label}${unitDetail ? `<div class="cache-note picker-detail">${escapeHtml(unitDetail)}</div>` : ""}</span>
+            <span>${label}${unitDetail ? `<div class="cache-note picker-detail part-detail-clamp">${escapeHtml(unitDetail)}</div>` : ""}</span>
             <button class="btn-sm btn-add" onclick="addToBasket('${assetKey}', '${escapeAttr(serial)}')">+ เพิ่ม</button>
           </div>`;
       }
@@ -7190,7 +7282,7 @@ function renderPickerList() {
       const inputId = "qty-input-" + escapeAttr(p.PartID);
       return `
         <div class="picker-list-item">
-          <span>${escapeHtml(p.PartName)} <span class="cache-note">(คงเหลือให้เบิก ${it.available} ชิ้น — นับจำนวน ไม่มี S/N)</span>${p.PartDetail ? `<div class="cache-note picker-detail">${escapeHtml(p.PartDetail)}</div>` : ""}</span>
+          <span>${escapeHtml(p.PartName)} <span class="cache-note">(คงเหลือให้เบิก ${it.available} ชิ้น — นับจำนวน ไม่มี S/N)</span>${p.PartDetail ? `<div class="cache-note picker-detail part-detail-clamp">${escapeHtml(p.PartDetail)}</div>` : ""}</span>
           <span class="picker-qty-controls">
             <input type="number" id="${inputId}" class="qty-input-sm" min="1" max="${it.available}" value="1">
             <button class="btn-sm btn-add" onclick="addQtyToBasket('${assetKey}', '${escapeAttr(p.PartID)}', document.getElementById('${inputId}').value)">+ เพิ่ม</button>
@@ -7877,7 +7969,7 @@ function renderBasket() {
           // อะไหล่แบบนับจำนวน (ไม่มี S/N)
           if (item.quantity !== undefined) {
             return `<tr>
-              <td>${escapeHtml(item.partName)} <span class="cache-note">(นับจำนวน)</span>${getPartDetail(item.serialNo) ? `<div class="cache-note picker-detail">${escapeHtml(getPartDetail(item.serialNo))}</div>` : ""}</td>
+              <td>${escapeHtml(item.partName)} <span class="cache-note">(นับจำนวน)</span>${getPartDetail(item.serialNo) ? `<div class="cache-note picker-detail part-detail-clamp">${escapeHtml(getPartDetail(item.serialNo))}</div>` : ""}</td>
               <td>${qtyInput(item, idx)}</td>
               <td><span class="cache-note">-</span></td>
               <td>${removeBtn(idx)}</td>
@@ -7939,7 +8031,7 @@ function renderBasketMobile(area) {
             <div>
               <div class="basket-card-title">${escapeHtml(item.partName)}</div>
               <div class="basket-card-serial">แบบนับจำนวน (ไม่มี S/N)</div>
-              ${getPartDetail(item.serialNo) ? `<div class="basket-card-serial">${escapeHtml(getPartDetail(item.serialNo))}</div>` : ""}
+              ${getPartDetail(item.serialNo) ? `<div class="basket-card-serial part-detail-clamp">${escapeHtml(getPartDetail(item.serialNo))}</div>` : ""}
             </div>
             <button class="basket-card-remove" onclick="removeFromBasket(${idx})">ลบ</button>
           </div>
