@@ -1166,7 +1166,7 @@ function attachFirestoreListeners() {
           localStorage.setItem(LS_CACHE, JSON.stringify({ data: state.data, cachedAt: state.cachedAt }));
         } catch (e) { /* เต็ม quota ก็ปล่อยผ่าน ไม่ใช่ปัญหาคอขวด */ }
         updatePendingBadge();
-        renderCurrentView();
+        renderCurrentViewFromSync();
         setSyncStatus("online");
       },
       (err) => {
@@ -1222,13 +1222,38 @@ async function refreshUsersList() {
   }
 }
 
+/** วาดหน้าใหม่จากการซิงก์เบื้องหลัง (ข้อมูล real-time เปลี่ยน / รอบดึงรายชื่อผู้ใช้ทุก 9 วินาที)
+ * ถ้าผู้ใช้กำลังพิมพ์อยู่ในช่องของหน้านี้ จะเลื่อนการวาดไปจนกว่าจะออกจากช่องพิมพ์ — เดิมวาดทับทันที ทำให้
+ * เคอร์เซอร์หลุด (มือถือคีย์บอร์ดปิด) และบางช่องข้อความที่พิมพ์ค้างไว้หายไป
+ * (การวาดที่เกิดจากผู้ใช้กดเอง ยังเรียก renderCurrentView() ตรงๆ เหมือนเดิม) */
+let _syncRenderPending = false;
+function isTypingInView() {
+  const a = document.activeElement;
+  if (!a || !a.closest || !a.closest("#viewContent")) return false;
+  if (a.tagName === "TEXTAREA") return true;
+  if (a.tagName !== "INPUT") return false;
+  return !/^(checkbox|radio|file|button|submit|reset|range|color)$/i.test(a.type || "");
+}
+function renderCurrentViewFromSync() {
+  if (isTypingInView()) { _syncRenderPending = true; return; }
+  _syncRenderPending = false;
+  renderCurrentView();
+}
+// ออกจากช่องพิมพ์แล้ว ค่อยวาดที่ค้างไว้ — หน่วงเล็กน้อยไม่ให้ไปแทนที่ปุ่มที่ผู้ใช้กำลังกด (เช่น "ถัดไป")
+document.addEventListener("focusout", () => {
+  if (!_syncRenderPending) return;
+  setTimeout(() => {
+    if (_syncRenderPending && !isTypingInView()) { _syncRenderPending = false; renderCurrentView(); }
+  }, 450);
+});
+
 async function refreshInBackground() {
   setSyncStatus("syncing");
   try {
     attachFirestoreListeners(); // idempotent — เปิด listener จริงแค่ครั้งแรกครั้งเดียวต่อ session
     await refreshUsersList();
     updatePendingBadge();
-    renderCurrentView();
+    renderCurrentViewFromSync();
     setSyncStatus("online");
   } catch (err) {
     console.error("sync error", err);
@@ -1256,7 +1281,7 @@ function startPolling() {
     // ตัวจับเวลานี้เลย ตัวจับเวลานี้มีไว้แค่ refresh รายชื่อผู้ใช้งาน (accounts อ่านตรงไม่ได้) จึงควรวาดหน้าจอใหม่
     // ก็ต่อเมื่อกำลังเปิดหน้า "จัดการผู้ใช้งาน" อยู่จริงเท่านั้น
     refreshUsersList().then(() => {
-      if (state.currentView === "users") renderCurrentView();
+      if (state.currentView === "users") renderCurrentViewFromSync();
     });
   }, CONFIG.POLL_INTERVAL_MS);
 }
@@ -9081,7 +9106,11 @@ function renderUsersView() {
     <button class="btn-sm ${isActiveUser(u) ? "btn-reject" : "btn-approve"}" onclick="toggleUserActive('${escapeAttr(u.UserID)}', ${!isActiveUser(u)}, this)">
       ${isActiveUser(u) ? "ปิดใช้งาน" : "เปิดใช้งาน"}
     </button>`;
-  content.innerHTML = `
+  // ฟอร์ม "เพิ่มผู้ใช้งานใหม่" สร้างครั้งเดียวแล้วคงไว้ — หน้านี้ถูกวาดใหม่ทุก 9 วินาที (startPolling ดึงรายชื่อผู้ใช้)
+  // และทุกครั้งที่ข้อมูล real-time เปลี่ยน ถ้าสร้างฟอร์มใหม่ทุกรอบ ข้อความที่กำลังพิมพ์จะหายและเคอร์เซอร์หลุด
+  // จึงวาดใหม่เฉพาะส่วนรายชื่อผู้ใช้ (#usersListArea) ด้านล่างเท่านั้น
+  if (!document.getElementById("nu-name") || !document.getElementById("usersListArea")) {
+    content.innerHTML = `
     <div class="form-card">
       <h3>เพิ่มผู้ใช้งานใหม่</h3>
       <div class="form-grid">
@@ -9096,7 +9125,10 @@ function renderUsersView() {
       <div id="createUserMsg" class="form-msg"></div>
       <button class="btn-primary" id="createUserBtn" onclick="createUser()">เพิ่มผู้ใช้งาน</button>
     </div>
+    <div id="usersListArea"></div>`;
+  }
 
+  document.getElementById("usersListArea").innerHTML = `
     <div class="users-toolbar">
       <span class="cache-note" style="margin:0;">ผู้ใช้ทั้งหมด ${users.length} คน</span>
       <button class="btn-sm btn-secondary" onclick="showUserActivityLog()"><i class="fa-regular fa-clock"></i> ประวัติผู้ใช้</button>
@@ -9340,6 +9372,9 @@ async function createUser() {
     const res = await apiPost({ action: "createUser", token: state.token, payload: { name, username, password, role } });
     if (!res.ok) throw new Error(userErrorMessage(res.error));
     await refreshInBackground(true);
+    // ฟอร์มไม่ถูกสร้างใหม่แล้ว (ดู renderUsersView) จึงต้องล้างช่องเองหลังเพิ่มสำเร็จ
+    ["nu-name", "nu-username", "nu-password"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+    const roleEl = document.getElementById("nu-role"); if (roleEl) roleEl.value = "Staff";
     renderUsersView();
     const freshMsg = document.getElementById("createUserMsg");
     freshMsg.className = "form-msg success";
