@@ -2853,12 +2853,6 @@ function printIssuanceSlip(transactionId) {
           <div class="signature-date2">วันที่ ______ / ______ / ________</div>
         </div>
         <div class="signature-box2">
-          <div class="signature-role2">ผู้อนุมัติ · Approved by</div>
-          <div class="signature-name2">&nbsp;</div>
-          <div class="signature-line2"></div>
-          <div class="signature-date2">วันที่ ______ / ______ / ________</div>
-        </div>
-        <div class="signature-box2">
           <div class="signature-role2">ผู้รับของ · Received by</div>
           <div class="signature-name2">&nbsp;</div>
           <div class="signature-line2"></div>
