@@ -3534,8 +3534,8 @@ function openAddMachineForm(type, preset) {
     <div class="am-f">
       <label>ประเภท <b>*</b></label>
       <div class="am-seg" role="radiogroup">
-        <label class="${typeVal === "L" ? "on" : ""}"><input type="radio" name="am-type" value="L" ${typeVal === "L" ? "checked" : ""}>Lab<small>L · ตั้งโต๊ะ</small></label>
-        <label class="${typeVal === "RT" ? "on" : ""}"><input type="radio" name="am-type" value="RT" ${typeVal === "RT" ? "checked" : ""}>Real-time<small>RT · ออนไลน์</small></label>
+        <label class="${typeVal === "L" ? "on" : ""}"><input type="radio" name="am-type" value="L" ${typeVal === "L" ? "checked" : ""}>Lab<small>L</small></label>
+        <label class="${typeVal === "RT" ? "on" : ""}"><input type="radio" name="am-type" value="RT" ${typeVal === "RT" ? "checked" : ""}>Real-time<small>RT</small></label>
       </div>
     </div>
     <div class="am-g2">
