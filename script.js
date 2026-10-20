@@ -1076,6 +1076,12 @@ function translateIssuanceLog(doc) {
     // ฟีเจอร์ "เลือกผู้เบิกแทน" — Admin สามารถระบุว่าเบิก/ย้าย/เคลมแทนพนักงานคนอื่นได้ IssuedBy = ชื่อผู้เบิกที่แสดงผลจริง
     // (คนที่ถูกเลือก) ส่วน SubmittedBy = ชื่อคนที่ล็อกอินและกดส่งจริง ใช้แสดง note "ดำเนินการแทนโดย..." เท่านั้น
     SubmittedBy: d.submittedBy || "",
+    // บันทึกย้อนหลัง (Admin) — Timestamp = วันที่จริงของรายการ, RecordedAt = เวลาที่กดบันทึกจริง
+    Backdated: d.backdated === true,
+    RecordedAt: d.recordedAt || "",
+    BackdateReason: d.backdateReason || "",
+    StockMode: d.stockMode || "",
+    ReturnRestocked: d.returnRestocked,
   };
 }
 
@@ -3321,6 +3327,7 @@ function renderPanolyzerView() {
         <option value="used">เบิกไปแล้ว</option>
       </select>
       <button class="btn-sm btn-secondary" id="panoRefreshBtn">🔄 รีเฟรชข้อมูลตอนนี้</button>
+      ${state.user.role === "Admin" ? `<button class="btn-sm btn-primary" id="panoAddBtn">＋ เพิ่มเครื่อง</button>` : ""}
     </div>
     <div class="cache-note" style="margin-bottom:10px;">ข้อมูลเครื่อง Panolyzer มิเรอร์มาจากระบบ "Panolyzer Management" (คนละระบบ) — ซิงค์อัตโนมัติทุก 15 นาที หรือกดรีเฟรชเองได้ทันที ระบบนี้ใช้เบิกส่งมอบ (Status เปลี่ยนเป็น "Complete") เท่านั้น การบันทึกประวัติทดลองเครื่องยังต้องทำในระบบ Panolyzer Management เดิม</div>
     ${mobile
@@ -3337,6 +3344,8 @@ function renderPanolyzerView() {
     </div>`}
   `;
   document.getElementById("panoRefreshBtn").addEventListener("click", refreshPanolyzerNow);
+  const panoAddBtn = document.getElementById("panoAddBtn");
+  if (panoAddBtn) panoAddBtn.addEventListener("click", () => openAddMachineForm("panolyzer"));
   document.getElementById("panoSearchBox").addEventListener("input", renderPanolyzerRows);
   document.getElementById("panoStatusFilter").addEventListener("change", renderPanolyzerRows);
   renderPanolyzerRows();
@@ -3451,6 +3460,106 @@ function renderPanolyzerRowsAsCards() {
   }).join("");
 }
 
+// ============================================================
+// เพิ่มเครื่องใหม่ (Panolyzer / Color Sorter) — Admin เท่านั้น
+// บันทึกลง Google Sheet ก่อน (ผ่าน Cloud Function addMachine → Apps Script "add_machine") แล้วมิเรอร์เข้าระบบทันที
+// ============================================================
+const ADD_MACHINE_UI = {
+  panolyzer: {
+    title: "เพิ่มเครื่อง Panolyzer", dataKey: PANOLYZER_KEY, snField: PANOLYZER_SERIAL_FIELD,
+    models: ["mFV-A2", "mFV-B1", "PD-A2"],
+  },
+  colorSorter: {
+    title: "เพิ่มเครื่อง Color Sorter", dataKey: COLORSORTER_KEY, snField: COLORSORTER_SERIAL_FIELD,
+    models: ["Master6", "Master8", "Master10", "Master12", "240 DREAM AI", "360 DREAM AI", "480 DREAM AI", "600 DREAM AI", "DREAM MAX AI"],
+  },
+};
+const ADD_MACHINE_OTHER = "__other__";
+
+function addMachineErrorText(res) {
+  const map = {
+    forbidden: "เฉพาะ Admin เท่านั้นที่เพิ่มเครื่องได้",
+    duplicate: `มีเครื่อง S/N ${res.serial || ""} อยู่ในระบบแล้ว`,
+    missing_fields: "กรุณากรอก S/N และ Model",
+    invalid_serial: "S/N ไม่ถูกต้อง",
+    invalid_type_value: "ประเภทต้องเป็น L หรือ RT",
+    not_configured: "ยังไม่ได้ตั้งค่าการเชื่อมต่อ Google Sheet (secret)",
+    network_error: "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง",
+  };
+  if (res.error === "sheet_failed") {
+    const d = String(res.detail || "");
+    if (/Action|Unknown/i.test(d)) return "Google Sheet ยังไม่รองรับคำสั่งเพิ่มเครื่อง — ต้องอัปเดตและ Deploy Apps Script เวอร์ชันใหม่ก่อน";
+    return "บันทึกลง Google Sheet ไม่สำเร็จ: " + (d || "unknown");
+  }
+  return map[res.error] || ("เพิ่มเครื่องไม่สำเร็จ: " + (res.error || "unknown_error"));
+}
+
+function openAddMachineForm(type, preset) {
+  if (state.user.role !== "Admin") return;
+  const ui = ADD_MACHINE_UI[type];
+  preset = preset || {};
+  const rows = state.data[ui.dataKey] || [];
+  // รุ่นที่มีอยู่จริงในชีต (เผื่อมีรุ่นใหม่ที่ไม่อยู่ในรายการตั้งต้น)
+  const models = Array.from(new Set(ui.models.concat(rows.map((r) => String(r.Model || "").trim()).filter(Boolean))));
+  const presetModel = preset.Model || "";
+  const modelIsListed = !presetModel || models.includes(presetModel);
+  const modelOptions = [{ value: "", label: "-- เลือก Model --" }]
+    .concat(models.map((m) => ({ value: m, label: m })))
+    .concat([{ value: ADD_MACHINE_OTHER, label: "อื่นๆ (พิมพ์เอง)" }]);
+
+  let fields;
+  if (type === "panolyzer") {
+    const modes = Array.from(new Set(rows.map((r) => String(r.Mode || "").trim()).filter(Boolean)));
+    fields = [
+      { key: "S/N Analyzer", label: "S/N Analyzer *", value: "" },
+      { key: "Type", label: "ประเภท", type: "select", plain: true, value: preset.Type || "L", options: [{ value: "L", label: "L — Lab (ตั้งโต๊ะ)" }, { value: "RT", label: "RT — Real-time (ออนไลน์)" }] },
+      { key: "Model", label: "Model *", type: "select", plain: true, value: modelIsListed ? presetModel : ADD_MACHINE_OTHER, options: modelOptions },
+      { key: "_modelOther", label: "Model (กรณีเลือก อื่นๆ)", value: modelIsListed ? "" : presetModel },
+      { key: "Mode", label: "Mode", value: preset.Mode || "", hint: modes.length ? "ที่มีในระบบ: " + modes.join(", ") : "" },
+      { key: "S/N Edge server", label: "S/N Edge server", value: "" },
+      { key: "Remark", label: "หมายเหตุ", type: "textarea", rows: 2, value: "" },
+    ];
+  } else {
+    fields = [
+      { key: "S/N Sorter", label: "S/N Sorter *", value: "" },
+      { key: "Model", label: "Model *", type: "select", plain: true, value: modelIsListed ? presetModel : ADD_MACHINE_OTHER, options: modelOptions },
+      { key: "_modelOther", label: "Model (กรณีเลือก อื่นๆ)", value: modelIsListed ? "" : presetModel },
+      { key: "Model code", label: "Model code", value: preset["Model code"] || "" },
+      { key: "Firmware", label: "Firmware", value: preset.Firmware || "" },
+      { key: "Remark", label: "หมายเหตุ", type: "textarea", rows: 2, value: "" },
+    ];
+  }
+
+  openGenericFormModal(ui.title, fields, async (values) => {
+    const msgEl = document.getElementById("genericFormModalMsg");
+    const showErr = (t) => { msgEl.className = "form-msg error"; msgEl.textContent = t; };
+    const v = {};
+    fields.forEach((f, i) => { v[f.key] = String(values[i] || "").trim(); });
+    if (v.Model === ADD_MACHINE_OTHER) v.Model = v._modelOther;
+    delete v._modelOther;
+    const sn = v[ui.snField];
+    if (!sn) return showErr(`กรุณากรอก ${ui.snField}`);
+    if (!v.Model) return showErr("กรุณาเลือกหรือพิมพ์ Model");
+    // กันซ้ำฝั่งหน้าเว็บก่อน (เซิร์ฟเวอร์และชีตเช็คซ้ำอีกชั้น)
+    const dup = rows.find((r) => String(r[ui.snField] || "").trim().toLowerCase() === sn.toLowerCase());
+    if (dup) return showErr(`มีเครื่อง S/N ${sn} อยู่ในระบบแล้ว (สถานะ: ${dup.Status || "-"})`);
+
+    const data = {};
+    Object.keys(v).forEach((k) => { if (v[k]) data[k] = v[k]; });
+    const res = await apiPost({ action: "addMachine", token: state.token, machineType: type, data });
+    if (!res.ok) {
+      if (res.error === "unauthorized") { closeGenericFormModal(); return handleUnauthorized(); }
+      return showErr(addMachineErrorText(res));
+    }
+    closeGenericFormModal();
+    const again = await showConfirm(`เพิ่มเครื่อง S/N ${res.serial} เข้า Stock แล้ว${res.synced ? "" : " (ข้อมูลจะแสดงครบภายในรอบซิงค์ถัดไป)"} — ต้องการเพิ่มเครื่องถัดไปต่อเลยไหม?`, { type: "success", title: "เพิ่มเครื่องสำเร็จ", okText: "＋ เพิ่มเครื่องถัดไป", cancelText: "เสร็จสิ้น" });
+    if (again) {
+      const keep = type === "panolyzer" ? { Type: data.Type, Model: data.Model, Mode: data.Mode } : { Model: data.Model, "Model code": data["Model code"], Firmware: data.Firmware };
+      openAddMachineForm(type, keep);
+    }
+  });
+}
+
 /** ปุ่ม "รีเฟรชข้อมูลตอนนี้" — เรียก syncPanolyzerNow แล้วปล่อยให้ real-time listener (bind("panolyzer", ...))
  * อัปเดตตารางให้เองอัตโนมัติ (ไม่ต้อง manual re-render ผลลัพธ์ตรงนี้) */
 async function refreshPanolyzerNow() {
@@ -3499,6 +3608,7 @@ function renderColorSorterView() {
         <option value="used">เบิกไปแล้ว</option>
       </select>
       <button class="btn-sm btn-secondary" id="csRefreshBtn">🔄 รีเฟรชข้อมูลตอนนี้</button>
+      ${state.user.role === "Admin" ? `<button class="btn-sm btn-primary" id="csAddBtn">＋ เพิ่มเครื่อง</button>` : ""}
     </div>
     <div class="cache-note" style="margin-bottom:10px;">ข้อมูลเครื่อง Color Sorter มิเรอร์มาจาก Google Sheet เดียวกับ Panolyzer (แท็บ "Sorter_Data") — ซิงค์อัตโนมัติทุก 15 นาที หรือกดรีเฟรชเองได้ทันที ระบบนี้ใช้เบิก/รับคืนอย่างเดียว ไม่ผูกกับ Gateway หรือ SimCard เลย</div>
     ${mobile
@@ -3515,6 +3625,8 @@ function renderColorSorterView() {
     </div>`}
   `;
   document.getElementById("csRefreshBtn").addEventListener("click", refreshColorSorterNow);
+  const csAddBtn = document.getElementById("csAddBtn");
+  if (csAddBtn) csAddBtn.addEventListener("click", () => openAddMachineForm("colorSorter"));
   document.getElementById("csSearchBox").addEventListener("input", renderColorSorterRows);
   document.getElementById("csStatusFilter").addEventListener("change", renderColorSorterRows);
   renderColorSorterRows();
@@ -6862,11 +6974,12 @@ function getAvailableItems(cfg, search) {
   const pendingKeys = getPendingKeys();
   const basketKeys = new Set(issuanceForm.basket.map((b) => b.assetType + "||" + b.serialNo));
   const rows = state.data[cfg.key] || [];
+  const noStock = issueNoStockMode();
   return rows.filter((row) => {
-    if (!isStockRow(row, cfg.stockField, cfg.stockRequiresField)) return false;
+    if (!noStock && !isStockRow(row, cfg.stockField, cfg.stockRequiresField)) return false;
     const serial = String(row[cfg.serialField] || "");
     const key = cfg.assetType + "||" + serial;
-    if (pendingKeys.has(key) || basketKeys.has(key)) return false;
+    if ((!noStock && pendingKeys.has(key)) || basketKeys.has(key)) return false;
     if (search) {
       const s = search.toLowerCase();
       return cfg.columns.some((c) => String(row[c.field] || "").toLowerCase().includes(s))
@@ -6882,11 +6995,12 @@ function getAvailablePanolyzerItems(search) {
   const pendingKeys = getPendingKeys();
   const basketKeys = new Set(issuanceForm.basket.map((b) => b.assetType + "||" + b.serialNo));
   const rows = state.data.panolyzer || [];
+  const noStock = issueNoStockMode();
   return rows.filter((row) => {
-    if (!isPanolyzerStockRow(row)) return false;
+    if (!noStock && !isPanolyzerStockRow(row)) return false;
     const serial = String(row[PANOLYZER_SERIAL_FIELD] || "");
     const key = PANOLYZER_ASSET_TYPE + "||" + serial;
-    if (pendingKeys.has(key) || basketKeys.has(key)) return false;
+    if ((!noStock && pendingKeys.has(key)) || basketKeys.has(key)) return false;
     if (search) {
       const s = search.toLowerCase();
       return [PANOLYZER_SERIAL_FIELD, "Client name", "Location", "Type", "Model", "Mode"].some((f) => String(row[f] || "").toLowerCase().includes(s));
@@ -6901,11 +7015,12 @@ function getAvailableColorSorterItems(search) {
   const pendingKeys = getPendingKeys();
   const basketKeys = new Set(issuanceForm.basket.map((b) => b.assetType + "||" + b.serialNo));
   const rows = state.data.colorSorter || [];
+  const noStock = issueNoStockMode();
   return rows.filter((row) => {
-    if (!isColorSorterStockRow(row)) return false;
+    if (!noStock && !isColorSorterStockRow(row)) return false;
     const serial = String(row[COLORSORTER_SERIAL_FIELD] || "");
     const key = COLORSORTER_ASSET_TYPE + "||" + serial;
-    if (pendingKeys.has(key) || basketKeys.has(key)) return false;
+    if ((!noStock && pendingKeys.has(key)) || basketKeys.has(key)) return false;
     if (search) {
       const s = search.toLowerCase();
       return [COLORSORTER_SERIAL_FIELD, "Client name", "Location", "Model", "Firmware"].some((f) => String(row[f] || "").toLowerCase().includes(s));
@@ -6981,6 +7096,7 @@ function renderIssueView() {
           </div>
           <div class="loan-hint">ติ๊กแล้วใบเบิกนี้จะขึ้นป้าย "ยืม" กำกับสถานะไว้ ให้แยกจากการเบิกปกติ</div>
         </div>
+        ${renderBackdateFieldHtml()}
         <div id="issueStep1Msg" class="form-msg"></div>
       </div>
       <div class="step-nav"><span></span><button class="btn-primary" id="issueStep1NextBtn">ถัดไป: เลือกอุปกรณ์ →</button></div>
@@ -6988,7 +7104,7 @@ function renderIssueView() {
 
     <div class="issue-step ${step === 2 ? "active" : ""}" data-step="2">
       <div class="form-card">
-        <h3>2. เลือกอุปกรณ์ที่จะเบิก (แสดงเฉพาะรายการที่อยู่ในสถานะ Stock และไม่มีคำขออื่นค้างอยู่)</h3>
+        <h3>2. เลือกอุปกรณ์ที่จะเบิก ${issueNoStockMode() ? "(โหมดบันทึกย้อนหลังแบบไม่ตัดสต็อก — แสดงอุปกรณ์ทั้งหมดในระบบ)" : "(แสดงเฉพาะรายการที่อยู่ในสถานะ Stock และไม่มีคำขออื่นค้างอยู่)"}</h3>
         <div class="picker-row">
           <select id="f-assetType">
             <option value="moisturlyzer">MoisturLyzer</option>
@@ -7013,10 +7129,11 @@ function renderIssueView() {
     <div class="issue-step ${step === 3 ? "active" : ""}" data-step="3">
       <div class="form-card">
         <h3>3. ตรวจสอบและส่งคำขอ (<span id="basketCount">${issuanceForm.basket.length}</span> รายการ)</h3>
+        ${renderBackdateSummaryHtml()}
         <div id="basketArea"></div>
         <div id="issueMsg" class="form-msg"></div>
       </div>
-      <div class="step-nav"><button class="btn-secondary" onclick="goToIssueStep(2)">← ย้อนกลับ</button><button class="btn-primary" id="submitIssuanceBtn">ส่งคำขอเบิก (รออนุมัติ)</button></div>
+      <div class="step-nav"><button class="btn-secondary" onclick="goToIssueStep(2)">← ย้อนกลับ</button><button class="btn-primary" id="submitIssuanceBtn">${issueSubmitLabel()}</button></div>
     </div>
   `;
 
@@ -7026,6 +7143,7 @@ function renderIssueView() {
   document.getElementById("f-siteLocation").addEventListener("input", (e) => { issuanceForm.siteLocation = e.target.value; });
   document.getElementById("f-details").addEventListener("input", (e) => { issuanceForm.details = e.target.value; });
   document.getElementById("f-isLoan").addEventListener("change", (e) => { issuanceForm.isLoan = e.target.checked; });
+  bindBackdateFields();
   document.getElementById("f-assetType").addEventListener("change", renderPickerList);
   document.getElementById("f-itemSearch").addEventListener("input", renderPickerList);
   document.getElementById("issueStep1NextBtn").addEventListener("click", () => goToIssueStep(2));
@@ -7034,6 +7152,116 @@ function renderIssueView() {
 
   renderPickerList();
   renderBasket();
+}
+
+// ============================================================
+// บันทึกย้อนหลัง (Admin เท่านั้น) — ย้อนได้ไม่เกิน 365 วัน, ต้องมีเหตุผล, บันทึกแล้ว "อนุมัติทันที"
+// โหมด "ไม่ตัดสต็อก" = ของออกไปนานแล้ว/ไม่อยู่ในสต็อกในระบบ → บันทึกเป็นประวัติอย่างเดียว ไม่แตะสต็อก/อุปกรณ์
+// (เซิร์ฟเวอร์ตรวจสิทธิ์และช่วงวันที่ซ้ำอีกชั้นเสมอ — ดู parseBackdate ใน functions/index.js)
+// ============================================================
+const BACKDATE_MAX_DAYS = 365;
+function bkkTodayIso(offsetDays) {
+  return new Date(Date.now() + 7 * 3600e3 - (offsetDays || 0) * 86400e3).toISOString().slice(0, 10);
+}
+function issueBackdateActive() {
+  return !!(state.user && state.user.role === "Admin" && issuanceForm.backdate && issuanceForm.backdate.enabled);
+}
+function issueNoStockMode() {
+  return issueBackdateActive() && !!issuanceForm.backdate.noStock;
+}
+function issueSubmitLabel() {
+  if (!issueBackdateActive()) return "ส่งคำขอเบิก (รออนุมัติ)";
+  return issueNoStockMode() ? "บันทึกย้อนหลัง (ไม่ตัดสต็อก)" : "บันทึกย้อนหลัง (อนุมัติทันที)";
+}
+function formatThaiDateShort(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!m) return iso || "";
+  const mon = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."][Number(m[2]) - 1];
+  return `${Number(m[3])} ${mon} ${(Number(m[1]) + 543) % 100}`;
+}
+/** คืนข้อความ error (ภาษาไทย) ถ้าข้อมูลบันทึกย้อนหลังยังไม่ครบ/ไม่ถูกต้อง, คืน "" ถ้าผ่าน */
+function validateBackdate() {
+  if (!issueBackdateActive()) return "";
+  const bd = issuanceForm.backdate;
+  if (!bd.date) return "กรุณาเลือกวันที่ของรายการย้อนหลัง";
+  if (bd.date > bkkTodayIso()) return "วันที่ย้อนหลังต้องไม่เกินวันนี้";
+  if (bd.date < bkkTodayIso(BACKDATE_MAX_DAYS)) return `ย้อนหลังได้ไม่เกิน ${BACKDATE_MAX_DAYS} วัน`;
+  if (bd.time && !/^\d{2}:\d{2}$/.test(bd.time)) return "รูปแบบเวลาไม่ถูกต้อง";
+  if (!String(bd.reason || "").trim()) return "กรุณาระบุเหตุผลที่บันทึกย้อนหลัง";
+  return "";
+}
+function renderBackdateFieldHtml() {
+  if (!state.user || state.user.role !== "Admin") {
+    return `<div class="bd-locked">📅 วันที่เบิก: <b>วันนี้</b> <span>(บันทึกย้อนหลังได้เฉพาะ Admin)</span></div>`;
+  }
+  const bd = issuanceForm.backdate || {};
+  return `
+    <div class="bd-box ${bd.enabled ? "on" : ""}">
+      <div class="loan-field">
+        <input type="checkbox" id="f-bdEnabled" ${bd.enabled ? "checked" : ""}>
+        <label for="f-bdEnabled"><strong>📅 บันทึกย้อนหลัง</strong> (Admin) — ใช้กับรายการที่เกิดขึ้นจริงไปแล้วแต่ยังไม่ได้ลงระบบ</label>
+      </div>
+      <div class="bd-fields" ${bd.enabled ? "" : "hidden"}>
+        <div class="form-grid">
+          <div class="form-field">
+            <label>วันที่เกิดรายการจริง *</label>
+            <input type="date" id="f-bdDate" value="${escapeAttr(bd.date || "")}" min="${bkkTodayIso(BACKDATE_MAX_DAYS)}" max="${bkkTodayIso()}">
+            <div class="hint">ย้อนได้ไม่เกิน ${BACKDATE_MAX_DAYS} วัน</div>
+          </div>
+          <div class="form-field">
+            <label>เวลา (ไม่บังคับ)</label>
+            <input type="time" id="f-bdTime" value="${escapeAttr(bd.time || "")}">
+            <div class="hint">ว่างไว้ = 09:00 น.</div>
+          </div>
+        </div>
+        <div class="form-field">
+          <label>เหตุผลที่บันทึกย้อนหลัง *</label>
+          <textarea id="f-bdReason" rows="2" maxlength="500" placeholder="เช่น ส่งของหน้างานไปก่อน ลืมลงระบบ">${escapeHtml(bd.reason || "")}</textarea>
+        </div>
+        <div class="form-field">
+          <label>สต็อกของรายการนี้</label>
+          <div class="bd-modes">
+            <label class="bd-mode"><input type="radio" name="f-bdMode" value="stock" ${bd.noStock ? "" : "checked"}><span><b>ตัดสต็อก</b><small>ของยังอยู่ใน Stock ของระบบ — ระบบจะตัดสต็อก/ย้ายอุปกรณ์ไปที่ลูกค้าให้</small></span></label>
+            <label class="bd-mode"><input type="radio" name="f-bdMode" value="nostock" ${bd.noStock ? "checked" : ""}><span><b>ไม่ตัดสต็อก</b><small>ของออกไปนานแล้ว/ไม่ได้อยู่ใน Stock — บันทึกเป็นประวัติอย่างเดียว</small></span></label>
+          </div>
+        </div>
+        <div class="bd-note">✔ บันทึกแล้วอนุมัติทันที ไม่ต้องรออนุมัติ · ประวัติจะเรียงตามวันที่จริง และขึ้นป้าย “บันทึกย้อนหลัง” พร้อมเวลาที่บันทึกจริง</div>
+      </div>
+    </div>`;
+}
+function bindBackdateFields() {
+  const en = document.getElementById("f-bdEnabled");
+  if (!en) return;
+  if (!issuanceForm.backdate) issuanceForm.backdate = { enabled: false, date: "", time: "", reason: "", noStock: false };
+  const bd = issuanceForm.backdate;
+  en.addEventListener("change", async (e) => {
+    const wasNoStock = issueNoStockMode();
+    if (wasNoStock && !e.target.checked && issuanceForm.basket.length) {
+      const ok = await showConfirm("ปิดบันทึกย้อนหลังแบบไม่ตัดสต็อก จะล้างตะกร้าที่เลือกไว้ (เพราะอาจมีอุปกรณ์ที่ไม่ได้อยู่ใน Stock) ดำเนินการต่อ?", { type: "warning" });
+      if (!ok) { e.target.checked = true; return; }
+      issuanceForm.basket = [];
+    }
+    bd.enabled = e.target.checked;
+    renderIssueView();
+  });
+  const d = document.getElementById("f-bdDate"); if (d) d.addEventListener("change", (e) => { bd.date = e.target.value; });
+  const t = document.getElementById("f-bdTime"); if (t) t.addEventListener("change", (e) => { bd.time = e.target.value; });
+  const r = document.getElementById("f-bdReason"); if (r) r.addEventListener("input", (e) => { bd.reason = e.target.value; });
+  document.querySelectorAll('input[name="f-bdMode"]').forEach((el) => el.addEventListener("change", async (e) => {
+    const next = e.target.value === "nostock";
+    if (next !== !!bd.noStock && issuanceForm.basket.length) {
+      const ok = await showConfirm("เปลี่ยนโหมดสต็อกจะล้างตะกร้าที่เลือกไว้ ดำเนินการต่อ?", { type: "warning" });
+      if (!ok) { renderIssueView(); return; }
+      issuanceForm.basket = [];
+    }
+    bd.noStock = next;
+    renderIssueView();
+  }));
+}
+function renderBackdateSummaryHtml() {
+  if (!issueBackdateActive()) return "";
+  const bd = issuanceForm.backdate;
+  return `<div class="bd-summary">📅 <b>บันทึกย้อนหลัง</b> วันที่ ${escapeHtml(formatThaiDateShort(bd.date))}${bd.time ? " " + escapeHtml(bd.time) + " น." : ""} · ${bd.noStock ? "ไม่ตัดสต็อก" : "ตัดสต็อก"} · อนุมัติทันที<br><span>เหตุผล: ${escapeHtml(bd.reason || "-")}</span></div>`;
 }
 
 /** แถบสถานะขั้นตอนบนสุดของหน้าเบิก — คลิกย้อนกลับขั้นก่อนหน้าได้เสมอ ไปข้างหน้าได้เฉพาะขั้นที่ผ่านการตรวจสอบแล้ว */
@@ -7073,11 +7301,17 @@ function goToIssueStep(target) {
 
 function validateIssueStep1(showError) {
   const ok = issuanceForm.customerName.trim() && issuanceForm.siteLocation.trim();
+  const msg = document.getElementById("issueStep1Msg");
   if (!ok && showError) {
-    const msg = document.getElementById("issueStep1Msg");
     if (msg) { msg.className = "form-msg error"; msg.textContent = "กรุณากรอกชื่อลูกค้าและสถานที่ติดตั้งก่อนไปขั้นตอนถัดไป"; }
   }
-  return !!ok;
+  if (!ok) return false;
+  const bdErr = validateBackdate();
+  if (bdErr) {
+    if (showError && msg) { msg.className = "form-msg error"; msg.textContent = bdErr; }
+    return false;
+  }
+  return true;
 }
 
 /** หน้าจอ "สำเร็จ" เต็มการ์ด — โชว์แทนฟอร์มหลังส่งคำขอเบิกสำเร็จ (หรือบันทึกคิวไว้ตอนออฟไลน์) ดู issueSuccessInfo ด้านบน */
@@ -7085,16 +7319,20 @@ function renderIssueSuccessHtml(info) {
   return `
     <div class="form-card issue-success">
       <div class="issue-success-check">${info.offline ? "🔄" : "✓"}</div>
-      <h3 style="text-align:center;">${info.offline ? "บันทึกคำขอไว้ในเครื่องแล้ว" : "ส่งคำขอเบิกเรียบร้อยแล้ว"}</h3>
+      <h3 style="text-align:center;">${info.offline ? "บันทึกคำขอไว้ในเครื่องแล้ว" : info.backdate ? (info.backdate.autoApproved ? "บันทึกย้อนหลังเรียบร้อยแล้ว" : "บันทึกย้อนหลังแล้ว แต่ยังอนุมัติไม่สำเร็จ") : "ส่งคำขอเบิกเรียบร้อยแล้ว"}</h3>
       <p style="text-align:center; color:var(--gray); font-size:13px;">
         ${info.offline
           ? "ขณะนี้ออฟไลน์ — ระบบจะส่งคำขอนี้ให้อัตโนมัติทันทีที่กลับมาออนไลน์"
-          : `คำขอถูกส่งไปรออนุมัติจาก Admin แล้ว (เลขที่ธุรกรรม ${escapeHtml(info.transactionId || "-")})`}
+          : info.backdate
+            ? (info.backdate.autoApproved
+              ? `วันที่ ${escapeHtml(formatThaiDateShort(info.backdate.date))} · ${info.backdate.noStock ? "ไม่ตัดสต็อก" : "ตัดสต็อกแล้ว"} · อนุมัติแล้ว (เลขที่ธุรกรรม ${escapeHtml(info.transactionId || "-")})`
+              : `รายการอยู่ในสถานะ “รออนุมัติ” — ไปที่หน้าอนุมัติเพื่อตรวจสอบ${info.backdate.conflicts.length ? ": " + escapeHtml(info.backdate.conflicts.join(", ")) : ""}`)
+            : `คำขอถูกส่งไปรออนุมัติจาก Admin แล้ว (เลขที่ธุรกรรม ${escapeHtml(info.transactionId || "-")})`}
       </p>
       <div class="issue-success-summary">
         <div><b>ลูกค้า:</b> ${escapeHtml(info.customerName)}${info.siteLocation ? " — " + escapeHtml(info.siteLocation) : ""}</div>
         <div><b>อุปกรณ์:</b> ${info.itemCount} รายการ</div>
-        ${!info.offline ? `<div><b>สถานะ:</b> รออนุมัติ</div>` : ""}
+        ${!info.offline ? `<div><b>สถานะ:</b> ${info.backdate && info.backdate.autoApproved ? "อนุมัติแล้ว (บันทึกย้อนหลัง)" : "รออนุมัติ"}</div>` : ""}
       </div>
       <button class="btn-primary" style="width:100%;" onclick="startNewIssuance()">+ เบิกรายการใหม่</button>
     </div>`;
@@ -7237,7 +7475,7 @@ function renderPickerList() {
     const search = searchInput.value;
     const items = getAvailablePanolyzerItems(search);
     if (!items.length) {
-      listEl.innerHTML = `<div class="picker-empty">ไม่พบเครื่อง Panolyzer ที่พร้อมเบิก (สถานะ Stock)</div>`;
+      listEl.innerHTML = `<div class="picker-empty">${issueNoStockMode() ? "ไม่พบเครื่อง Panolyzer ในระบบ" : "ไม่พบเครื่อง Panolyzer ที่พร้อมเบิก (สถานะ Stock)"}</div>`;
       return;
     }
     listEl.innerHTML = items.slice(0, 50).map((row) => {
@@ -7301,9 +7539,9 @@ function renderPickerList() {
       const inputId = "qty-input-" + escapeAttr(p.PartID);
       return `
         <div class="picker-list-item">
-          <span>${escapeHtml(p.PartName)} <span class="cache-note">(คงเหลือให้เบิก ${it.available} ชิ้น — นับจำนวน ไม่มี S/N)</span>${p.PartDetail ? `<div class="cache-note picker-detail part-detail-clamp">${escapeHtml(p.PartDetail)}</div>` : ""}</span>
+          <span>${escapeHtml(p.PartName)} <span class="cache-note">(${issueNoStockMode() ? "บันทึกย้อนหลัง ไม่ตัดสต็อก" : `คงเหลือให้เบิก ${it.available} ชิ้น`} — นับจำนวน ไม่มี S/N)</span>${p.PartDetail ? `<div class="cache-note picker-detail part-detail-clamp">${escapeHtml(p.PartDetail)}</div>` : ""}</span>
           <span class="picker-qty-controls">
-            <input type="number" id="${inputId}" class="qty-input-sm" min="1" max="${it.available}" value="1">
+            <input type="number" id="${inputId}" class="qty-input-sm" min="1" ${issueNoStockMode() ? "" : `max="${it.available}"`} value="1">
             <button class="btn-sm btn-add" onclick="addQtyToBasket('${assetKey}', '${escapeAttr(p.PartID)}', document.getElementById('${inputId}').value)">+ เพิ่ม</button>
           </span>
         </div>`;
@@ -7371,7 +7609,7 @@ function getAvailablePartsCombined(assetKey, search) {
       const available = (Number(p.QuantityInStock) || 0) - reserved;
       return { kind: "qty", part: p, available };
     })
-    .filter((q) => q.available > 0)
+    .filter((q) => issueNoStockMode() || q.available > 0)
     .filter((q) => !s || q.part.PartName.toLowerCase().includes(s) || String(q.part.PartDetail || "").toLowerCase().includes(s));
 
   return [...unitItems, ...qtyItems];
@@ -8256,6 +8494,17 @@ async function submitIssuanceRequest() {
     isLoan: !!issuanceForm.isLoan,
     issuedByOverride: issuanceForm.issuedByOverride || "",
   };
+  // บันทึกย้อนหลัง (Admin) — ต้องออนไลน์เท่านั้น (อนุมัติทันทีฝั่งเซิร์ฟเวอร์)
+  const isBackdate = issueBackdateActive();
+  if (isBackdate) {
+    const bdErr = validateBackdate();
+    if (bdErr) { msg.className = "form-msg error"; msg.textContent = bdErr; return; }
+    if (!navigator.onLine) { msg.className = "form-msg error"; msg.textContent = "บันทึกย้อนหลังต้องเชื่อมต่ออินเทอร์เน็ต"; return; }
+    const bd = issuanceForm.backdate;
+    payload.backdate = { date: bd.date, time: bd.time || "", reason: String(bd.reason || "").trim(), noStock: !!bd.noStock };
+    const ok = await showConfirm(`ยืนยันบันทึกย้อนหลัง วันที่ ${formatThaiDateShort(bd.date)}${bd.time ? " " + bd.time + " น." : ""} (${bd.noStock ? "ไม่ตัดสต็อก" : "ตัดสต็อก"})? รายการนี้จะอนุมัติทันที`, { title: "บันทึกย้อนหลัง" });
+    if (!ok) return;
+  }
 
   // ฟีเจอร์ "เลือกผู้เบิกแทน" — ถ้า Admin เลือกคนอื่นเป็นผู้เบิก ให้ยืนยันอีกครั้งก่อนส่งจริง กันกดเลือกผิดคน
   if (payload.issuedByOverride) {
@@ -8278,7 +8527,7 @@ async function submitIssuanceRequest() {
     return;
   }
 
-  btn.disabled = true; btn.textContent = "กำลังส่งคำขอ...";
+  btn.disabled = true; btn.textContent = isBackdate ? "กำลังบันทึก..." : "กำลังส่งคำขอ...";
   try {
     const res = await apiPost({ action: "requestIssuance", token: state.token, payload });
 
@@ -8289,6 +8538,9 @@ async function submitIssuanceRequest() {
     }
 
     issueSuccessInfo = { offline: false, transactionId: res.transactionId, customerName: payload.customerName, siteLocation: payload.siteLocation, itemCount: issuanceForm.basket.length };
+    if (isBackdate) {
+      issueSuccessInfo.backdate = { date: payload.backdate.date, noStock: payload.backdate.noStock, autoApproved: res.autoApproved !== false, approveError: res.approveError, conflicts: res.conflicts || [] };
+    }
     issuanceForm = { customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 };
     await refreshInBackground(true);
     renderIssueView(); // แสดงหน้าจอ "สำเร็จ" (renderIssueSuccessHtml) แทนฟอร์มว่าง — ดู issueSuccessInfo ด้านบน
@@ -8297,7 +8549,7 @@ async function submitIssuanceRequest() {
     msg.className = "form-msg error";
     msg.textContent = err.message || "ส่งคำขอไม่สำเร็จ";
   } finally {
-    btn.disabled = false; btn.textContent = "ส่งคำขอเบิก (รออนุมัติ)";
+    btn.disabled = false; btn.textContent = issueSubmitLabel();
   }
 }
 
@@ -8325,6 +8577,11 @@ function persistCache() {
 
 function issuanceErrorMessage(code) {
   switch (code) {
+    case "forbidden_backdate": return "บันทึกย้อนหลังได้เฉพาะ Admin";
+    case "backdate_too_old": return "ย้อนหลังได้ไม่เกิน 365 วัน";
+    case "backdate_in_future": return "วันที่ย้อนหลังต้องไม่เกินวันนี้";
+    case "backdate_reason_required": return "กรุณาระบุเหตุผลที่บันทึกย้อนหลัง";
+    case "invalid_backdate": return "วันที่/เวลาย้อนหลังไม่ถูกต้อง";
     case "missing_fields": return "กรอกข้อมูลไม่ครบ";
     case "item_conflict": return "มีรายการที่เบิกไม่ได้แล้ว";
     default: return "ส่งคำขอไม่สำเร็จ กรุณาลองใหม่";
@@ -8911,6 +9168,15 @@ async function rejectTxn(transactionId, btnEl) {
 }
 
 async function returnTxn(transactionId, btnEl) {
+  const log = (state.data.issuanceLog || []).find((l) => l.TransactionID === transactionId);
+  // บันทึกย้อนหลังแบบไม่ตัดสต็อก — ตอนบันทึกไม่ได้ตัดสต็อก จึงให้ Admin เลือกว่าจะนำของกลับเข้า Stock จริงหรือแค่ปิดรายการ
+  if (log && log.StockMode === "NOSTOCK") {
+    const confirmed = await showConfirm("ยืนยันคืนของสำหรับรายการบันทึกย้อนหลังนี้?", { title: "คืนของ" });
+    if (!confirmed) return;
+    const restock = await showConfirm("รายการนี้บันทึกแบบ “ไม่ตัดสต็อก” — ต้องการนำอุปกรณ์กลับเข้า Stock ของระบบด้วยไหม? (ถ้าไม่ ระบบจะแค่ปิดรายการเป็น “คืนแล้ว” โดยไม่แตะสต็อก)", { type: "warning", title: "นำเข้า Stock?", okText: "คืนเข้า Stock", cancelText: "ไม่ต้อง ปิดรายการอย่างเดียว" });
+    await runTxnAction("returnTransaction", transactionId, btnEl, "กำลังคืนของ...", null, { restock: restock === true });
+    return;
+  }
   const confirmed = await showConfirm("ยืนยันคืนของสำหรับธุรกรรมนี้? อุปกรณ์ทั้งหมดในธุรกรรมจะกลับเป็นสถานะ Stock");
   if (!confirmed) return;
   await runTxnAction("returnTransaction", transactionId, btnEl, "กำลังคืนของ...");
@@ -8925,6 +9191,8 @@ async function cancelTxn(transactionId, btnEl) {
     warnText = `ยืนยันยกเลิกการย้ายนี้? อุปกรณ์จะถูกย้ายกลับไปหาลูกค้าเดิม "${log.FromCustomer || "-"}" (${log.FromLocation || "-"}) ทันที`;
   } else if (log && log.MovementType === "Claim") {
     warnText = `ยืนยันยกเลิกการเคลมนี้? เครื่องที่เคลมออกไปจะกลับมาเป็น "เบิกอยู่" ให้ลูกค้าเดิมทันที${log.ReplacementSerial ? " และเครื่องทดแทนจะถูกดึงกลับเข้า Stock" : ""}`;
+  } else if (log && log.StockMode === "NOSTOCK") {
+    warnText = "ยืนยันยกเลิกรายการบันทึกย้อนหลังนี้? (บันทึกแบบไม่ตัดสต็อก — ระบบจะไม่แตะสต็อก/อุปกรณ์ใดๆ แค่เปลี่ยนสถานะเป็นยกเลิก)";
   } else {
     warnText = "ยืนยันยกเลิกรายการเบิกนี้? อุปกรณ์ทั้งหมดในรายการจะกลับเป็นสถานะ Stock ทันที (คล้ายกับปุ่ม \"คืนของ\" แต่บันทึกในประวัติว่าเป็นการยกเลิก ไม่ใช่การคืนของ)";
   }
@@ -8933,11 +9201,11 @@ async function cancelTxn(transactionId, btnEl) {
   await runTxnAction("cancelTransaction", transactionId, btnEl, "กำลังยกเลิก...", cancelTransactionErrorMessage);
 }
 
-async function runTxnAction(action, transactionId, btnEl, loadingText, errorMapper) {
+async function runTxnAction(action, transactionId, btnEl, loadingText, errorMapper, extra) {
   const originalText = btnEl ? btnEl.textContent : "";
   if (btnEl) { btnEl.disabled = true; btnEl.textContent = loadingText; }
   try {
-    const res = await apiPost({ action, token: state.token, transactionId });
+    const res = await apiPost(Object.assign({ action, token: state.token, transactionId }, extra || {}));
     if (!res.ok) {
       if (res.error === "unauthorized") return handleUnauthorized();
       const conflictMsg = res.conflicts ? "\n" + res.conflicts.join("\n") : "";
@@ -8974,11 +9242,14 @@ function renderHistoryView() {
   content.innerHTML = `
     <div class="controls-row">
       <input type="text" id="historySearch" placeholder="ค้นหาชื่อลูกค้า, เลขที่ธุรกรรม, ผู้เบิก...">
+      ${logs.some((l) => l.Backdated) ? `<select id="historyKindFilter"><option value="all">-- ทุกรายการ --</option><option value="backdated">📅 เฉพาะบันทึกย้อนหลัง</option></select>` : ""}
     </div>
     <div id="historyBulkBar"></div>
     <div id="historyList"></div>
   `;
   document.getElementById("historySearch").addEventListener("input", () => renderHistoryList(logs, isAdmin, statusLabel));
+  const kindEl = document.getElementById("historyKindFilter");
+  if (kindEl) kindEl.addEventListener("change", () => renderHistoryList(logs, isAdmin, statusLabel));
   renderHistoryList(logs, isAdmin, statusLabel);
 }
 
@@ -8987,9 +9258,11 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
   const listEl = document.getElementById("historyList");
   const bulkBarEl = document.getElementById("historyBulkBar");
 
-  const filtered = logs.filter((txn) => !search ||
+  const kindEl = document.getElementById("historyKindFilter");
+  const onlyBackdated = !!(kindEl && kindEl.value === "backdated");
+  const filtered = logs.filter((txn) => (!onlyBackdated || txn.Backdated) && (!search ||
     [txn.CustomerName, txn.TransactionID, txn.IssuedBy, txn.SiteLocation].some((v) => String(v || "").toLowerCase().includes(search))
-  );
+  ));
 
   bulkSelection.clear();
 
@@ -9036,8 +9309,9 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
     // เส้นเวลา: รวมทุกเหตุการณ์ (ขอเบิก/อนุมัติ/คืนของ/ยกเลิก) เรียงตามลำดับเวลาจริง แทนที่จะกระจายเป็นบรรทัดข้อความเดี่ยวๆ
     const timelineRows = [
       `<div class="timeline-row"><span class="timeline-dot"></span>ขอเบิกโดย <b>${escapeHtml(requesterName)}</b>${via ? ` (${escapeHtml(via)})` : ""} — ${formatDateTh(txn.Timestamp)}</div>`,
+      txn.Backdated ? `<div class="timeline-row bd-tl"><span class="timeline-dot" style="background:#8a5a12;"></span>📅 บันทึกย้อนหลังเมื่อ ${formatDateTh(txn.RecordedAt)} · ${txn.StockMode === "NOSTOCK" ? "ไม่ตัดสต็อก" : "ตัดสต็อก"}${txn.BackdateReason ? ` — เหตุผล: ${escapeHtml(txn.BackdateReason)}` : ""}</div>` : "",
       txn.ApprovedBy ? `<div class="timeline-row"><span class="timeline-dot"></span>ดำเนินการโดย <b>${escapeHtml(txn.ApprovedBy)}</b> — ${formatDateTh(txn.ApprovedAt)}</div>` : "",
-      txn.ReturnedAt ? `<div class="timeline-row"><span class="timeline-dot" style="background:var(--info);"></span>คืนของเมื่อ ${formatDateTh(txn.ReturnedAt)}</div>` : "",
+      txn.ReturnedAt ? `<div class="timeline-row"><span class="timeline-dot" style="background:var(--info);"></span>คืนของเมื่อ ${formatDateTh(txn.ReturnedAt)}${txn.StockMode === "NOSTOCK" ? (txn.ReturnRestocked ? " (นำกลับเข้า Stock)" : " (ปิดรายการ ไม่แตะสต็อก)") : ""}</div>` : "",
       txn.CancelledAt ? `<div class="timeline-row"><span class="timeline-dot" style="background:var(--gray);"></span>ยกเลิกโดย <b>${escapeHtml(txn.CancelledBy)}</b> — ${formatDateTh(txn.CancelledAt)}</div>` : "",
     ].filter(Boolean).join("");
     return `
@@ -9062,6 +9336,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
             ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
             ${txn.MovementType === "Transfer" ? `<span class="status-badge status-transfer">ย้าย</span>` : ""}
             ${txn.MovementType === "Claim" ? `<span class="status-badge status-claim">เคลม</span>` : ""}
+            ${txn.Backdated ? `<span class="status-badge status-backdate" title="${escapeAttr("บันทึกเมื่อ " + formatDateTh(txn.RecordedAt))}">📅 บันทึกย้อนหลัง</span>` : ""}
           </div>
           <div class="a-actions">
             ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}

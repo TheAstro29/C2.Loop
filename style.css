@@ -1788,3 +1788,25 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .spec-preview { margin-top: 8px; }
 .spec-preview-lbl { font-size: 12px; color: var(--gray); font-weight: 600; }
 .spec-preview .part-spec { margin-top: 4px; }
+
+/* ===== บันทึกย้อนหลัง (Admin) + เพิ่มเครื่อง ===== */
+.bd-box { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--border); border-radius: var(--radius); background: #fafbfa; }
+.bd-box.on { border-style: solid; border-color: #e7c98a; background: #fffaf0; }
+.bd-fields { margin-top: 12px; }
+.bd-fields[hidden] { display: none; }
+.bd-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form-field .bd-mode { display: flex; margin: 0; font-size: 13px; color: var(--text); }
+.bd-mode { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fff; cursor: pointer; }
+.form-field .bd-mode input { width: auto; padding: 0; }
+.bd-mode input { margin-top: 3px; accent-color: var(--green); flex-shrink: 0; }
+.bd-mode span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.bd-mode small { color: var(--gray); font-size: 11.5px; line-height: 1.4; }
+.bd-mode:has(input:checked) { border-color: var(--green); background: var(--green-light); }
+.bd-note { margin-top: 10px; font-size: 12px; color: #8a5a12; background: #fdf1de; border-radius: 8px; padding: 8px 10px; }
+.bd-locked { margin-top: 12px; font-size: 13px; color: var(--text); background: #f4f6f5; border-radius: 10px; padding: 10px 12px; }
+.bd-locked span { color: var(--gray); font-size: 12px; }
+.bd-summary { margin: 0 0 12px; font-size: 13px; background: #fdf1de; color: #6b4510; border-radius: 10px; padding: 10px 12px; line-height: 1.6; }
+.bd-summary span { color: var(--gray); font-size: 12px; }
+.status-backdate { background: #fdf1de; color: #8a5a12; margin-left: 6px; text-transform: none; }
+.timeline-row.bd-tl { color: #8a5a12; }
+@media (max-width: 640px) { .bd-modes { grid-template-columns: 1fr; } }
