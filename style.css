@@ -1810,3 +1810,38 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .status-backdate { background: #fdf1de; color: #8a5a12; margin-left: 6px; text-transform: none; }
 .timeline-row.bd-tl { color: #8a5a12; }
 @media (max-width: 640px) { .bd-modes { grid-template-columns: 1fr; } }
+
+/* ===== ฟอร์มเพิ่มเครื่อง (Panolyzer / Color Sorter) ===== */
+#genericFormModal .image-modal.am-modal { max-width: 520px; }
+.am-modal .image-modal-body { text-align: left; }
+.am-modal .image-modal-head h3 { color: var(--green-dark); }
+.am-form { display: flex; flex-direction: column; gap: 12px; }
+.am-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.am-f > label { font-size: 12.5px; color: #4b5563; font-weight: 500; }
+.am-f > label b { color: var(--danger); }
+.am-muted { color: #9aa3a0; font-weight: 400; }
+.am-f input[type="text"], .am-f input[type="date"], .am-f select, .am-f textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid #d9dfdc; border-radius: 9px; font-size: 14px; font-family: inherit; background: #fff; color: var(--text); min-height: 42px; }
+.am-f textarea { resize: vertical; min-height: 60px; }
+.am-f input:focus, .am-f select:focus, .am-f textarea:focus { outline: 2px solid var(--green-light); border-color: var(--green); }
+.am-other { margin-top: 6px; }
+.am-other[hidden] { display: none; }
+.am-static { padding: 10px 12px; border: 1px solid #d9dfdc; border-radius: 9px; background: #f6f7f6; font-size: 14px; min-height: 42px; color: var(--text); }
+.am-g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.am-hint { font-size: 11.5px; color: var(--gray); line-height: 1.45; min-height: 0; }
+.am-hint.good { color: var(--ok); }
+.am-hint.bad { color: var(--danger); }
+.am-hint-top { margin-top: -6px; }
+.am-seg { display: flex; gap: 6px; }
+.am-seg label { flex: 1; text-align: center; border: 1.5px solid var(--border); border-radius: 10px; padding: 9px 4px; font-weight: 700; font-size: 13px; background: #fff; cursor: pointer; color: var(--text); }
+.am-seg label.on { border-color: var(--green); background: var(--green-light); color: var(--green-dark); }
+.am-seg label small { display: block; font-weight: 500; color: var(--gray); font-size: 11px; }
+.am-seg input { position: absolute; opacity: 0; pointer-events: none; }
+.am-seg label:focus-within { outline: 2px solid var(--green); outline-offset: 1px; }
+.am-info { background: #eaf1ff; color: #1e40af; border-radius: 10px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; }
+.am-chk { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text); cursor: pointer; }
+.am-chk input { width: 18px; height: 18px; accent-color: var(--green); margin: 0; flex: none; }
+.am-modal .image-modal-actions { display: flex; }
+.am-modal .image-modal-actions .btn-secondary { display: none; }
+.am-modal .image-modal-actions .btn-primary { flex: 1; min-height: 46px; }
+@media (max-width: 480px) { .am-g2 { grid-template-columns: 1fr; } }

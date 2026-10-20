@@ -3498,66 +3498,157 @@ function openAddMachineForm(type, preset) {
   if (state.user.role !== "Admin") return;
   const ui = ADD_MACHINE_UI[type];
   preset = preset || {};
+  const isPano = type === "panolyzer";
   const rows = state.data[ui.dataKey] || [];
   // รุ่นที่มีอยู่จริงในชีต (เผื่อมีรุ่นใหม่ที่ไม่อยู่ในรายการตั้งต้น)
   const models = Array.from(new Set(ui.models.concat(rows.map((r) => String(r.Model || "").trim()).filter(Boolean))));
   const presetModel = preset.Model || "";
   const modelIsListed = !presetModel || models.includes(presetModel);
-  const modelOptions = [{ value: "", label: "-- เลือก Model --" }]
-    .concat(models.map((m) => ({ value: m, label: m })))
-    .concat([{ value: ADD_MACHINE_OTHER, label: "อื่นๆ (พิมพ์เอง)" }]);
+  const modelSel = modelIsListed ? presetModel : ADD_MACHINE_OTHER;
+  const modes = isPano ? Array.from(new Set(rows.map((r) => String(r.Mode || "").trim()).filter(Boolean))) : [];
+  const typeVal = preset.Type === "RT" ? "RT" : "L";
+  const esc = escapeHtml, attr = escapeAttr;
 
-  let fields;
-  if (type === "panolyzer") {
-    const modes = Array.from(new Set(rows.map((r) => String(r.Mode || "").trim()).filter(Boolean)));
-    fields = [
-      { key: "S/N Analyzer", label: "S/N Analyzer *", value: "" },
-      { key: "Type", label: "ประเภท", type: "select", plain: true, value: preset.Type || "L", options: [{ value: "L", label: "L — Lab (ตั้งโต๊ะ)" }, { value: "RT", label: "RT — Real-time (ออนไลน์)" }] },
-      { key: "Model", label: "Model *", type: "select", plain: true, value: modelIsListed ? presetModel : ADD_MACHINE_OTHER, options: modelOptions },
-      { key: "_modelOther", label: "Model (กรณีเลือก อื่นๆ)", value: modelIsListed ? "" : presetModel },
-      { key: "Mode", label: "Mode", value: preset.Mode || "", hint: modes.length ? "ที่มีในระบบ: " + modes.join(", ") : "" },
-      { key: "S/N Edge server", label: "S/N Edge server", value: "" },
-      { key: "Remark", label: "หมายเหตุ", type: "textarea", rows: 2, value: "" },
-    ];
-  } else {
-    fields = [
-      { key: "S/N Sorter", label: "S/N Sorter *", value: "" },
-      { key: "Model", label: "Model *", type: "select", plain: true, value: modelIsListed ? presetModel : ADD_MACHINE_OTHER, options: modelOptions },
-      { key: "_modelOther", label: "Model (กรณีเลือก อื่นๆ)", value: modelIsListed ? "" : presetModel },
-      { key: "Model code", label: "Model code", value: preset["Model code"] || "" },
-      { key: "Firmware", label: "Firmware", value: preset.Firmware || "" },
-      { key: "Remark", label: "หมายเหตุ", type: "textarea", rows: 2, value: "" },
-    ];
-  }
+  const modelField = `
+    <div class="am-f">
+      <label for="am-model">Model <b>*</b></label>
+      <select id="am-model">
+        <option value="">-- เลือก Model --</option>
+        ${models.map((m) => `<option value="${attr(m)}" ${m === modelSel ? "selected" : ""}>${esc(m)}</option>`).join("")}
+        <option value="${ADD_MACHINE_OTHER}" ${modelSel === ADD_MACHINE_OTHER ? "selected" : ""}>อื่นๆ (พิมพ์เอง)</option>
+      </select>
+      <input type="text" id="am-modelOther" class="am-other" placeholder="พิมพ์ชื่อ Model" value="${attr(modelIsListed ? "" : presetModel)}" ${modelSel === ADD_MACHINE_OTHER ? "" : "hidden"}>
+    </div>`;
+  const dateStatus = `
+    <div class="am-g2">
+      <div class="am-f"><label for="am-received">วันที่รับเข้าคลัง</label><input type="date" id="am-received" value="${bkkTodayIso()}" max="${bkkTodayIso()}"></div>
+      <div class="am-f"><label>สถานะเริ่มต้น</label><div class="am-static">Stock (พร้อมเบิก)</div></div>
+    </div>`;
 
-  openGenericFormModal(ui.title, fields, async (values) => {
-    const msgEl = document.getElementById("genericFormModalMsg");
-    const showErr = (t) => { msgEl.className = "form-msg error"; msgEl.textContent = t; };
-    const v = {};
-    fields.forEach((f, i) => { v[f.key] = String(values[i] || "").trim(); });
-    if (v.Model === ADD_MACHINE_OTHER) v.Model = v._modelOther;
-    delete v._modelOther;
-    const sn = v[ui.snField];
+  const body = isPano ? `
+    <div class="am-f">
+      <label for="am-sn">S/N Analyzer <b>*</b></label>
+      <input type="text" id="am-sn" autocomplete="off" placeholder="เช่น PA2-2610-031">
+      <div class="am-hint" id="am-snHint"></div>
+    </div>
+    <div class="am-f">
+      <label>ประเภท <b>*</b></label>
+      <div class="am-seg" role="radiogroup">
+        <label class="${typeVal === "L" ? "on" : ""}"><input type="radio" name="am-type" value="L" ${typeVal === "L" ? "checked" : ""}>Lab<small>L · ตั้งโต๊ะ</small></label>
+        <label class="${typeVal === "RT" ? "on" : ""}"><input type="radio" name="am-type" value="RT" ${typeVal === "RT" ? "checked" : ""}>Real-time<small>RT · ออนไลน์</small></label>
+      </div>
+    </div>
+    <div class="am-g2">
+      ${modelField}
+      <div class="am-f">
+        <label for="am-mode">Mode</label>
+        <input type="text" id="am-mode" list="am-modeList" placeholder="เช่น Milled rice" value="${attr(preset.Mode || "")}">
+        <datalist id="am-modeList">${modes.map((m) => `<option value="${attr(m)}">`).join("")}</datalist>
+      </div>
+    </div>
+    <div class="am-f">
+      <label for="am-edge">S/N Edge server <span class="am-muted">(เฉพาะ RT)</span></label>
+      <input type="text" id="am-edge" placeholder="ถ้ามี">
+    </div>
+    ${dateStatus}
+    <div class="am-f"><label for="am-remark">หมายเหตุ</label><textarea id="am-remark" rows="2" placeholder="ล็อตที่มา / เลขใบขน ฯลฯ"></textarea></div>
+    <label class="am-chk"><input type="checkbox" id="am-next" ${preset._next ? "checked" : ""}>เพิ่มเครื่องถัดไปต่อ (จำ ประเภท/Model ไว้)</label>` : `
+    <div class="am-f">
+      <label for="am-sn">S/N Sorter <b>*</b></label>
+      <input type="text" id="am-sn" autocomplete="off" placeholder="เช่น MS-M8-261004">
+      <div class="am-hint" id="am-snHint"></div>
+    </div>
+    ${modelField.replace('</select>', '</select>').replace('<input type="text" id="am-modelOther"', '<input type="text" id="am-modelOther"')}
+    <div class="am-hint am-hint-top">ตัวเลือก: Master6 · Master8 · Master10 · Master12 · 240/360/480/600 DREAM AI · DREAM MAX AI · อื่นๆ (พิมพ์เอง)</div>
+    <div class="am-g2">
+      <div class="am-f"><label for="am-code">Model code</label><input type="text" id="am-code" placeholder="ถ้ามี" value="${attr(preset["Model code"] || "")}"></div>
+      <div class="am-f"><label for="am-fw">Firmware</label><input type="text" id="am-fw" placeholder="ถ้ามี" value="${attr(preset.Firmware || "")}"></div>
+    </div>
+    ${dateStatus}
+    <div class="am-f"><label for="am-remark">หมายเหตุ</label><textarea id="am-remark" rows="2"></textarea></div>
+    <div class="am-info">บันทึกลงแท็บ Sorter_Data ของ Google Sheet เดียวกับ Panolyzer Management (ข้อมูลอยู่ที่เดียว ไม่ซ้ำซ้อน) แล้วซิงค์เข้า C2-Loop ทันที</div>
+    <label class="am-chk"><input type="checkbox" id="am-next" ${preset._next ? "checked" : ""}>เพิ่มเครื่องถัดไปต่อ (จำ Model ไว้)</label>`;
+
+  const modalBox = document.querySelector("#genericFormModal .image-modal");
+  if (modalBox) { modalBox.classList.remove("gfm-wide"); modalBox.classList.add("am-modal"); }
+  document.getElementById("genericFormModalTitle").textContent = "＋ " + ui.title;
+  document.getElementById("genericFormModalBody").innerHTML = `<div class="am-form">${body}</div>`;
+  const msgEl = document.getElementById("genericFormModalMsg");
+  msgEl.className = "form-msg"; msgEl.textContent = "";
+  const showErr = (t) => { msgEl.className = "form-msg error"; msgEl.textContent = t; };
+
+  // ตรวจ S/N ซ้ำทันทีที่พิมพ์
+  const snEl = document.getElementById("am-sn");
+  const hintEl = document.getElementById("am-snHint");
+  const findDup = (sn) => rows.find((r) => String(r[ui.snField] || "").trim().toLowerCase() === sn.toLowerCase());
+  snEl.addEventListener("input", () => {
+    const sn = snEl.value.trim();
+    if (!sn) { hintEl.textContent = ""; hintEl.className = "am-hint"; return; }
+    const dup = findDup(sn);
+    hintEl.className = "am-hint " + (dup ? "bad" : "good");
+    hintEl.textContent = dup ? `✕ มี S/N นี้ในระบบแล้ว (สถานะ: ${dup.Status || "-"})` : "✓ ยังไม่มี S/N นี้ในระบบ";
+  });
+  const modelEl = document.getElementById("am-model");
+  const otherEl = document.getElementById("am-modelOther");
+  modelEl.addEventListener("change", () => { otherEl.hidden = modelEl.value !== ADD_MACHINE_OTHER; if (!otherEl.hidden) otherEl.focus(); });
+  document.querySelectorAll('input[name="am-type"]').forEach((r) => r.addEventListener("change", () => {
+    document.querySelectorAll(".am-seg label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+  }));
+
+  const saveBtn = document.getElementById("genericFormSaveBtn");
+  const saveText = isPano ? "บันทึกเข้า Panolyzer Management" : "บันทึกเครื่อง";
+  saveBtn.textContent = saveText;
+  saveBtn.onclick = async () => {
+    const val = (id) => { const el = document.getElementById(id); return el ? String(el.value || "").trim() : ""; };
+    const sn = val("am-sn");
+    let model = val("am-model");
+    if (model === ADD_MACHINE_OTHER) model = val("am-modelOther");
     if (!sn) return showErr(`กรุณากรอก ${ui.snField}`);
-    if (!v.Model) return showErr("กรุณาเลือกหรือพิมพ์ Model");
-    // กันซ้ำฝั่งหน้าเว็บก่อน (เซิร์ฟเวอร์และชีตเช็คซ้ำอีกชั้น)
-    const dup = rows.find((r) => String(r[ui.snField] || "").trim().toLowerCase() === sn.toLowerCase());
+    if (!model) return showErr("กรุณาเลือกหรือพิมพ์ Model");
+    const dup = findDup(sn);
     if (dup) return showErr(`มีเครื่อง S/N ${sn} อยู่ในระบบแล้ว (สถานะ: ${dup.Status || "-"})`);
+    const received = val("am-received");
+    if (received && received > bkkTodayIso()) return showErr("วันที่รับเข้าคลังต้องไม่เกินวันนี้");
 
-    const data = {};
-    Object.keys(v).forEach((k) => { if (v[k]) data[k] = v[k]; });
-    const res = await apiPost({ action: "addMachine", token: state.token, machineType: type, data });
+    const data = { [ui.snField]: sn, Model: model };
+    if (isPano) {
+      const t = document.querySelector('input[name="am-type"]:checked');
+      data.Type = t ? t.value : "L";
+      if (val("am-mode")) data.Mode = val("am-mode");
+      if (val("am-edge")) data["S/N Edge server"] = val("am-edge");
+    } else {
+      if (val("am-code")) data["Model code"] = val("am-code");
+      if (val("am-fw")) data.Firmware = val("am-fw");
+    }
+    if (val("am-remark")) data.Remark = val("am-remark");
+    if (received) data["Received date"] = received;
+    const addNext = !!(document.getElementById("am-next") || {}).checked;
+
+    saveBtn.disabled = true; saveBtn.textContent = "กำลังบันทึก...";
+    let res;
+    try {
+      res = await apiPost({ action: "addMachine", token: state.token, machineType: type, data });
+    } finally {
+      saveBtn.disabled = false; saveBtn.textContent = saveText;
+    }
     if (!res.ok) {
       if (res.error === "unauthorized") { closeGenericFormModal(); return handleUnauthorized(); }
       return showErr(addMachineErrorText(res));
     }
-    closeGenericFormModal();
-    const again = await showConfirm(`เพิ่มเครื่อง S/N ${res.serial} เข้า Stock แล้ว${res.synced ? "" : " (ข้อมูลจะแสดงครบภายในรอบซิงค์ถัดไป)"} — ต้องการเพิ่มเครื่องถัดไปต่อเลยไหม?`, { type: "success", title: "เพิ่มเครื่องสำเร็จ", okText: "＋ เพิ่มเครื่องถัดไป", cancelText: "เสร็จสิ้น" });
-    if (again) {
-      const keep = type === "panolyzer" ? { Type: data.Type, Model: data.Model, Mode: data.Mode } : { Model: data.Model, "Model code": data["Model code"], Firmware: data.Firmware };
+    const okText = `✓ เพิ่มเครื่อง ${res.serial} เข้า ${isPano ? "Panolyzer Management" : "Sorter_Data"} แล้ว — พร้อมเบิกทันที`;
+    if (addNext) {
+      const keep = isPano ? { Type: data.Type, Model: data.Model, Mode: data.Mode, _next: true } : { Model: data.Model, "Model code": data["Model code"], Firmware: data.Firmware, _next: true };
       openAddMachineForm(type, keep);
+      const m = document.getElementById("genericFormModalMsg");
+      m.className = "form-msg success"; m.textContent = okText;
+      const s = document.getElementById("am-sn"); if (s) s.focus();
+      return;
     }
-  });
+    closeGenericFormModal();
+    await showAlert(okText.replace(/^✓ /, ""), { type: "success", title: "เพิ่มเครื่องสำเร็จ" });
+  };
+  document.getElementById("genericFormModal").style.display = "flex";
+  setTimeout(() => snEl.focus(), 50);
 }
 
 /** ปุ่ม "รีเฟรชข้อมูลตอนนี้" — เรียก syncPanolyzerNow แล้วปล่อยให้ real-time listener (bind("panolyzer", ...))
@@ -4368,6 +4459,7 @@ function openChangePartPhotoModal(partId, partName, hasPhoto) {
   msgEl.textContent = "";
 
   const saveBtn = document.getElementById("genericFormSaveBtn");
+  saveBtn.textContent = "บันทึก"; // ฟอร์มเพิ่มเครื่องเปลี่ยนข้อความปุ่มไว้ — คืนค่าทุกครั้ง
   const originalText = saveBtn.textContent;
   saveBtn.onclick = async () => {
     if (!changePartPhotoState.base64) {
@@ -5525,7 +5617,7 @@ function openGenericFormModal(title, fields, onSave, opts) {
   } else {
     titleEl.textContent = title;
   }
-  if (modalBox) modalBox.classList.toggle("gfm-wide", grouped);
+  if (modalBox) { modalBox.classList.toggle("gfm-wide", grouped); modalBox.classList.remove("am-modal"); }
 
   const body = document.getElementById("genericFormModalBody");
   if (grouped) {
@@ -5555,6 +5647,7 @@ function openGenericFormModal(title, fields, onSave, opts) {
   msgEl.textContent = "";
 
   const saveBtn = document.getElementById("genericFormSaveBtn");
+  saveBtn.textContent = opts.saveText || "บันทึก"; // ฟอร์มเพิ่มเครื่องเปลี่ยนข้อความปุ่มไว้ — คืนค่าทุกครั้ง
   const originalText = saveBtn.textContent;
   saveBtn.onclick = async () => {
     const values = fields.map((f, i) => document.getElementById(`gfm-field-${i}`).value);
@@ -5570,6 +5663,10 @@ function openGenericFormModal(title, fields, onSave, opts) {
 
 function closeGenericFormModal() {
   document.getElementById("genericFormModal").style.display = "none";
+  const amBox = document.querySelector("#genericFormModal .image-modal");
+  if (amBox) amBox.classList.remove("am-modal");
+  const amSave = document.getElementById("genericFormSaveBtn");
+  if (amSave) amSave.textContent = "บันทึก";
 }
 
 // ฟิลด์ใหม่ที่เพิ่มเข้ามาทีหลัง (เช่น SimCard_SN ของ Gateway) — เอกสารเก่าที่ย้ายมาจากระบบเดิมจะยังไม่มี key นี้อยู่
