@@ -1845,3 +1845,23 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .am-modal .image-modal-actions .btn-secondary { display: none; }
 .am-modal .image-modal-actions .btn-primary { flex: 1; min-height: 46px; }
 @media (max-width: 480px) { .am-g2 { grid-template-columns: 1fr; } }
+
+/* ===== ยืม → ลูกค้าซื้อ ===== */
+.btn-buy { background: #1d4fb8; color: #fff; }
+.btn-buy:hover { background: #173f93; }
+.status-sold { background: #e6f0ff; color: #1d4fb8; margin-left: 6px; text-transform: none; }
+.a-item-row .status-badge { margin-left: auto; flex: none; }
+.timeline-row.sold-tl { color: #1d4fb8; }
+.lts-row { border: 1px solid var(--border); border-radius: 10px; padding: 9px 10px; margin-bottom: 7px; }
+.lts-nm { font-weight: 700; font-size: 13px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.lts-nm small { font-weight: 400; color: var(--gray); font-family: monospace; font-size: 11.5px; }
+.lts-seg { margin-top: 7px; }
+.lts-seg label { padding: 7px 2px; font-size: 12.5px; }
+.lts-seg label.lts-buy.on { border-color: #1d4fb8; background: #e6f0ff; color: #1d4fb8; }
+.lts-seg label.lts-return.on { border-color: var(--info); background: #e6eef7; color: var(--info); }
+.lts-seg label.lts-keep.on { border-color: #b25b09; background: #fdeee0; color: #b25b09; }
+.lts-sum { background: #f4f7f5; border-radius: 10px; padding: 9px 11px; font-size: 12.5px; line-height: 1.6; }
+.lts-sum .c-buy { color: #1d4fb8; } .lts-sum .c-ret { color: var(--info); } .lts-sum .c-keep { color: #b25b09; }
+.lts-sum span { color: var(--gray); font-size: 11.5px; }
+.lts-modal #genericFormSaveBtn { background: #1d4fb8; }
+.lts-modal #genericFormSaveBtn:hover { background: #173f93; }

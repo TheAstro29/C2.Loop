@@ -451,6 +451,7 @@ function init() {
     if (state.user.mustChangePassword) showForcedPasswordChange();
     // แสดงข้อมูลจาก cache ทันที (ถ้ามี) แล้วค่อยรีเฟรชเบื้องหลัง
     renderCurrentView();
+    checkSessionNow({ force: true }); // เช็คตั้งแต่เปิดแอป — หมดอายุแล้วจะเด้งไปหน้า login ก่อนเริ่มกรอกอะไร
     const initialLoad = navigator.onLine
       ? drainOfflineQueue().then(() => refreshInBackground())
       : refreshInBackground();
@@ -591,9 +592,11 @@ async function onLoginSubmit(ev) {
     }
 
     showApp();
+    _lastSessionCheckAt = Date.now();
     if (state.user.mustChangePassword) { showForcedPasswordChange(); return; }
     await refreshInBackground(true);
     startPolling();
+    restoreIssueDraftIfAny();
   } catch (err) {
     errBox.textContent = err.message || "เข้าสู่ระบบไม่สำเร็จ";
     errBox.style.display = "block";
@@ -1082,6 +1085,14 @@ function translateIssuanceLog(doc) {
     BackdateReason: d.backdateReason || "",
     StockMode: d.stockMode || "",
     ReturnRestocked: d.returnRestocked,
+    // ยืม → ลูกค้าซื้อ
+    FromLoanTxn: d.fromLoanTxn || "",
+    SaleDocRef: d.saleDocRef || "",
+    ConvertedBy: d.convertedBy || "",
+    LoanConverted: d.loanConverted === true,
+    LoanSaleTxns: Array.isArray(d.loanSaleTxns) ? d.loanSaleTxns : [],
+    LoanConvertedAt: d.loanConvertedAt || "",
+    LoanConvertedBy: d.loanConvertedBy || "",
   };
 }
 
@@ -1108,6 +1119,10 @@ function translateIssuanceItem(doc) {
     NewLocation: d.newLocation || "",
     Quantity: d.quantity || 1,
     ItemName: d.itemName || "",
+    // ยืม → ลูกค้าซื้อ: id ของเอกสารชิ้นนี้ + ผลของชิ้นในใบยืม ("bought"/"returned", ว่าง = ยังยืมอยู่)
+    ItemDocID: doc.id,
+    LoanOutcome: d.loanOutcome || "",
+    SaleTxn: d.saleTxn || "",
   };
 }
 
@@ -1267,10 +1282,79 @@ async function refreshInBackground() {
   }
 }
 
+// ============================================================
+// เช็ค session ล่วงหน้า (ตอนเปิดแอป / กลับมาที่แท็บ / ก่อนเข้าหน้าเบิก-ย้าย/เคลม) — กันกรณีกรอกฟอร์มเสร็จแล้ว
+// เพิ่งมารู้ตอนกดยืนยันว่า session หมดอายุ ฝั่งเซิร์ฟเวอร์ต่ออายุให้อัตโนมัติถ้าใกล้หมด (validateSessionCallable)
+// + เผื่อหมดอายุกลางคันจริงๆ: เก็บข้อมูลใบเบิกที่กรอกค้างไว้ในเครื่อง แล้วคืนให้หลังเข้าสู่ระบบใหม่
+// ============================================================
+const LS_ISSUE_DRAFT = "c2loop_issue_draft";
+const SESSION_CHECK_MIN_GAP_MS = 60 * 1000;
+let _lastSessionCheckAt = 0;
+let _sessionCheckInFlight = null;
+let _handlingUnauthorized = false;
+
+async function checkSessionNow(opts) {
+  opts = opts || {};
+  if (!state.token || !navigator.onLine) return true;
+  if (!opts.force && Date.now() - _lastSessionCheckAt < SESSION_CHECK_MIN_GAP_MS) return true;
+  if (_sessionCheckInFlight) return _sessionCheckInFlight;
+  _sessionCheckInFlight = (async () => {
+    try {
+      // เรียกตรง (ไม่ผ่าน apiPost) จะได้ไม่ขึ้นหน้าจอโหลดทับทุกครั้งที่สลับเมนู
+      const res = await fbFunctions.httpsCallable("validateSessionCallable")({ token: state.token });
+      _lastSessionCheckAt = Date.now();
+      const data = res && res.data;
+      if (data && data.ok === false) { await handleUnauthorized(); return false; }
+      return true;
+    } catch (err) {
+      // เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ — ไม่ตัดสินว่าหมดอายุ ปล่อยใช้งานต่อ (ตอนกดส่งจะเช็คอีกชั้นอยู่แล้ว)
+      console.warn("[checkSessionNow] ตรวจ session ไม่สำเร็จ:", err);
+      return true;
+    } finally {
+      _sessionCheckInFlight = null;
+    }
+  })();
+  return _sessionCheckInFlight;
+}
+
+function issueFormHasContent() {
+  const f = issuanceForm || {};
+  return !!(String(f.customerName || "").trim() || String(f.siteLocation || "").trim() || String(f.details || "").trim() || (f.basket && f.basket.length));
+}
+function saveIssueDraft() {
+  try {
+    if (!state.user || !issueFormHasContent()) return false;
+    localStorage.setItem(LS_ISSUE_DRAFT, JSON.stringify({ uid: state.user.uid, savedAt: Date.now(), form: issuanceForm }));
+    return true;
+  } catch (e) { return false; }
+}
+/** หลังเข้าสู่ระบบ: คืนข้อมูลใบเบิกที่ค้างไว้ (เฉพาะผู้ใช้คนเดิม ภายใน 24 ชั่วโมง) */
+async function restoreIssueDraftIfAny() {
+  let draft = null;
+  try { draft = JSON.parse(localStorage.getItem(LS_ISSUE_DRAFT) || "null"); } catch (e) { draft = null; }
+  try { localStorage.removeItem(LS_ISSUE_DRAFT); } catch (e) { /* ignore */ }
+  if (!draft || !draft.form || !state.user || draft.uid !== state.user.uid) return;
+  if (Date.now() - (draft.savedAt || 0) > 24 * 3600e3) return;
+  issuanceForm = Object.assign({ customerName: "", siteLocation: "", details: "", basket: [], isLoan: false, issuedByOverride: "", step: 1 }, draft.form);
+  issueSuccessInfo = null;
+  if (typeof hideMobileHome === "function") { try { hideMobileHome(); } catch (e) { /* ignore */ } }
+  switchView("issue");
+  await showAlert("กู้คืนข้อมูลใบเบิกที่กรอกค้างไว้แล้ว — ตรวจสอบแล้วกดส่งได้เลย", { type: "success", title: "กู้คืนข้อมูล" });
+}
+
 async function handleUnauthorized() {
-  stopPolling();
-  await showAlert("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่", "warning");
-  logout();
+  if (_handlingUnauthorized) return;
+  _handlingUnauthorized = true;
+  try {
+    stopPolling();
+    const saved = saveIssueDraft();
+    await showAlert(saved
+      ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่ — ข้อมูลใบเบิกที่กรอกไว้ถูกเก็บไว้แล้ว จะกลับมาให้หลังเข้าสู่ระบบ"
+      : "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่", "warning");
+    logout();
+  } finally {
+    _handlingUnauthorized = false;
+  }
 }
 
 // เดิมฟังก์ชันนี้ตั้ง setInterval ไว้ยิง refreshInBackground ทุก 9 วินาที (การ "poll") — ตอนนี้ข้อมูลหลักทั้งหมด
@@ -1302,6 +1386,7 @@ function stopPolling() {
 function onVisibilityChange() {
   if (!document.hidden && state.token) {
     refreshInBackground(false); // กลับมาที่แท็บ -> เช็คทันที ไม่ต้องรอรอบถัดไป
+    checkSessionNow(); // เปิดแอปค้างไว้นานแล้วกลับมาใช้ — เช็ค session ด้วย (เว้นระยะอย่างน้อย 1 นาที)
   }
 }
 
@@ -1320,7 +1405,9 @@ function setSyncStatus(status) {
 // ============================================================
 // View switching
 // ============================================================
+const SESSION_CHECK_VIEWS = new Set(["issue", "transferclaim", "supplierclaim"]);
 function switchView(view) {
+  if (SESSION_CHECK_VIEWS.has(view)) checkSessionNow({ force: true }); // เช็คก่อนเริ่มกรอกฟอร์ม
   state.currentView = view;
   document.querySelectorAll(".nav-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.view === view);
@@ -3570,7 +3657,7 @@ function openAddMachineForm(type, preset) {
     <label class="am-chk"><input type="checkbox" id="am-next" ${preset._next ? "checked" : ""}>เพิ่มเครื่องถัดไปต่อ (จำ Model ไว้)</label>`;
 
   const modalBox = document.querySelector("#genericFormModal .image-modal");
-  if (modalBox) { modalBox.classList.remove("gfm-wide"); modalBox.classList.add("am-modal"); }
+  if (modalBox) { modalBox.classList.remove("gfm-wide", "lts-modal"); modalBox.classList.add("am-modal"); }
   document.getElementById("genericFormModalTitle").textContent = "＋ " + ui.title;
   document.getElementById("genericFormModalBody").innerHTML = `<div class="am-form">${body}</div>`;
   const msgEl = document.getElementById("genericFormModalMsg");
@@ -5617,7 +5704,7 @@ function openGenericFormModal(title, fields, onSave, opts) {
   } else {
     titleEl.textContent = title;
   }
-  if (modalBox) { modalBox.classList.toggle("gfm-wide", grouped); modalBox.classList.remove("am-modal"); }
+  if (modalBox) { modalBox.classList.toggle("gfm-wide", grouped); modalBox.classList.remove("am-modal", "lts-modal"); }
 
   const body = document.getElementById("genericFormModalBody");
   if (grouped) {
@@ -5664,7 +5751,7 @@ function openGenericFormModal(title, fields, onSave, opts) {
 function closeGenericFormModal() {
   document.getElementById("genericFormModal").style.display = "none";
   const amBox = document.querySelector("#genericFormModal .image-modal");
-  if (amBox) amBox.classList.remove("am-modal");
+  if (amBox) amBox.classList.remove("am-modal", "lts-modal");
   const amSave = document.getElementById("genericFormSaveBtn");
   if (amSave) amSave.textContent = "บันทึก";
 }
@@ -9320,6 +9407,105 @@ async function runTxnAction(action, transactionId, btnEl, loadingText, errorMapp
 }
 
 // ============================================================
+// ยืม → ลูกค้าซื้อ (Admin) — เลือกทีละชิ้น: ซื้อ / คืนเข้า Stock / ยืมต่อ
+// ชิ้นที่ซื้อจะย้ายไปอยู่ใน "รายการขายใหม่" (อ้างอิงใบยืมเดิม) ไม่ตัดสต็อกซ้ำ — ดู convertLoanToSale ใน functions/index.js
+// ============================================================
+const LOAN_DECISIONS = [
+  { value: "buy", label: "ซื้อ" },
+  { value: "return", label: "คืนเข้า Stock" },
+  { value: "keep", label: "ยืมต่อ" },
+];
+function openLoanToSale(transactionId) {
+  if (!state.user || state.user.role !== "Admin") return;
+  const txn = (state.data.issuanceLog || []).find((l) => l.TransactionID === transactionId);
+  if (!txn) return;
+  const items = getItemsForTransaction(transactionId).filter((i) => !i.LoanOutcome);
+  if (!items.length) return showAlert("รายการยืมนี้ไม่มีอุปกรณ์ที่ยังยืมอยู่แล้ว", "warning");
+  const loanMs = Date.parse(txn.Timestamp || "");
+  const loanDate = isNaN(loanMs) ? "" : new Date(loanMs + 7 * 3600e3).toISOString().slice(0, 10); // วันที่ยืม (เวลาไทย)
+  const decisions = {};
+  items.forEach((i) => { decisions[i.ItemDocID] = "buy"; });
+
+  const rowsHtml = items.map((i) => `
+    <div class="lts-row">
+      <div class="lts-nm">${formatItemLabel(i, { withQty: true })}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : `<small>S/N ${formatItemSerialLabel(i)}</small>`}</div>
+      <div class="am-seg lts-seg" data-item="${escapeAttr(i.ItemDocID)}">
+        ${LOAN_DECISIONS.map((d) => `<label class="lts-${d.value} ${d.value === "buy" ? "on" : ""}"><input type="radio" name="lts-${escapeAttr(i.ItemDocID)}" value="${d.value}" ${d.value === "buy" ? "checked" : ""}>${d.label}</label>`).join("")}
+      </div>
+    </div>`).join("");
+
+  const modalBox = document.querySelector("#genericFormModal .image-modal");
+  if (modalBox) { modalBox.classList.remove("gfm-wide"); modalBox.classList.add("am-modal", "lts-modal"); }
+  document.getElementById("genericFormModalTitle").textContent = "🛒 ลูกค้าซื้อของที่ยืม";
+  document.getElementById("genericFormModalBody").innerHTML = `
+    <div class="am-form">
+      <div class="am-hint">${escapeHtml(txn.CustomerName || "-")}${txn.SiteLocation ? " · " + escapeHtml(txn.SiteLocation) : ""} · ยืมเมื่อ ${escapeHtml(formatThaiDateShort(loanDate))} · เลขที่ ${escapeHtml(transactionId)}</div>
+      <div class="am-f"><label>อุปกรณ์ในรายการยืม <b>*</b></label>${rowsHtml}</div>
+      <div class="am-g2">
+        <div class="am-f"><label for="lts-date">วันที่ซื้อ <b>*</b></label><input type="date" id="lts-date" value="${bkkTodayIso()}" min="${escapeAttr(loanDate)}" max="${bkkTodayIso()}"></div>
+        <div class="am-f"><label for="lts-doc">เลขที่ใบเสนอราคา/ใบกำกับ</label><input type="text" id="lts-doc" maxlength="100" placeholder="เช่น QT-2610-045"></div>
+      </div>
+      <div class="am-f"><label for="lts-note">หมายเหตุ</label><textarea id="lts-note" rows="2" maxlength="500" placeholder="เช่น ลูกค้าตกลงซื้อหลังทดลอง 3 สัปดาห์"></textarea></div>
+      <div class="lts-sum" id="lts-sum"></div>
+    </div>`;
+  const msgEl = document.getElementById("genericFormModalMsg");
+  msgEl.className = "form-msg"; msgEl.textContent = "";
+  const showErr = (t) => { msgEl.className = "form-msg error"; msgEl.textContent = t; };
+
+  const updSum = () => {
+    const c = { buy: 0, return: 0, keep: 0 };
+    Object.values(decisions).forEach((v) => { c[v]++; });
+    document.getElementById("lts-sum").innerHTML = `สรุป: <b class="c-buy">ซื้อ ${c.buy} ชิ้น</b> · <b class="c-ret">คืนเข้า Stock ${c.return} ชิ้น</b> · <b class="c-keep">ยืมต่อ ${c.keep} ชิ้น</b>${c.keep && (c.buy || c.return) ? `<br><span>ชิ้นที่ยืมต่อจะค้างอยู่ในใบยืมเดิม กด “ลูกค้าซื้อ” ซ้ำได้ภายหลัง</span>` : ""}`;
+  };
+  document.querySelectorAll(".lts-seg").forEach((seg) => {
+    seg.querySelectorAll("input").forEach((r) => r.addEventListener("change", () => {
+      decisions[seg.dataset.item] = r.value;
+      seg.querySelectorAll("label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+      updSum();
+    }));
+  });
+  updSum();
+
+  const saveBtn = document.getElementById("genericFormSaveBtn");
+  const saveText = "ยืนยันลูกค้าซื้อ";
+  saveBtn.textContent = saveText;
+  saveBtn.onclick = async () => {
+    const saleDate = document.getElementById("lts-date").value;
+    if (!saleDate) return showErr("กรุณาเลือกวันที่ซื้อ");
+    if (saleDate > bkkTodayIso()) return showErr("วันที่ซื้อต้องไม่เกินวันนี้");
+    if (loanDate && saleDate < loanDate) return showErr("วันที่ซื้อต้องไม่ก่อนวันที่ยืม");
+    const vals = Object.values(decisions);
+    if (!vals.some((v) => v !== "keep")) return showErr("เลือกอย่างน้อย 1 ชิ้นเป็น “ซื้อ” หรือ “คืนเข้า Stock”");
+    saveBtn.disabled = true; saveBtn.textContent = "กำลังบันทึก...";
+    let res;
+    try {
+      res = await apiPost({
+        action: "convertLoanToSale", token: state.token, transactionId, decisions, saleDate,
+        docRef: document.getElementById("lts-doc").value.trim(), note: document.getElementById("lts-note").value.trim(),
+      });
+    } finally {
+      saveBtn.disabled = false; saveBtn.textContent = saveText;
+    }
+    if (!res.ok) {
+      if (res.error === "unauthorized") { closeGenericFormModal(); return handleUnauthorized(); }
+      const map = {
+        forbidden: "เฉพาะ Admin เท่านั้น", not_loan: "รายการนี้ไม่ใช่รายการยืม", not_issued: "รายการยืมนี้ปิดไปแล้ว",
+        missing_decision: "ข้อมูลรายการเปลี่ยนไปแล้ว กรุณาปิดแล้วเปิดหน้าต่างนี้ใหม่", no_change: "เลือกอย่างน้อย 1 ชิ้นเป็น “ซื้อ” หรือ “คืนเข้า Stock”",
+        sale_date_in_future: "วันที่ซื้อต้องไม่เกินวันนี้", sale_before_loan: "วันที่ซื้อต้องไม่ก่อนวันที่ยืม", invalid_sale_date: "วันที่ซื้อไม่ถูกต้อง",
+        nothing_open: "ไม่มีอุปกรณ์ที่ยังยืมอยู่แล้ว",
+      };
+      return showErr(map[res.error] || ("บันทึกไม่สำเร็จ: " + (res.error || "unknown_error")));
+    }
+    closeGenericFormModal();
+    await refreshInBackground(true);
+    renderCurrentView();
+    const parts = [res.bought ? `ซื้อ ${res.bought} ชิ้น${res.saleTxnId ? ` (รายการขาย ${res.saleTxnId})` : ""}` : "", res.returned ? `คืนเข้า Stock ${res.returned} ชิ้น` : "", res.kept ? `ยืมต่อ ${res.kept} ชิ้น` : ""].filter(Boolean);
+    await showAlert(`บันทึกแล้ว: ${parts.join(" · ")}`, { type: "success", title: res.closed ? "ปิดรายการยืมแล้ว" : "บันทึกลูกค้าซื้อแล้ว" });
+  };
+  document.getElementById("genericFormModal").style.display = "flex";
+}
+
+// ============================================================
 // Phase 2: ประวัติการเบิก/คืน
 // ============================================================
 function renderHistoryView() {
@@ -9358,7 +9544,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
   const kindEl = document.getElementById("historyKindFilter");
   const onlyBackdated = !!(kindEl && kindEl.value === "backdated");
   const filtered = logs.filter((txn) => (!onlyBackdated || txn.Backdated) && (!search ||
-    [txn.CustomerName, txn.TransactionID, txn.IssuedBy, txn.SiteLocation].some((v) => String(v || "").toLowerCase().includes(search))
+    [txn.CustomerName, txn.TransactionID, txn.IssuedBy, txn.SiteLocation, txn.FromLoanTxn, txn.SaleDocRef].some((v) => String(v || "").toLowerCase().includes(search))
   ));
 
   bulkSelection.clear();
@@ -9392,6 +9578,8 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
     const canEdit = isAdmin && !txn._pendingSync;
     const canDelete = isAdmin && !txn._pendingSync && (txn.RequestStatus === "Rejected" || txn.RequestStatus === "Returned" || txn.RequestStatus === "Cancelled");
     const canBulkReturn = canReturn && !txn._pendingSync;
+    const loanOpenItems = txn.IssuanceType === "ยืม" ? items.filter((i) => !i.LoanOutcome) : [];
+    const canBuy = isAdmin && txn.IssuanceType === "ยืม" && txn.RequestStatus === "Issued" && !txn.MovementType && !txn._pendingSync && loanOpenItems.length > 0;
     const requesterName = txn.IssuedBy || "-";
     const via = delegatedByText(txn);
     const itemsHtml = items.map((i) => `
@@ -9402,10 +9590,13 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
           ${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : `<div class="a-item-serial">S/N ${formatItemSerialLabel(i)}</div>`}
         </div>
         ${(i.AssetType === "Other" || PART_QTY_DEVICE_LABEL[i.AssetType]) && Number(i.Quantity) > 1 ? `<div class="a-item-qty">×${Number(i.Quantity)}</div>` : ""}
+        ${i.LoanOutcome === "bought" ? `<span class="status-badge status-sold">ซื้อ</span>` : i.LoanOutcome === "returned" ? `<span class="status-badge status-Returned">คืนแล้ว</span>` : (txn.IssuanceType === "ยืม" && txn.LoanConvertedAt && txn.RequestStatus === "Issued" ? `<span class="status-badge status-loan">ยืมต่อ</span>` : "")}
       </div>`).join("");
     // เส้นเวลา: รวมทุกเหตุการณ์ (ขอเบิก/อนุมัติ/คืนของ/ยกเลิก) เรียงตามลำดับเวลาจริง แทนที่จะกระจายเป็นบรรทัดข้อความเดี่ยวๆ
     const timelineRows = [
       `<div class="timeline-row"><span class="timeline-dot"></span>ขอเบิกโดย <b>${escapeHtml(requesterName)}</b>${via ? ` (${escapeHtml(via)})` : ""} — ${formatDateTh(txn.Timestamp)}</div>`,
+      txn.FromLoanTxn ? `<div class="timeline-row sold-tl"><span class="timeline-dot" style="background:#1d4fb8;"></span>🛒 ลูกค้าซื้อ (จากใบยืม ${escapeHtml(txn.FromLoanTxn)}) — โดย <b>${escapeHtml(txn.ConvertedBy || txn.ApprovedBy || "-")}</b>${txn.SaleDocRef ? ` · เลขที่เอกสาร ${escapeHtml(txn.SaleDocRef)}` : ""}</div>` : "",
+      txn.LoanConvertedAt ? `<div class="timeline-row sold-tl"><span class="timeline-dot" style="background:#1d4fb8;"></span>🛒 บันทึกลูกค้าซื้อโดย <b>${escapeHtml(txn.LoanConvertedBy || "-")}</b> — ${formatDateTh(txn.LoanConvertedAt)}${txn.LoanSaleTxns.length ? ` · รายการขาย ${txn.LoanSaleTxns.map(escapeHtml).join(", ")}` : ""}</div>` : "",
       txn.Backdated ? `<div class="timeline-row bd-tl"><span class="timeline-dot" style="background:#8a5a12;"></span>📅 บันทึกย้อนหลังเมื่อ ${formatDateTh(txn.RecordedAt)} · ${txn.StockMode === "NOSTOCK" ? "ไม่ตัดสต็อก" : "ตัดสต็อก"}${txn.BackdateReason ? ` — เหตุผล: ${escapeHtml(txn.BackdateReason)}` : ""}</div>` : "",
       txn.ApprovedBy ? `<div class="timeline-row"><span class="timeline-dot"></span>ดำเนินการโดย <b>${escapeHtml(txn.ApprovedBy)}</b> — ${formatDateTh(txn.ApprovedAt)}</div>` : "",
       txn.ReturnedAt ? `<div class="timeline-row"><span class="timeline-dot" style="background:var(--info);"></span>คืนของเมื่อ ${formatDateTh(txn.ReturnedAt)}${txn.StockMode === "NOSTOCK" ? (txn.ReturnRestocked ? " (นำกลับเข้า Stock)" : " (ปิดรายการ ไม่แตะสต็อก)") : ""}</div>` : "",
@@ -9429,13 +9620,16 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
         <div class="timeline">${timelineRows}</div>
         <div class="a-foot">
           <div class="a-badges">
-            <span class="status-badge status-${txn.RequestStatus}">${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</span>
+            <span class="status-badge status-${txn.RequestStatus}">${escapeHtml(txn.LoanConverted && txn.RequestStatus === "Returned" ? "ปิดแล้ว" : (statusLabel[txn.RequestStatus] || txn.RequestStatus))}</span>
             ${txn.IssuanceType === "ยืม" ? `<span class="status-badge status-loan">ยืม</span>` : ""}
+            ${txn.LoanConverted ? `<span class="status-badge status-sold">ซื้อแล้ว</span>` : ""}
+            ${txn.FromLoanTxn ? `<span class="status-badge status-sold">ซื้อจากการยืม</span>` : ""}
             ${txn.MovementType === "Transfer" ? `<span class="status-badge status-transfer">ย้าย</span>` : ""}
             ${txn.MovementType === "Claim" ? `<span class="status-badge status-claim">เคลม</span>` : ""}
             ${txn.Backdated ? `<span class="status-badge status-backdate" title="${escapeAttr("บันทึกเมื่อ " + formatDateTh(txn.RecordedAt))}">📅 บันทึกย้อนหลัง</span>` : ""}
           </div>
           <div class="a-actions">
+            ${canBuy ? `<button class="btn-sm btn-buy" onclick="openLoanToSale('${escapeAttr(txn.TransactionID)}')">🛒 ลูกค้าซื้อ</button>` : ""}
             ${canReturn ? `<button class="btn-sm btn-return" onclick="returnTxn('${escapeAttr(txn.TransactionID)}', this)">คืนของ</button>` : ""}
             ${canCancel ? `<button class="btn-sm btn-cancel-txn" onclick="cancelTxn('${escapeAttr(txn.TransactionID)}', this)">ยกเลิกรายการ</button>` : ""}
             ${canPrint ? `<button class="btn-sm btn-secondary" onclick="printSlip('${escapeAttr(txn.TransactionID)}')">พิมพ์ใบเบิก</button>` : ""}
