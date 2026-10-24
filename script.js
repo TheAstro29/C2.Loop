@@ -8151,7 +8151,11 @@ function addToBasket(assetKey, serial) {
       item.connectTo = "MoisturLyzer"; // รุ่นนี้ใช้กับ MoisturLyzer เท่านั้น
     }
     // Phase 6: เบิก Gateway (รุ่นใดก็ตาม) ต้องมี SimCard คู่กันเสมอ (บังคับ) — เลือกได้ในแถวเดียวกันเลย
-    item.linkedSimSerial = "";
+    // คืนของแบบ "คง link": Gateway ที่คืนมาพร้อมซิมที่เสียบอยู่ — เลือกซิมตัวเดิมให้อัตโนมัติ (เปลี่ยนเองได้)
+    const simCfg = VIEW_CONFIG.simcard;
+    const keptSim = String((row && row[GATEWAY_SIMCARD_FIELD]) || "").trim();
+    const keptSimRow = keptSim && (state.data.simcard || []).find((s) => String(s[simCfg.serialField]) === keptSim);
+    item.linkedSimSerial = keptSimRow && isStockRow(keptSimRow, simCfg.stockField, simCfg.stockRequiresField) ? keptSim : "";
   }
 
   if (cfg.assetType === "SimCard") {
