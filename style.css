@@ -1983,3 +1983,20 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
   body.rp-lock { overflow: hidden; }
 }
 @media (prefers-reduced-motion: reduce) { .rp-panel, .rp-dim, .rp-card { transition: none !important; } }
+
+/* ============================================================
+   รูปอะไหล่: แสดงเต็มภาพ ไม่ครอป (object-fit: contain) บนพื้นขาว — ใช้ทุกจุดที่มีรูปอะไหล่
+   รูปแนวตั้ง/แนวนอนเห็นครบทั้งชิ้น · กรอบที่ยังไม่มีรูป (📦 / ยังไม่มีรูป) คงพื้นเดิม
+   ============================================================ */
+.mcard-photo[data-photo-wrap] { background: #fff; border: 1px solid #eef1ef; padding: 5px; }
+.mcard-photo[data-photo-wrap] img { object-fit: contain; }
+.pcard-grid .mcard-photo { height: auto; aspect-ratio: 4 / 3; }
+.pcard-grid .mcard-photo[data-photo-wrap] { border: 0; border-bottom: 1px solid #eef1ef; padding: 10px; }
+.table-thumb { object-fit: contain; background: #fff; border: 1px solid #eef1ef; padding: 2px; box-sizing: border-box; }
+.part-modal-photo { height: auto; aspect-ratio: 4 / 3; max-height: 320px; background: #fff; border: 1px solid #eef1ef; }
+.part-modal-photo img { background: #fff; padding: 8px; box-sizing: border-box; }
+.rp-ph[data-photo-wrap], .rp-big[data-photo-wrap] { background: #fff; border-bottom: 1px solid #eef1ef; }
+.rp-big[data-photo-wrap] { border: 1px solid #eef1ef; }
+.rp-ph[data-photo-wrap] img, .rp-big[data-photo-wrap] img { object-fit: contain; padding: 8px; box-sizing: border-box; }
+.rp-bar-th[data-photo-wrap] { background: #fff; }
+.rp-bar-th[data-photo-wrap] img { object-fit: contain; padding: 2px; box-sizing: border-box; }
