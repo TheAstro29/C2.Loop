@@ -5016,6 +5016,7 @@ function mpGoStep(n) {
     footer.innerHTML = `<button type="button" class="btn-secondary mp-fbtn" onclick="mpGoStep(2)">แก้ไข</button>
       <button type="button" class="btn-primary mp-fbtn mp-fnext" id="mp-saveBtn" onclick="mpConfirmSave()"><i class="fa-solid fa-check"></i> ยืนยันบันทึก</button>`;
   }
+  mpSyncRestockLayout();
   const main = document.querySelector(".main");
   if (main) main.scrollTop = 0;
   window.scrollTo(0, 0);
@@ -5372,6 +5373,9 @@ function renderPartsSubUI(area) {
 function renderManagePartsFormArea() {
   const area = document.getElementById("mp-formArea");
   const f = managePartsForm;
+  // #mp-msg อาจถูกย้ายเข้าไปในแผงเติมของ (โหมดเลือกจากรูป) — ย้ายกลับมาไว้ใต้ฟอร์มก่อนล้างเนื้อหา
+  const mpMsg = document.getElementById("mp-msg");
+  if (mpMsg && area.contains(mpMsg)) area.after(mpMsg);
   area.classList.toggle("mp-new", f.mode === "new");
 
   if (f.mode === "new") {
@@ -5416,27 +5420,220 @@ function renderManagePartsFormArea() {
     bindPhotoPickerInputs("mp", onManagePartsPhotoSelected);
     renderQtyOrSerialArea();
   } else {
-    const allParts = Object.keys(PART_VIEW_BY_CATEGORY).flatMap((cat) => [...getQtyPartsForCategory(cat), ...getSerialPartsForCategory(cat)]);
-    if (!allParts.length) {
-      area.innerHTML = `<div class="cache-note">ยังไม่มีอะไหล่ในระบบ — กรุณาเลือก "เพิ่มอะไหล่ใหม่" ก่อน</div>`;
-      return;
-    }
-    if (!f.restockPartId) f.restockPartId = allParts[0].PartID;
-    area.innerHTML = `
-      <div class="form-field">
-        <label>เลือกอะไหล่ที่จะเติมของ *</label>
-        <select id="mp-restockPartId">
-          ${allParts.map((p) => `<option value="${escapeAttr(p.PartID)}" ${p.PartID === f.restockPartId ? "selected" : ""}>
-            ${escapeHtml(p.PartName)} — ${PART_CATEGORY_LABEL[p.Category] || p.Category} (${String(p.HasSerial).toLowerCase() === "yes" ? "มี S/N" : "นับจำนวน"})
-          </option>`).join("")}
-        </select>
-      </div>
-      <div id="mp-qtyOrSerialArea"></div>
-    `;
-    document.getElementById("mp-restockPartId").addEventListener("change", (e) => { f.restockPartId = e.target.value; f.serials = [""]; renderQtyOrSerialArea(); });
-    renderQtyOrSerialArea();
+    renderRestockPicker(area);
   }
+  mpSyncRestockLayout();
 }
+
+// ============================================================
+// "เติมของที่มีอยู่" แบบเลือกจากรูป — แทน dropdown ชื่ออะไหล่เดิม (บางคนจำชื่อไม่ได้แต่จำรูปร่างได้)
+// PC: การ์ดรูปด้านซ้าย + แผงกรอกจำนวนด้านขวา · มือถือ: การ์ด 2 คอลัมน์ + แถบล่าง → แผ่นกรอกจำนวนเลื่อนขึ้น
+// UI เท่านั้น — ยังใช้ managePartsForm.restockPartId / quantity / serials และขั้นตรวจสอบ/บันทึกเดิมทุกอย่าง
+// ============================================================
+const PART_LOW_STOCK = 2; // คงเหลือเท่านี้หรือน้อยกว่า แสดงตัวเลขสีแดง
+let rpQuery = "";
+
+function mpSyncRestockLayout() {
+  const wiz = document.getElementById("mp-wiz");
+  if (!wiz) return;
+  const on = mpStep === 2 && !!PART_CATEGORY_BY_VIEW[mpAssetType] && managePartsForm.mode === "restock";
+  wiz.classList.toggle("mp-rp", on);
+  if (!on) rpCloseSheet();
+}
+
+/** ยอดคงเหลือในคลังของอะไหล่ 1 รายการ (นับจำนวน = QuantityInStock, มี S/N = จำนวนชิ้นที่อยู่ใน Stock) */
+function rpPartStock(p) {
+  if (String(p.HasSerial).toLowerCase() !== "yes") return Number(p.QuantityInStock) || 0;
+  const viewKey = PART_VIEW_BY_CATEGORY[p.Category];
+  const cfg = VIEW_CONFIG[viewKey];
+  if (!cfg) return 0;
+  return (state.data[viewKey] || []).filter((r) => r.PartID === p.PartID && isStockRow(r, cfg.stockField, cfg.stockRequiresField)).length;
+}
+
+function rpPartsOfCurrentCategory() {
+  const cat = PART_CATEGORY_BY_VIEW[mpAssetType];
+  return [...getQtyPartsForCategory(cat), ...getSerialPartsForCategory(cat)]
+    .sort((a, b) => String(a.PartName).localeCompare(String(b.PartName), "th"));
+}
+
+function rpIsSerial(p) { return String(p.HasSerial).toLowerCase() === "yes"; }
+
+function renderRestockPicker(area) {
+  const f = managePartsForm;
+  const cats = Object.keys(PART_VIEW_BY_CATEGORY);
+  const curCat = PART_CATEGORY_BY_VIEW[mpAssetType];
+  if (f.restockPartId && !rpPartsOfCurrentCategory().some((p) => p.PartID === f.restockPartId)) f.restockPartId = "";
+  area.innerHTML = `
+    <div class="rp">
+      <div class="rp-pick">
+        <div class="rp-tools">
+          <label class="rp-search"><i class="fa-solid fa-magnifying-glass"></i>
+            <input type="search" id="rp-q" value="${escapeAttr(rpQuery)}" placeholder="ค้นหาชื่อ หรือรายละเอียดอะไหล่" autocomplete="off"></label>
+          <div class="rp-cats">${cats.map((c) => {
+            const n = (state.data.partsCatalog || []).filter((p) => p.Category === c).length;
+            return `<button type="button" class="rp-cat ${c === curCat ? "on" : ""}" onclick="rpSwitchCategory('${escapeAttr(c)}')">${escapeHtml(PART_CATEGORY_LABEL[c] || c)} <b>${n}</b></button>`;
+          }).join("")}</div>
+        </div>
+        <div class="rp-lbl">เลือกอะไหล่ที่จะเติมของ <small>แตะ 🔍 เพื่อดูรูปใหญ่</small></div>
+        <div class="rp-grid" id="rp-grid"></div>
+      </div>
+      <div class="rp-dim" id="rp-dim" onclick="rpCloseSheet()"></div>
+      <div class="rp-panel" id="rp-panel">
+        <div class="rp-grab" onclick="rpCloseSheet()"></div>
+        <div id="rp-sel"></div>
+        <div id="mp-qtyOrSerialArea"></div>
+        <button type="button" class="btn-primary rp-sheet-next" onclick="rpSheetReview()">ตรวจสอบ <i class="fa-solid fa-arrow-right"></i></button>
+        <div class="rp-sheet-hint">เลือกผิด? แตะพื้นหลังหรือขีดด้านบนเพื่อกลับไปเลือกใหม่</div>
+      </div>
+      <div class="rp-bar" id="rp-bar" onclick="rpOpenSheet()"></div>
+    </div>`;
+  // ข้อความแจ้งเตือนของฟอร์ม (#mp-msg) ย้ายมาไว้ในแผงกรอกจำนวน ให้เห็นทันทีทั้งบน PC และในแผ่นเลื่อนบนมือถือ
+  const msg = document.getElementById("mp-msg");
+  const sel = document.getElementById("rp-sel");
+  if (msg && sel) sel.after(msg);
+  const q = document.getElementById("rp-q");
+  q.addEventListener("input", () => { rpQuery = q.value; rpRenderGrid(); });
+  rpRenderGrid();
+  rpRenderSelected();
+}
+
+function rpRenderGrid() {
+  const grid = document.getElementById("rp-grid");
+  if (!grid) return;
+  const f = managePartsForm;
+  const all = rpPartsOfCurrentCategory();
+  if (!all.length) {
+    grid.innerHTML = `<div class="rp-empty">ยังไม่มีอะไหล่ในหมวดนี้ — เลือก "+ อะไหล่ใหม่" เพื่อเพิ่มก่อน</div>`;
+    return;
+  }
+  const q = rpQuery.trim().toLowerCase();
+  const list = q ? all.filter((p) => `${p.PartName} ${p.PartDetail || ""}`.toLowerCase().includes(q)) : all;
+  if (!list.length) {
+    grid.innerHTML = `<div class="rp-empty">ไม่พบอะไหล่ที่ตรงกับ "${escapeHtml(rpQuery.trim())}"</div>`;
+    return;
+  }
+  grid.innerHTML = list.map((p) => {
+    const sel = p.PartID === f.restockPartId;
+    const stock = rpPartStock(p);
+    const id = escapeAttr(p.PartID);
+    const photo = p.HasPhoto
+      ? `<div class="rp-ph photo-loading" data-photo-wrap><img data-photo-partid="${id}" alt="">
+           <button type="button" class="rp-zoom" aria-label="ดูรูปใหญ่" onclick="event.stopPropagation(); rpOpenPhoto('${id}')">🔍</button></div>`
+      : `<div class="rp-ph rp-noph"><i class="fa-solid fa-camera"></i><span>ยังไม่มีรูป</span></div>`;
+    return `<div class="rp-card ${sel ? "sel" : ""}" role="button" tabindex="0" aria-pressed="${sel}" onclick="rpSelect('${id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();rpSelect('${id}')}">
+      ${sel ? '<span class="rp-check">✓</span>' : ""}${photo}
+      <span class="rp-info"><span class="rp-name">${escapeHtml(p.PartName)}</span>
+        <span class="rp-meta"><span class="rp-tag ${rpIsSerial(p) ? "sn" : "qty"}">${rpIsSerial(p) ? "มี S/N" : "นับจำนวน"}</span>
+        <span class="rp-stk ${stock <= PART_LOW_STOCK ? "low" : ""}">คงเหลือ <b>${stock}</b></span></span></span>
+    </div>`;
+  }).join("");
+  hydratePartPhotoThumbnails(grid);
+}
+
+/** แผงอะไหล่ที่เลือก: รูปใหญ่ + ชนิด + คงเหลือ + สเปก (กรอกจำนวน/S/N อยู่ใน #mp-qtyOrSerialArea ด้านล่าง) */
+function rpRenderSelected() {
+  const box = document.getElementById("rp-sel");
+  if (!box) return;
+  const f = managePartsForm;
+  const p = (state.data.partsCatalog || []).find((x) => x.PartID === f.restockPartId);
+  const qtyArea = document.getElementById("mp-qtyOrSerialArea");
+  const bar = document.getElementById("rp-bar");
+  document.getElementById("rp-panel").classList.toggle("empty", !p);
+  if (!p) {
+    box.innerHTML = `<div class="rp-placeholder"><i class="fa-regular fa-hand-pointer"></i><b>เลือกอะไหล่จากรูป</b><span>แล้วกรอกจำนวนที่เติมเข้าคลังที่นี่</span></div>`;
+    if (qtyArea) qtyArea.innerHTML = "";
+    if (bar) bar.innerHTML = `<span class="rp-bar-tx"><b>แตะรูปเพื่อเลือกอะไหล่</b></span>`;
+    bar && bar.classList.add("idle");
+    return;
+  }
+  const id = escapeAttr(p.PartID);
+  const stock = rpPartStock(p);
+  const photo = p.HasPhoto
+    ? `<div class="rp-big photo-loading" data-photo-wrap onclick="rpOpenPhoto('${id}')"><img data-photo-partid="${id}" alt="${escapeAttr(p.PartName)}"><span class="rp-big-zoom">🔍 ดูรูปเต็ม</span></div>`
+    : `<div class="rp-big rp-noph"><i class="fa-solid fa-camera"></i><span>ยังไม่มีรูป</span></div>`;
+  box.innerHTML = `
+    <div class="rp-sel-top">${photo}
+      <div class="rp-sel-txt"><h3>${escapeHtml(p.PartName)}</h3>
+        <div class="rp-meta"><span class="rp-tag ${rpIsSerial(p) ? "sn" : "qty"}">${rpIsSerial(p) ? "มี S/N" : "นับจำนวน"}</span>
+          <span class="rp-tag cat">${escapeHtml(PART_CATEGORY_LABEL[p.Category] || p.Category)}</span></div>
+        <div class="rp-stk ${stock <= PART_LOW_STOCK ? "low" : ""}">คงเหลือ <b>${stock}</b> ชิ้น</div></div></div>
+    ${p.PartDetail ? partSpecHtml(p.PartDetail) : ""}`;
+  hydratePartPhotoThumbnails(box);
+  if (bar) {
+    bar.classList.remove("idle");
+    bar.innerHTML = `<span class="rp-bar-th" ${p.HasPhoto ? "data-photo-wrap" : ""}>${p.HasPhoto ? `<img data-photo-partid="${id}" alt="">` : '<i class="fa-solid fa-box"></i>'}</span>
+      <span class="rp-bar-tx">เลือกแล้ว<b>${escapeHtml(p.PartName)}</b></span><span class="rp-bar-go">กรอกจำนวน ›</span>`;
+    hydratePartPhotoThumbnails(bar);
+  }
+  renderQtyOrSerialArea();
+}
+
+function rpSelect(partId) {
+  const f = managePartsForm;
+  if (f.restockPartId !== partId) {
+    f.restockPartId = partId; f.serials = [""]; f.quantity = "";
+  }
+  mpClearMsgs();
+  rpRenderGrid();
+  rpRenderSelected();
+  if (isMobileViewport()) rpOpenSheet();
+}
+
+async function rpSwitchCategory(cat) {
+  const view = PART_VIEW_BY_CATEGORY[cat];
+  if (!view || view === mpAssetType) return;
+  if (mpHasDraft()) {
+    const ok = await showConfirm("ข้อมูลที่กรอกค้างไว้จะถูกล้างเมื่อเปลี่ยนหมวด ต้องการเปลี่ยนใช่หรือไม่?");
+    if (!ok) return;
+  }
+  mpAssetType = view;
+  rpQuery = "";
+  mpRenderedType = null; // ให้ mpGoStep สร้างฟอร์มของหมวดใหม่ (ล้างค่าที่กรอกไว้)
+  mpGoStep(2);
+  managePartsForm.mode = "restock";
+  renderPartsSubUI(document.getElementById("mp-subArea"));
+  mpSyncRestockLayout();
+}
+
+function rpOpenSheet() {
+  if (!isMobileViewport() || !managePartsForm.restockPartId) return;
+  document.getElementById("rp-panel")?.classList.add("open");
+  document.getElementById("rp-dim")?.classList.add("open");
+  document.body.classList.add("rp-lock");
+}
+function rpCloseSheet() {
+  document.getElementById("rp-panel")?.classList.remove("open");
+  document.getElementById("rp-dim")?.classList.remove("open");
+  document.body.classList.remove("rp-lock");
+}
+function rpSheetReview() {
+  const d = mpBuildDraft();
+  if (d.error) { const el = document.getElementById(d.msgId); if (el) { el.className = "form-msg error"; el.textContent = d.error; } return; }
+  rpCloseSheet();
+  mpToReview();
+}
+
+/** ดูรูปอะไหล่เต็มจอ + ปุ่ม "เลือกชิ้นนี้" */
+async function rpOpenPhoto(partId) {
+  const p = (state.data.partsCatalog || []).find((x) => x.PartID === partId);
+  if (!p) return;
+  let lb = document.getElementById("rp-lightbox");
+  if (!lb) { lb = document.createElement("div"); lb.id = "rp-lightbox"; lb.className = "rp-lb"; document.body.appendChild(lb); }
+  const id = escapeAttr(p.PartID);
+  lb.innerHTML = `
+    <div class="rp-lb-h"><b>${escapeHtml(p.PartName)}</b><button type="button" onclick="rpClosePhoto()" aria-label="ปิด">✕</button></div>
+    <div class="rp-lb-img photo-loading" onclick="if(event.target===this)rpClosePhoto()"><img alt="${escapeAttr(p.PartName)}"></div>
+    <div class="rp-lb-f"><span>${escapeHtml(PART_CATEGORY_LABEL[p.Category] || p.Category)} · ${rpIsSerial(p) ? "มี S/N" : "นับจำนวน"} · คงเหลือ ${rpPartStock(p)}</span>
+      <button type="button" class="btn-primary" onclick="rpClosePhoto(); rpSelect('${id}')">✓ เลือกชิ้นนี้</button></div>`;
+  lb.style.display = "flex";
+  const url = await fetchPartPhotoUrl(p.PartID);
+  const wrap = lb.querySelector(".rp-lb-img");
+  if (!wrap) return;
+  wrap.classList.remove("photo-loading");
+  if (url) wrap.querySelector("img").src = url; else wrap.innerHTML = '<div class="rp-lb-miss">เปิดรูปไม่ได้ ลองใหม่อีกครั้ง</div>';
+}
+function rpClosePhoto() { const lb = document.getElementById("rp-lightbox"); if (lb) lb.style.display = "none"; }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { rpClosePhoto(); rpCloseSheet(); } });
 
 /** อ่านไฟล์รูปที่เลือก (ถ่ายจากกล้อง/เลือกจากอัลบั้ม) แปลงเป็น base64 เก็บไว้ใน managePartsForm เพื่อส่งไปกับ
  * action "addPart" ตอนกดบันทึก — แสดงตัวอย่างรูปทันทีในเครื่อง (ยังไม่อัปโหลดจริงจนกว่าจะกดบันทึกฟอร์ม) */
@@ -5504,6 +5701,33 @@ function renderQtyOrSerialArea() {
     document.getElementById("mp-addSerialBtn").addEventListener("click", addManagePartsSerial);
     renderManagePartsSerialBasket();
   } else {
+    if (f.mode === "restock") {
+      // โหมดเลือกจากรูป: ปุ่ม − / + กดง่ายบนมือถือ + บอกยอดหลังบันทึก
+      const part = (state.data.partsCatalog || []).find((p) => p.PartID === f.restockPartId);
+      const now = part ? rpPartStock(part) : 0;
+      area.innerHTML = `
+        <div class="form-field">
+          <label for="mp-quantity">จำนวนที่เติมเข้าไป (ชิ้น) *</label>
+          <div class="rp-stepper">
+            <button type="button" aria-label="ลด" data-step="-1">−</button>
+            <input type="number" id="mp-quantity" min="1" step="1" inputmode="numeric" value="${escapeAttr(f.quantity)}" placeholder="0">
+            <button type="button" aria-label="เพิ่ม" data-step="1">＋</button>
+          </div>
+          <div class="rp-after" id="rp-after"></div>
+        </div>`;
+      const inp = document.getElementById("mp-quantity");
+      const after = () => {
+        const n = Math.max(0, parseInt(f.quantity, 10) || 0);
+        document.getElementById("rp-after").innerHTML = n ? `คงเหลือ ${now} → หลังบันทึก <b>${now + n} ชิ้น</b>` : `คงเหลือตอนนี้ ${now} ชิ้น`;
+      };
+      inp.addEventListener("input", () => { f.quantity = inp.value; after(); });
+      area.querySelectorAll("[data-step]").forEach((b) => b.addEventListener("click", () => {
+        const n = Math.max(1, (parseInt(f.quantity, 10) || 0) + Number(b.dataset.step));
+        f.quantity = String(n); inp.value = n; after();
+      }));
+      after();
+      return;
+    }
     area.innerHTML = `
       <div class="form-field">
         <label>จำนวน${f.mode === "new" ? "เริ่มต้น" : "ที่เติมเข้าไป"} (ชิ้น) *</label>
