@@ -4076,12 +4076,15 @@ const PART_PHOTO_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /** ขอ signed URL ของรูปอะไหล่จากเซิร์ฟเวอร์ (login แล้วเท่านั้นถึงจะขอได้) พร้อมแคชผลไว้ใช้ซ้ำสั้นๆ */
 async function fetchPartPhotoUrl(partId) {
+  // ผูกแคชกับ PhotoPath ปัจจุบัน — ถ้ามีคนเปลี่ยนรูป (ไฟล์ใหม่ = path ใหม่) จะขอลิงก์ใหม่ทันที ทุกเครื่อง
+  const part = (state.data.partsCatalog || []).find((p) => p.PartID === partId);
+  const path = part ? part.PhotoPath || part.PhotoUrl || "" : "";
   const cached = partPhotoUrlCache[partId];
-  if (cached && Date.now() - cached.fetchedAt < PART_PHOTO_CACHE_TTL_MS) return cached.url;
+  if (cached && cached.path === path && Date.now() - cached.fetchedAt < PART_PHOTO_CACHE_TTL_MS) return cached.url;
   try {
     const res = await apiPost({ action: "getPartPhotoUrl", token: state.token, partId });
     const url = res && res.ok ? res.photoUrl || "" : "";
-    partPhotoUrlCache[partId] = { url, fetchedAt: Date.now() };
+    partPhotoUrlCache[partId] = { url, path, fetchedAt: Date.now() };
     return url;
   } catch (err) {
     return "";
@@ -4566,6 +4569,8 @@ function openChangePartPhotoModal(partId, partName, hasPhoto) {
           ? "อัปโหลดรูปไม่สำเร็จ — ตรวจสอบว่าตั้งค่าโฟลเดอร์ Drive สำหรับเก็บรูปไว้แล้วหรือยัง"
           : "บันทึกไม่สำเร็จ กรุณาลองใหม่");
       }
+      // ล้างลิงก์รูปเก่าที่แคชไว้ (~10 นาที) ไม่งั้นหน้าจอยังแสดงรูปเดิมจนกว่าจะ refresh
+      delete partPhotoUrlCache[changePartPhotoState.partId];
       await refreshInBackground(true);
       closeGenericFormModal();
       renderCurrentView();
