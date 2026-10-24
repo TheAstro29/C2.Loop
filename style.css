@@ -1874,7 +1874,8 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .mp-wiz.mp-rp { max-width: 1120px; }
 .rp { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; margin-top: 12px; }
 .rp-pick { min-width: 0; }
-.rp-cats { min-width: 0; }
+.rp-cats { min-width: 0; max-width: 100%; }
+.rp-cat { flex: none; }
 .rp-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .rp-search { flex: 1 1 240px; min-width: 0; max-width: 100%; box-sizing: border-box; margin: 0; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: #fff; border-radius: 10px; padding: 0 12px; color: #8a948f; min-height: 42px; }
 .rp-search input { border: 0; outline: 0; flex: 1; min-width: 0; width: 100%; font: inherit; font-size: 14px; background: transparent; color: var(--text); padding: 10px 0; }
@@ -1954,7 +1955,7 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
   .rp { grid-template-columns: minmax(0, 1fr); margin-top: 10px; }
   .rp-tools { flex-direction: column; align-items: stretch; }
   .rp-search { flex: none; }
-  .rp-cats { margin-right: -12px; padding-right: 12px; }
+  .rp-cats { width: 100%; max-width: 100%; -webkit-overflow-scrolling: touch; padding-bottom: 2px; scroll-padding: 0 12px; }
   .rp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-bottom: 84px; }
   .mp-wiz.mp-rp .mp-footer { display: none; }
   /* แถบล่าง: อะไหล่ที่เลือก → แตะเพื่อเปิดแผ่นกรอกจำนวน */

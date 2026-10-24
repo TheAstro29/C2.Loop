@@ -5493,6 +5493,9 @@ function renderRestockPicker(area) {
   if (msg && sel) sel.after(msg);
   const q = document.getElementById("rp-q");
   q.addEventListener("input", () => { rpQuery = q.value; rpRenderGrid(); });
+  // หมวดที่เลือกอยู่ท้ายแถว (เช่น MoisturLyzer บนจอแคบ) — เลื่อนแถวปุ่มหมวดให้เห็นปุ่มนั้นเต็มๆ
+  const catRow = area.querySelector(".rp-cats"), onCat = catRow && catRow.querySelector(".rp-cat.on");
+  if (onCat && catRow.scrollWidth > catRow.clientWidth) catRow.scrollLeft = Math.max(0, onCat.offsetLeft - catRow.offsetLeft - 12);
   rpRenderGrid();
   rpRenderSelected();
 }
