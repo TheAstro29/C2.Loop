@@ -2000,3 +2000,44 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .rp-ph[data-photo-wrap] img, .rp-big[data-photo-wrap] img { object-fit: contain; padding: 8px; box-sizing: border-box; }
 .rp-bar-th[data-photo-wrap] { background: #fff; }
 .rp-bar-th[data-photo-wrap] img { object-fit: contain; padding: 2px; box-sizing: border-box; }
+
+/* ============================================================
+   Sidebar ย่อ/ขยาย (PC >760px) — ปุ่มวงกลม ‹ / › ที่ขอบ sidebar, ย่อเหลือแต่ไอคอน + tooltip ชื่อเมนู
+   จำสถานะไว้ในเครื่อง (localStorage) · มือถือไม่เปลี่ยน (ใช้แถบเมนูล่างเหมือนเดิม) · ดู initSidebarToggle ใน script.js
+   ============================================================ */
+#app-shell.visible { position: relative; }
+.sidebar { transition: width .22s ease, padding .22s ease; overflow-x: hidden; }
+.sb-toggle { display: none; }
+@media (min-width: 761px) {
+  .sb-toggle { display: grid; place-items: center; position: absolute; z-index: 60; top: 34px; left: calc(230px - 15px);
+    width: 30px; height: 30px; border-radius: 50%; border: 1px solid #dfe6e2; background: #fff; color: var(--green-dark);
+    box-shadow: 0 2px 8px rgba(0,0,0,.18); cursor: pointer; transition: left .22s ease, background .15s; padding: 0; font-size: 12px; }
+  .sb-toggle:hover { background: var(--green-light); }
+  .sb-toggle:focus-visible { outline: 3px solid rgba(63,101,77,.35); outline-offset: 2px; }
+  .sb-toggle i { transition: transform .22s ease; }
+  body.sb-mini .sb-toggle { left: calc(76px - 15px); }
+  body.sb-mini .sb-toggle i { transform: rotate(180deg); }
+
+  body.sb-mini .sidebar { width: 76px; padding: 22px 10px; }
+  body.sb-mini .brand-block { margin-bottom: 18px; }
+  body.sb-mini .brand-badge { width: 48px; height: 48px; }
+  body.sb-mini .brand-badge img { width: 28px; height: 28px; }
+  body.sb-mini .brand-block > div:not(.brand-badge) { display: none; }
+  body.sb-mini .nav-item { justify-content: center; padding: 10px 0; gap: 0; position: relative; }
+  body.sb-mini .nav-item > span:not(.nav-icon-chip):not(.nav-badge) { display: none; }
+  body.sb-mini .nav-item > i { width: 24px; font-size: 15px; }
+  body.sb-mini .nav-section-label { font-size: 0; height: 1px; background: rgba(255,255,255,.15); margin: 12px 8px; }
+  body.sb-mini .nav-badge { position: absolute; top: 5px; right: 12px; min-width: 9px; height: 9px; padding: 0; font-size: 0; border: 2px solid var(--green-dark); box-sizing: content-box; }
+  body.sb-mini .sidebar-footer { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  body.sb-mini .user-chip, body.sb-mini #syncLabel { display: none; }
+  body.sb-mini .sync-status { margin: 0 0 4px; }
+  body.sb-mini .btn-logout { width: 44px; height: 40px; padding: 0; margin: 0 !important; font-size: 0; display: grid; place-items: center; }
+  body.sb-mini .btn-logout i { font-size: 15px; margin: 0; }
+  body.sb-mini .btn-logout span { display: none; }
+}
+.sb-tip { position: fixed; z-index: 4000; pointer-events: none; background: #1f2a25; color: #fff; font-size: 12.5px; font-weight: 600;
+  padding: 6px 10px; border-radius: 7px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.25); opacity: 0; transform: translateX(-4px); transition: opacity .12s, transform .12s; }
+.sb-tip.on { opacity: 1; transform: none; }
+.sb-tip::before { content: ""; position: absolute; left: -5px; top: 50%; margin-top: -5px; border: 5px solid transparent; border-left: 0; border-right-color: #1f2a25; }
+.sb-tip b { display: inline-block; margin-left: 6px; background: var(--danger); border-radius: 20px; padding: 0 6px; font-size: 10.5px; }
+@media (prefers-reduced-motion: reduce) { .sidebar, .sb-toggle, .sb-toggle i, .sb-tip { transition: none !important; } }

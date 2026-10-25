@@ -10320,3 +10320,51 @@ function escapeHtml(str) {
 function escapeAttr(str) {
   return escapeHtml(str).replace(/'/g, "&#39;").replace(/\\/g, "\\\\");
 }
+
+// ============================================================
+// Sidebar ย่อ/ขยาย (PC) — ปุ่ม ‹ / › ที่ขอบ sidebar, tooltip ชื่อเมนูตอนย่อ (ตัวเลขแจ้งเตือนแสดงใน tooltip),
+// จำสถานะไว้ในเครื่อง · มือถือซ่อนปุ่มนี้ (ใช้แถบเมนูล่างเหมือนเดิม) — CSS อยู่ท้าย style.css
+// ============================================================
+function initSidebarToggle() {
+  const KEY = "c2loop.sidebarMini";
+  const shell = document.getElementById("app-shell");
+  if (!shell) return;
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "sb-toggle"; btn.innerHTML = '<i class="fas fa-chevron-left"></i>';
+  shell.appendChild(btn);
+  const tip = document.createElement("div"); tip.className = "sb-tip"; document.body.appendChild(tip);
+  const apply = (mini) => {
+    document.body.classList.toggle("sb-mini", mini);
+    btn.setAttribute("aria-label", mini ? "ขยายเมนู" : "ย่อเมนู");
+    btn.title = mini ? "ขยายเมนู" : "ย่อเมนู";
+    btn.setAttribute("aria-expanded", String(!mini));
+    tip.classList.remove("on");
+  };
+  let mini = false; try { mini = localStorage.getItem(KEY) === "1"; } catch (e) {}
+  apply(mini);
+  btn.addEventListener("click", () => { mini = !document.body.classList.contains("sb-mini"); apply(mini); try { localStorage.setItem(KEY, mini ? "1" : "0"); } catch (e) {} });
+  const label = (el) => {
+    if (el.classList.contains("nav-item")) {
+      const t = [...el.children].find((c) => c.tagName === "SPAN" && !c.classList.contains("nav-icon-chip") && !c.classList.contains("nav-badge"));
+      const badge = el.querySelector(".nav-badge");
+      const n = badge && badge.style.display !== "none" ? badge.textContent.trim() : "";
+      return { text: t ? t.textContent.trim() : "", n };
+    }
+    return { text: el.textContent.trim() || el.title || "", n: "" };
+  };
+  const sidebar = document.querySelector(".sidebar");
+  sidebar.addEventListener("mouseover", (e) => {
+    if (!document.body.classList.contains("sb-mini")) return;
+    const el = e.target.closest(".nav-item, .btn-logout"); if (!el) return;
+    const { text, n } = label(el); if (!text) return;
+    tip.innerHTML = ""; tip.textContent = text; if (n) { const b = document.createElement("b"); b.textContent = n; tip.appendChild(b); }
+    const r = el.getBoundingClientRect();
+    tip.style.left = (sidebar.getBoundingClientRect().right + 10) + "px";
+    tip.style.top = (r.top + r.height / 2 - tip.offsetHeight / 2) + "px";
+    tip.classList.add("on");
+  });
+  sidebar.addEventListener("mouseleave", () => tip.classList.remove("on"));
+  sidebar.addEventListener("mouseout", (e) => { if (!e.relatedTarget || !sidebar.contains(e.relatedTarget) || !e.relatedTarget.closest(".nav-item, .btn-logout")) tip.classList.remove("on"); });
+  window.addEventListener("resize", () => { if (window.innerWidth <= 760) tip.classList.remove("on"); });
+}
+document.addEventListener("DOMContentLoaded", initSidebarToggle);
