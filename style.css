@@ -2041,3 +2041,66 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .sb-tip::before { content: ""; position: absolute; left: -5px; top: 50%; margin-top: -5px; border: 5px solid transparent; border-left: 0; border-right-color: #1f2a25; }
 .sb-tip b { display: inline-block; margin-left: 6px; background: var(--danger); border-radius: 20px; padding: 0 6px; font-size: 10.5px; }
 @media (prefers-reduced-motion: reduce) { .sidebar, .sb-toggle, .sb-toggle i, .sb-tip { transition: none !important; } }
+
+
+/* การ์ดอะไหล่บน Dashboard: รายการยืดเต็มการ์ดเมื่อการ์ดอื่นในแถวสูงกว่า (ดู fitPartsCardLists ใน script.js) */
+.kpi-card.kpi-card-parts { display: flex; flex-direction: column; }
+.kpi-card-parts .parts-wrap { flex: 1 1 auto; position: relative; min-height: var(--parts-h, 260px); margin: 2px -20px -6px; }
+.kpi-card-parts .parts-wrap > .parts-list { position: absolute; inset: 0; max-height: none; margin: 0; }
+.kpi-card-parts .parts-wrap > .parts-empty-note { padding: 10px 20px; }
+@media print { .kpi-card-parts .parts-wrap { min-height: 0; } .kpi-card-parts .parts-wrap > .parts-list { position: static; overflow: visible; } }
+
+/* ============================================================
+   เอฟเฟกต์แสงวิ่ง — ดูความหมายแต่ละแบบด้านล่าง
+   ============================================================ */
+/* ---- เอฟเฟกต์แสงวิ่ง (fx-*) — แต่ละแบบมีความหมายเดียว ----
+   beam  = มีงานรอให้กดดำเนินการ · shine = ป้ายสถานะ (ใหม่/ใกล้หมด) · shiny text = แบรนด์ · skeleton = กำลังโหลด
+   หยุดเองเมื่อเครื่องตั้ง "ลดการเคลื่อนไหว" */
+@property --fx-ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes fx-spin { to { --fx-ang: 360deg; } }
+@keyframes fx-shine { 0% { transform: translateX(-180%) skewX(-20deg); } 45%, 100% { transform: translateX(320%) skewX(-20deg); } }
+@keyframes fx-text { 0% { background-position: 130% 0; } 60%, 100% { background-position: -130% 0; } }
+@keyframes fx-sk { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+.fx-beam { position: relative; isolation: isolate; }
+.fx-beam::before { content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 2px; pointer-events: none; z-index: 2;
+  background: conic-gradient(from var(--fx-ang), transparent 0 68%, var(--fx-c, #2fbf71) 80%, #fff 85%, var(--fx-c, #2fbf71) 90%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: fx-spin 3.6s linear infinite; }
+.fx-beam.fx-warn { --fx-c: #f0a020; }
+.fx-beam.fx-red { --fx-c: #e5484d; }
+.fx-shine { position: relative; overflow: hidden; isolation: isolate; }
+.fx-shine::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 55%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.75), transparent); transform: translateX(-180%) skewX(-20deg);
+  animation: fx-shine 3.4s ease-in-out infinite; }
+.fx-hover-shine { position: relative; overflow: hidden; }
+.fx-hover-shine::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 45%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.4), transparent); transform: translateX(-180%) skewX(-20deg); }
+.fx-hover-shine:hover::after { animation: fx-shine .9s ease-out 1; }
+.fx-new { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 800; color: #fff; background: #3F654D; border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: 2px; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .fx-beam::before, .fx-shine::after, .fx-hover-shine::after, .fx-text, .fx-sk { animation: none !important; } }
+/* beam: การ์ด "มีคำขอรออนุมัติ" (Dashboard PC + มือถือ — โชว์เฉพาะตอนมีรายการรอ) */
+.dash-pending-alert { position: relative; isolation: isolate; }
+.dash-pending-alert::before { content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 2px; pointer-events: none; z-index: 2;
+  background: conic-gradient(from var(--fx-ang), transparent 0 68%, #f0a020 80%, #fff 85%, #f0a020 90%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: fx-spin 3.6s linear infinite; }
+/* shine: จุดตัวเลขใกล้หมดบนไอคอนการ์ด Dashboard */
+.icon-badge-dot { overflow: hidden; isolation: isolate; }
+.icon-badge-dot::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 60%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.85), transparent); transform: translateX(-180%) skewX(-20deg); animation: fx-shine 3.4s ease-in-out infinite; }
+/* shine: ป้าย "ใหม่" ของอะไหล่ที่เพิ่มภายใน 7 วัน (ดู partIsNew ใน script.js) */
+.fx-new { position: relative; overflow: hidden; isolation: isolate; }
+.fx-new::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 55%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.8), transparent); transform: translateX(-180%) skewX(-20deg); animation: fx-shine 3.4s ease-in-out infinite; }
+/* hover shine: ปุ่มยืนยันหลัก */
+.mp-fnext, #submitIssuanceBtn { position: relative; overflow: hidden; }
+.mp-fnext::after, #submitIssuanceBtn::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 45%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.4), transparent); transform: translateX(-180%) skewX(-20deg); }
+.mp-fnext:hover::after, #submitIssuanceBtn:hover::after { animation: fx-shine .9s ease-out 1; }
+/* shiny text: ชื่อแอปบนหน้า login */
+.login-card h2 { background: linear-gradient(110deg, var(--green-dark) 0%, var(--green-dark) 42%, #9fd3b4 50%, var(--green-dark) 58%, var(--green-dark) 100%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: fx-text 4.5s ease-in-out infinite; }
+/* skeleton: รูปอะไหล่ระหว่างรอโหลด */
+[data-photo-wrap]:has(> img:not([src])) { background: linear-gradient(90deg, #eceff0 0%, #f7f8f8 40%, #eceff0 80%) !important; background-size: 300% 100% !important; animation: fx-sk 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .dash-pending-alert::before, .icon-badge-dot::after, .fx-new::after, .login-card h2, [data-photo-wrap] { animation: none !important; } }
+[data-photo-wrap] > img:not([src]) { visibility: hidden; }

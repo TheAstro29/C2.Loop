@@ -2025,9 +2025,9 @@ function renderDashboard() {
       const items = computePartsBreakdown(cfg.key);
       const lowCount = items.filter((p) => p.stock <= LOW_STOCK_THRESHOLD).length;
       html += `
-      <div class="kpi-card" style="--kpi-accent:${meta.color}">
+      <div class="kpi-card kpi-card-parts" style="--kpi-accent:${meta.color}">
         ${buildCardHead(lowCount)}<span class="parts-count-pill">${items.length} รายชื่อ</span></div></div>
-        ${partsBreakdownListHtml(items, meta.color)}
+        <div class="parts-wrap">${partsBreakdownListHtml(items, meta.color)}</div>
       </div>`;
       return;
     }
@@ -2150,6 +2150,7 @@ function renderDashboard() {
   `;
 
   content.innerHTML = html;
+  fitPartsCardLists(content);
   renderMonthlyTrendChart();
   renderStockSnapshotChart(summaries);
   // เก็บ summaries ล่าสุดไว้ใน state เพื่อให้ printDashboard() เรียกวาดกราฟรายงานทางการซ้ำได้ตอนกำลังจะพิมพ์จริง
@@ -4448,7 +4449,7 @@ function renderPartsListView(viewKey, cfg) {
       <div class="mcard mcard-with-photo">
         ${photoHtml}
         <div class="mcard-body">
-          <div class="mcard-title part-open" ${openAttr}>${escapeHtml(p.PartName)}</div>
+          <div class="mcard-title part-open" ${openAttr}>${escapeHtml(p.PartName)}${partNewBadgeHtml(p.PartID)}</div>
           ${p.PartDetail ? `<div class="mcard-detail">${escapeHtml(p.PartDetail)}</div>${partSpecButtonHtml(p.PartID, p.PartDetail)}` : ""}
           <div class="mcard-stat-row">
             <div class="mcard-stat"><div class="num">${escapeHtml(String(p.QuantityInStock))}</div><div class="lbl">คงเหลือ</div></div>
@@ -5530,7 +5531,7 @@ function rpRenderGrid() {
       : `<div class="rp-ph rp-noph"><i class="fa-solid fa-camera"></i><span>ยังไม่มีรูป</span></div>`;
     return `<div class="rp-card ${sel ? "sel" : ""}" role="button" tabindex="0" aria-pressed="${sel}" onclick="rpSelect('${id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();rpSelect('${id}')}">
       ${sel ? '<span class="rp-check">✓</span>' : ""}${photo}
-      <span class="rp-info"><span class="rp-name">${escapeHtml(p.PartName)}</span>
+      <span class="rp-info"><span class="rp-name">${escapeHtml(p.PartName)}${partNewBadgeHtml(p.PartID)}</span>
         <span class="rp-meta"><span class="rp-tag ${rpIsSerial(p) ? "sn" : "qty"}">${rpIsSerial(p) ? "มี S/N" : "นับจำนวน"}</span>
         <span class="rp-stk ${stock <= PART_LOW_STOCK ? "low" : ""}">คงเหลือ <b>${stock}</b></span></span></span>
     </div>`;
@@ -10368,3 +10369,29 @@ function initSidebarToggle() {
   window.addEventListener("resize", () => { if (window.innerWidth <= 760) tip.classList.remove("on"); });
 }
 document.addEventListener("DOMContentLoaded", initSidebarToggle);
+
+
+/** การ์ดอะไหล่บน Dashboard (PC): รายการยืดเต็มความสูงการ์ด เมื่อการ์ดข้างๆ ในแถวเดียวกันสูงกว่า (เช่น Color Sorter
+ * ที่มีหลายรุ่น) — ความสูงขั้นต่ำ = ความสูงจริงของรายการ แต่ไม่เกิน 260px (เกินนั้นเลื่อนดูในการ์ด) */
+const PARTS_LIST_MIN_CAP = 260;
+function fitPartsCardLists(root) {
+  (root || document).querySelectorAll(".kpi-card-parts .parts-wrap").forEach((wrap) => {
+    const list = wrap.querySelector(".parts-list");
+    if (!list) { wrap.style.setProperty("--parts-h", "0px"); return; } // ยังไม่มีอะไหล่ — ใช้ความสูงข้อความแจ้งเตือนเอง
+    // วัดความสูงเนื้อหาจริงจากแถวแรกถึงแถวสุดท้าย (scrollHeight ใช้ไม่ได้ เพราะรายการยืดเต็มกล่องอยู่แล้ว)
+    const first = list.firstElementChild, last = list.lastElementChild;
+    const h = first && last ? Math.ceil(last.getBoundingClientRect().bottom - first.getBoundingClientRect().top) + 4 : 0;
+    wrap.style.setProperty("--parts-h", Math.min(PARTS_LIST_MIN_CAP, h || PARTS_LIST_MIN_CAP) + "px");
+  });
+}
+
+
+// ป้าย "✨ ใหม่" (แสงวิ่ง) — อะไหล่ที่เพิ่มเข้าระบบภายใน 7 วัน (ดูจาก partsActivityLog action "Added")
+const PART_NEW_DAYS = 7;
+function partIsNew(partId) {
+  const since = Date.now() - PART_NEW_DAYS * 86400000;
+  return (state.data.partsActivityLog || []).some((l) => l.Action === "Added" && String(l.PartID) === String(partId) && Date.parse(l.Timestamp) >= since);
+}
+function partNewBadgeHtml(partId) {
+  return partIsNew(partId) ? `<span class="fx-new" title="เพิ่มเข้าระบบภายใน ${PART_NEW_DAYS} วัน">✨ ใหม่</span>` : "";
+}
