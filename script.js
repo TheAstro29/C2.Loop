@@ -1716,6 +1716,8 @@ const DASHBOARD_CATEGORY_META = {
 
 // เกณฑ์ "ของใกล้หมด" บน Dashboard มือถือ — ใช้ค่าคงที่เดียวกันทุกหมวด (ปรับตัวเลขนี้ได้ถ้าต้องการ threshold ต่างจากนี้)
 const LOW_STOCK_THRESHOLD = 5;
+/** สถานะสต็อก 2 ระดับ: "out" = หมด (0) · "low" = ใกล้หมด (1..เกณฑ์) · "" = ปกติ */
+function stockLevel(n) { n = Number(n) || 0; return n <= 0 ? "out" : n <= LOW_STOCK_THRESHOLD ? "low" : ""; }
 
 // ชื่ออะไหล่ควรสั้น (ใช้แสดงบน Dashboard/แถบแจ้งเตือน) ส่วนสเปก/ขนาด/รุ่นที่ใช้ได้ให้ใส่ใน "รายละเอียด"
 // ชื่อเกิน PART_NAME_SOFT_MAX แค่เตือน (ไม่บล็อก — อะไหล่เดิมที่ชื่อยาวยังบันทึกได้) รายละเอียดจำกัดที่ PART_DETAIL_MAX
@@ -1849,7 +1851,7 @@ function partRowBarPct(stock) {
 function partsBreakdownListHtml(items, accentColor) {
   if (!items.length) return `<div class="parts-empty-note">ยังไม่มีอะไหล่ในหมวดนี้</div>`;
   return `<div class="parts-list">${items.map((p) => {
-    const isLow = p.stock <= LOW_STOCK_THRESHOLD;
+    const lv = stockLevel(p.stock);
     return `
     <div class="part-row"${p.detail ? ` title="${escapeAttr(p.detail)}"` : ""}>
       <div class="part-name">
@@ -1857,10 +1859,10 @@ function partsBreakdownListHtml(items, accentColor) {
         <span class="part-type-tag">${p.type === "serial" ? "มี S/N" : "นับจำนวน"}</span>
       </div>
       <div class="part-stock">
-        <span class="part-stock-num ${isLow ? "low" : ""}">${p.stock}</span>
-        <div class="part-stock-sub">${p.type === "serial" ? "คงเหลือ · เบิกแล้ว " + p.used : "คงเหลือ"}</div>
+        <span class="part-stock-num ${lv}">${lv === "out" ? '<span class="stk-out-pill">หมด</span>' : p.stock}</span>
+        <div class="part-stock-sub">${p.type === "serial" ? "คงเหลือ · เบิกแล้ว " + p.used : lv === "out" ? "ไม่มีในคลัง" : lv === "low" ? "ใกล้หมด" : "คงเหลือ"}</div>
       </div>
-      <div class="part-row-bar"><span style="width:${partRowBarPct(p.stock)}%; background:${isLow ? "var(--danger)" : accentColor}"></span></div>
+      <div class="part-row-bar"><span style="width:${partRowBarPct(p.stock)}%; background:${lv === "out" ? "var(--danger)" : lv === "low" ? "var(--warning)" : accentColor}"></span></div>
     </div>`;
   }).join("")}</div>`;
 }
@@ -1991,8 +1993,10 @@ function renderDashboard() {
     ? `<div class="lowstock-strip no-print">
         <div class="lowstock-dot"></div>
         <div class="lowstock-text">
-          <b>ของใกล้หมด (≤ ${LOW_STOCK_THRESHOLD} ชิ้น)</b><br>
-          ${allPartsLow.map((p) => `<span class="lowstock-chip">${escapeHtml(p.name)} <b>${p.stock}</b> ชิ้น</span>`).join("")}
+          <b>${allPartsLow.some((p) => p.stock <= 0) ? "ของหมด / ใกล้หมด" : "ของใกล้หมด"} (≤ ${LOW_STOCK_THRESHOLD} ชิ้น)</b><br>
+          ${allPartsLow.map((p) => p.stock <= 0
+            ? `<span class="lowstock-chip out">${escapeHtml(p.name)} <b>หมด</b></span>`
+            : `<span class="lowstock-chip">${escapeHtml(p.name)} <b>${p.stock}</b> ชิ้น</span>`).join("")}
         </div>
       </div>`
     : "";
@@ -2015,8 +2019,8 @@ function renderDashboard() {
     // เช่น "อะไหล่ Color Sorter" ที่ขึ้น 2 บรรทัด — ดู preview 3 แบบที่ผู้ใช้เลือกแบบ "จุดแจ้งเตือนมุมไอคอน" ในที่สุด):
     // จุดกลมเล็กๆ มุมขวาบนของไอคอนหมวด แสดงจำนวนรายการที่ใกล้หมดในการ์ดนั้น ไม่กินพื้นที่แถวหัวข้อเลยไม่ว่าชื่อจะยาว
     // แค่ไหน ใช้ร่วมกันทั้งการ์ดอะไหล่ (นับรายชื่ออะไหล่ใกล้หมด) และการ์ด Gateway (นับรุ่นที่ใกล้หมด) ให้ดูเหมือนกันทั้งแอป
-    const buildCardHead = (dotCount) => {
-      const dotHtml = dotCount > 0 ? `<span class="icon-badge-dot">${dotCount}</span>` : "";
+    const buildCardHead = (dotCount, hasOut) => {
+      const dotHtml = dotCount > 0 ? `<span class="icon-badge-dot${hasOut ? " out" : ""}" title="${hasOut ? "มีรายการหมด" : "ใกล้หมด"}">${dotCount}</span>` : "";
       return `<div class="kpi-card-top"><div class="kpi-icon-badge" style="background:${meta.color}"><i class="fas ${meta.icon}"></i>${dotHtml}</div><div class="kpi-card-title-plain${PART_CATEGORY_BY_VIEW[cfg.key] ? " with-count" : ""}">${PART_CATEGORY_BY_VIEW[cfg.key] ? `<span>${cardTitle}</span>` : cardTitle}`;
     };
 
@@ -2024,9 +2028,10 @@ function renderDashboard() {
     if (PART_CATEGORY_BY_VIEW[cfg.key]) {
       const items = computePartsBreakdown(cfg.key);
       const lowCount = items.filter((p) => p.stock <= LOW_STOCK_THRESHOLD).length;
+      const hasOut = items.some((p) => p.stock <= 0);
       html += `
       <div class="kpi-card kpi-card-parts" style="--kpi-accent:${meta.color}">
-        ${buildCardHead(lowCount)}<span class="parts-count-pill">${items.length} รายชื่อ</span></div></div>
+        ${buildCardHead(lowCount, hasOut)}<span class="parts-count-pill">${items.length} รายชื่อ</span></div></div>
         <div class="parts-wrap">${partsBreakdownListHtml(items, meta.color)}</div>
       </div>`;
       return;
@@ -2274,8 +2279,8 @@ function renderDashboardMobile(content, summaries) {
         <div class="dm-low-alert">
           <div class="dm-low-icon"><i class="fas fa-triangle-exclamation"></i></div>
           <div class="dm-low-body">
-            <b>ใกล้หมด (≤ ${LOW_STOCK_THRESHOLD}) — ควรเตรียมสั่งเพิ่ม</b>
-            <div class="dm-chips">${allLow.slice(0, LOW_CHIP_MAX).map((x) => `<span class="dm-chip">${escapeHtml(x.name)} <b>${x.stock}</b></span>`).join("")}${allLow.length > LOW_CHIP_MAX ? `<span class="dm-chip more">+${allLow.length - LOW_CHIP_MAX} รายการ</span>` : ""}</div>
+            <b>${allLow.some((x) => Number(x.stock) <= 0) ? "หมด / ใกล้หมด" : "ใกล้หมด"} (≤ ${LOW_STOCK_THRESHOLD}) — ควรเตรียมสั่งเพิ่ม</b>
+            <div class="dm-chips">${allLow.slice(0, LOW_CHIP_MAX).map((x) => `${Number(x.stock) <= 0 ? `<span class="dm-chip out">${escapeHtml(x.name)} <b>หมด</b></span>` : `<span class="dm-chip">${escapeHtml(x.name)} <b>${x.stock}</b></span>`}`).join("")}${allLow.length > LOW_CHIP_MAX ? `<span class="dm-chip more">+${allLow.length - LOW_CHIP_MAX} รายการ</span>` : ""}</div>
           </div>
         </div>` : ""}
 
@@ -2378,7 +2383,7 @@ function computeFormalReportAttentionItems() {
     .filter((p) => p.stock <= LOW_STOCK_THRESHOLD)
     .sort((a, b) => a.stock - b.stock);
   if (allPartsLow.length) {
-    items.push(`อะไหล่ใกล้หมด (≤ ${LOW_STOCK_THRESHOLD} ชิ้น): ${allPartsLow.map((p) => `${p.name} (เหลือ ${p.stock})`).join(", ")}`);
+    items.push(`อะไหล่หมด/ใกล้หมด (≤ ${LOW_STOCK_THRESHOLD} ชิ้น): ${allPartsLow.map((p) => `${p.name} (${p.stock <= 0 ? "หมด" : "เหลือ " + p.stock})`).join(", ")}`);
   }
 
   const claimRows = typeof getSupplierClaimRows === "function" ? getSupplierClaimRows() : [];
@@ -3424,7 +3429,7 @@ function renderPanolyzerView() {
       <div class="table-scroll">
         <table>
           <thead><tr>
-            <th>S/N Analyzer</th><th>ลูกค้า</th><th>สถานที่</th><th>สถานะ</th><th>ประเภท</th><th>Model</th><th>Mode</th><th>S/N Edge server (ในชีต)</th><th>Gateway ที่ผูกไว้ (C2-Loop)</th><th></th>
+            <th>S/N Analyzer</th><th>ลูกค้า</th><th>สถานที่</th><th>สถานะ</th><th>ประเภท</th><th>Model</th><th>Mode</th><th>S/N Edge server (ในชีต)</th><th>S/N Gateway (ในชีต)</th><th>Gateway ที่ผูกไว้ (C2-Loop)</th><th></th>
           </tr></thead>
           <tbody id="panoTbody"></tbody>
         </table>
@@ -3449,7 +3454,7 @@ function getFilteredPanolyzerRows() {
     if (statusFilter === "stock" && !stock) return false;
     if (statusFilter === "used" && stock) return false;
     if (!search) return true;
-    return [PANOLYZER_SERIAL_FIELD, "Client name", "Location", "Type", "Model", "Mode", "S/N Edge server"]
+    return [PANOLYZER_SERIAL_FIELD, "Client name", "Location", "Type", "Model", "Mode", "S/N Edge server", "S/N Gateway"]
       .some((f) => String(row[f] || "").toLowerCase().includes(search));
   });
 }
@@ -3469,7 +3474,7 @@ function renderPanolyzerRowsAsTable() {
   const rows = getFilteredPanolyzerRows();
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">ไม่พบข้อมูล — ลองกดรีเฟรชข้อมูลตอนนี้</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">ไม่พบข้อมูล — ลองกดรีเฟรชข้อมูลตอนนี้</td></tr>`;
     return;
   }
 
@@ -3494,6 +3499,7 @@ function renderPanolyzerRowsAsTable() {
       <td>${escapeHtml(String(row["Model"] || ""))}</td>
       <td>${escapeHtml(String(row["Mode"] || ""))}</td>
       <td>${escapeHtml(String(row["S/N Edge server"] || ""))}</td>
+      <td>${escapeHtml(String(row["S/N Gateway"] || ""))}</td>
       <td onclick="event.stopPropagation()">${row.linkedGatewaySerial ? `<span class="badge-linkable" onclick="goToLinkedAsset('gateway', '${escapeAttr(String(row.linkedGatewaySerial))}')" title="คลิกเพื่อไปดูรายการนี้">${escapeHtml(String(row.linkedGatewaySerial))}</span>` : `<span class="cache-note">-</span>`}</td>
       <td class="no-wrap" onclick="event.stopPropagation()">${attachBtn}</td>
     </tr>`;
@@ -3530,6 +3536,7 @@ function renderPanolyzerRowsAsCards() {
       ["Model", row["Model"]],
       ["Mode", row["Mode"]],
       ["S/N Edge server (ในชีต)", row["S/N Edge server"]],
+      ["S/N Gateway (ในชีต)", row["S/N Gateway"]],
       ["Gateway ที่ผูกไว้ (C2-Loop)", row.linkedGatewaySerial, true],
     ].filter(([, v]) => v !== undefined && v !== null && String(v) !== "")
       .map(([label, v, linkToGateway]) => `<div class="mcard-row"><div class="mcard-label">${escapeHtml(label)}</div><div class="mcard-val">${linkToGateway ? `<span class="badge-linkable" onclick="goToLinkedAsset('gateway', '${escapeAttr(String(v))}')" title="คลิกเพื่อไปดูรายการนี้">${escapeHtml(String(v))}</span>` : escapeHtml(String(v))}</div></div>`)
@@ -3638,6 +3645,10 @@ function openAddMachineForm(type, preset) {
       <label for="am-edge">S/N Edge server <span class="am-muted">(เฉพาะ RT)</span></label>
       <input type="text" id="am-edge" placeholder="ถ้ามี">
     </div>
+    <div class="am-f">
+      <label for="am-gw">S/N Gateway <span class="am-muted">(เฉพาะ RT)</span></label>
+      <input type="text" id="am-gw" placeholder="ถ้ามี">
+    </div>
     ${dateStatus}
     <div class="am-f"><label for="am-remark">หมายเหตุ</label><textarea id="am-remark" rows="2" placeholder="ล็อตที่มา / เลขใบขน ฯลฯ"></textarea></div>
     <label class="am-chk"><input type="checkbox" id="am-next" ${preset._next ? "checked" : ""}>เพิ่มเครื่องถัดไปต่อ (จำ ประเภท/Model ไว้)</label>` : `
@@ -3704,6 +3715,7 @@ function openAddMachineForm(type, preset) {
       data.Type = t ? t.value : "L";
       if (val("am-mode")) data.Mode = val("am-mode");
       if (val("am-edge")) data["S/N Edge server"] = val("am-edge");
+      if (val("am-gw")) data["S/N Gateway"] = val("am-gw");
     } else {
       if (val("am-code")) data["Model code"] = val("am-code");
       if (val("am-fw")) data.Firmware = val("am-fw");
@@ -4724,6 +4736,7 @@ function openPanolyzerDetailModal(serial) {
     ["Model", row["Model"], "text"],
     ["Mode", row["Mode"], "text"],
     ["S/N Edge server (ในชีต)", row["S/N Edge server"], "text"],
+    ["S/N Gateway (ในชีต)", row["S/N Gateway"], "text"],
     ["Gateway ที่ผูกไว้ (C2-Loop)", row.linkedGatewaySerial, "gateway"],
   ].map(([label, v, kind]) => {
     let valHtml;
@@ -5436,7 +5449,7 @@ function renderManagePartsFormArea() {
 // PC: การ์ดรูปด้านซ้าย + แผงกรอกจำนวนด้านขวา · มือถือ: การ์ด 2 คอลัมน์ + แถบล่าง → แผ่นกรอกจำนวนเลื่อนขึ้น
 // UI เท่านั้น — ยังใช้ managePartsForm.restockPartId / quantity / serials และขั้นตรวจสอบ/บันทึกเดิมทุกอย่าง
 // ============================================================
-const PART_LOW_STOCK = 2; // คงเหลือเท่านี้หรือน้อยกว่า แสดงตัวเลขสีแดง
+// สีตัวเลขคงเหลือใช้ stockLevel() ตัวเดียวกับทั้งแอป: หมด (0) = แดง · ใกล้หมด (≤ LOW_STOCK_THRESHOLD) = ส้ม
 let rpQuery = "";
 
 function mpSyncRestockLayout() {
@@ -5533,7 +5546,7 @@ function rpRenderGrid() {
       ${sel ? '<span class="rp-check">✓</span>' : ""}${photo}
       <span class="rp-info"><span class="rp-name">${escapeHtml(p.PartName)}${partNewBadgeHtml(p.PartID)}</span>
         <span class="rp-meta"><span class="rp-tag ${rpIsSerial(p) ? "sn" : "qty"}">${rpIsSerial(p) ? "มี S/N" : "นับจำนวน"}</span>
-        <span class="rp-stk ${stock <= PART_LOW_STOCK ? "low" : ""}">คงเหลือ <b>${stock}</b></span></span></span>
+        <span class="rp-stk ${stockLevel(stock)}">${stock <= 0 ? '<span class="stk-out-pill">หมด</span>' : `คงเหลือ <b>${stock}</b>`}</span></span></span>
     </div>`;
   }).join("");
   hydratePartPhotoThumbnails(grid);
@@ -5565,7 +5578,7 @@ function rpRenderSelected() {
       <div class="rp-sel-txt"><h3>${escapeHtml(p.PartName)}</h3>
         <div class="rp-meta"><span class="rp-tag ${rpIsSerial(p) ? "sn" : "qty"}">${rpIsSerial(p) ? "มี S/N" : "นับจำนวน"}</span>
           <span class="rp-tag cat">${escapeHtml(PART_CATEGORY_LABEL[p.Category] || p.Category)}</span></div>
-        <div class="rp-stk ${stock <= PART_LOW_STOCK ? "low" : ""}">คงเหลือ <b>${stock}</b> ชิ้น</div></div></div>
+        <div class="rp-stk ${stockLevel(stock)}">${stock <= 0 ? '<span class="stk-out-pill">หมด</span> ไม่มีในคลัง' : `คงเหลือ <b>${stock}</b> ชิ้น`}</div></div></div>
     ${p.PartDetail ? partSpecHtml(p.PartDetail) : ""}`;
   hydratePartPhotoThumbnails(box);
   if (bar) {
@@ -8887,7 +8900,7 @@ async function submitIssuanceRequest() {
     const simItem = { assetType: b.assetType, serialNo: b.serialNo, connectTo: b.connectTo, connectSerial: b.connectSerial || "", newLocation: itemLocation };
     if (b.assetType === "SimCard") simItem.installedGatewaySerial = b.connectSerial || "";
     // Gateway ที่จับคู่กับ Panolyzer "ที่อยู่ในคำขอเดียวกัน" — ส่ง connectTo เป็น "Panolyzer" (ค่าเดียวกับที่ฝั่ง Gateway คู่กันเดิมเคยส่ง)
-    // เพราะ backend ใช้ค่านี้ค้นหา Gateway ของเครื่อง Panolyzer ตอนบันทึกการส่งมอบลงชีต (S/N Edge server) ถ้าเป็นค่าเริ่มต้น
+    // เพราะ backend ใช้ค่านี้ค้นหา Gateway ของเครื่อง Panolyzer ตอนบันทึกการส่งมอบลงชีต (คอลัมน์ S/N Gateway) ถ้าเป็นค่าเริ่มต้น
     // "Panolyzer (L)" จะหา Gateway ไม่เจอ
     if (b.assetType === "Gateway" && b.connectSerial && issuanceForm.basket.some((x) => x.assetType === "Panolyzer" && String(x.serialNo) === String(b.connectSerial))) {
       simItem.connectTo = "Panolyzer";
