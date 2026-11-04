@@ -1122,6 +1122,7 @@ function translateIssuanceItem(doc) {
     // ยืม → ลูกค้าซื้อ: id ของเอกสารชิ้นนี้ + ผลของชิ้นในใบยืม ("bought"/"returned", ว่าง = ยังยืมอยู่)
     ItemDocID: doc.id,
     LoanOutcome: d.loanOutcome || "",
+    LoanOutcomeAt: d.loanOutcomeAt || "",
     SaleTxn: d.saleTxn || "",
   };
 }
@@ -2371,122 +2372,175 @@ function computeFormalReportRows(summaries) {
   });
 }
 
-/** ข้อความ "ประเด็นที่ควรติดตาม" ของรายงานทางการ — ดึงจากข้อมูลจริงเท่านั้น (คำขอรออนุมัติ/อะไหล่ใกล้หมด/
- * รายการรอเคลมจาก Supplier ค้างนานสุด) ถ้าไม่มีประเด็นอะไรเลยให้ขึ้นข้อความสรุปว่าปกติดีแทนกล่องว่างเปล่า */
-function computeFormalReportAttentionItems() {
-  const items = [];
-  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
-  if (pending > 0) items.push(`มีคำขอเบิกรออนุมัติ ${pending} รายการ — ควรตรวจสอบและอนุมัติโดยเร็ว`);
 
-  const allPartsLow = Object.keys(PART_CATEGORY_BY_VIEW)
-    .flatMap((viewKey) => computePartsBreakdown(viewKey))
-    .filter((p) => p.stock <= LOW_STOCK_THRESHOLD)
-    .sort((a, b) => a.stock - b.stock);
-  if (allPartsLow.length) {
-    items.push(`อะไหล่หมด/ใกล้หมด (≤ ${LOW_STOCK_THRESHOLD} ชิ้น): ${allPartsLow.map((p) => `${p.name} (${p.stock <= 0 ? "หมด" : "เหลือ " + p.stock})`).join(", ")}`);
-  }
+/** ของยืมที่ยังอยู่ที่ลูกค้า (ใบยืมที่อนุมัติแล้ว ยังไม่ซื้อ/คืน) — เรียงนานสุดก่อน */
+function computeOpenLoanItems() {
+  const out = [];
+  (state.data.issuanceLog || []).forEach((txn) => {
+    if (txn.IssuanceType !== "ยืม" || txn.RequestStatus !== "Issued" || txn.MovementType) return;
+    getItemsForTransaction(txn.TransactionID).filter((i) => !i.LoanOutcome).forEach((item) => {
+      out.push({ txn, item, days: psDaysSince(txn.Timestamp) || 0 });
+    });
+  });
+  return out.sort((a, b) => b.days - a.days);
+}
+const LONG_LOAN_DAYS = 30;
 
+/** แยกสถานะเครื่องต่อประเภท: ในคลัง / ใช้งาน-ติดตั้ง / ยืม / รอเคลม / ตัดจำหน่าย — หมวดอะไหล่ใช้ยอดรวมเดิม
+ * (computeFormalReportRows) และไม่แยกยืม/เคลม เพราะอะไหล่แบบนับจำนวนไม่มีสถานะรายชิ้น */
+function computeFormalStatusRows(summaries) {
+  const loanSerials = new Set(computeOpenLoanItems().map((l) => String(l.item.SerialNo)));
+  const base = computeFormalReportRows(summaries);
+  return summaries.map(({ cfg }, idx) => {
+    const r = base[idx];
+    if (PART_CATEGORY_BY_VIEW[cfg.key]) return { ...r, part: true, inUse: r.used, loan: null, claim: null, writeoff: 0 };
+    let rows, serialOf, isStock, isClaim, isOff;
+    if (cfg.key === PANOLYZER_KEY) {
+      rows = state.data.panolyzer || []; serialOf = (x) => x[PANOLYZER_SERIAL_FIELD]; isStock = isPanolyzerStockRow;
+      isClaim = (x) => String(x[PANOLYZER_STOCK_FIELD] || "").trim() === CLAIM_STOCK_VALUE; isOff = () => false;
+    } else if (cfg.key === COLORSORTER_KEY) {
+      rows = state.data.colorSorter || []; serialOf = (x) => x[COLORSORTER_SERIAL_FIELD]; isStock = isColorSorterStockRow;
+      isClaim = (x) => String(x[COLORSORTER_STOCK_FIELD] || "").trim() === CLAIM_STOCK_VALUE; isOff = () => false;
+    } else {
+      rows = state.data[cfg.key] || []; serialOf = (x) => x[cfg.serialField]; isStock = (x) => isPhysicalStockRow(x, cfg.stockField);
+      isClaim = (x) => isClaimedRow(x, cfg); isOff = (x) => isWrittenOffRow(x, cfg);
+    }
+    let stock = 0, loan = 0, claim = 0, writeoff = 0;
+    rows.forEach((x) => {
+      if (isStock(x)) stock++;
+      else if (isClaim(x)) claim++;
+      else if (isOff(x)) writeoff++;
+      else if (loanSerials.has(String(serialOf(x)))) loan++;
+    });
+    const total = rows.length;
+    let sub = "";
+    if (cfg.key === "gateway") {
+      sub = GATEWAY_MODEL_BREAKDOWN_META.map((m) => `${m.label} ${rows.filter((x) => normalizeGatewayModel(x[GATEWAY_MODEL_FIELD]) === m.model).length}`).join(" · ");
+    }
+    return { label: r.label, sub, total, stock, used: total - stock, inUse: total - stock - loan - claim - writeoff, loan, claim, writeoff };
+  });
+}
+
+/** เบิก/ยืมที่อนุมัติในเดือนนี้ แยกตามลูกค้า (ไม่นับย้าย/เคลม) */
+function computeMonthlyByCustomer() {
+  const now = new Date(), map = {};
+  (state.data.issuanceLog || []).forEach((txn) => {
+    if (txn.MovementType || (txn.RequestStatus !== "Issued" && txn.RequestStatus !== "Returned")) return;
+    const d = new Date(txn.Timestamp);
+    if (isNaN(d.getTime()) || d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth()) return;
+    const k = txn.CustomerName || "ไม่ระบุลูกค้า";
+    const m = map[k] || (map[k] = { name: k, docs: 0, pieces: 0 });
+    m.docs++;
+    m.pieces += getItemsForTransaction(txn.TransactionID).reduce((s, i) => s + psQtyOf(i), 0);
+  });
+  return Object.values(map).sort((a, b) => b.pieces - a.pieces || b.docs - a.docs);
+}
+
+/** ประเด็นที่ควรติดตาม — แต่ละแถวมีป้ายหมวด + เลขใบ/S/N ที่ต้องตามจริง */
+function computeFormalAttentionRows(openLoans) {
+  const rows = [];
+  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval");
+  if (pending.length) rows.push(["warn", "รออนุมัติ", `คำขอ ${pending.length} ใบ — ${pending.slice(0, 4).map((t) => t.TransactionID).join(", ")}${pending.length > 4 ? ` และอีก ${pending.length - 4} ใบ` : ""}`]);
+  const low = Object.keys(PART_CATEGORY_BY_VIEW).flatMap((k) => computePartsBreakdown(k)).filter((p) => p.stock <= LOW_STOCK_THRESHOLD).sort((a, b) => a.stock - b.stock);
+  if (low.length) rows.push(["orange", "อะไหล่ใกล้หมด", low.slice(0, 4).map((p) => `${p.name} (${p.stock <= 0 ? "หมด" : "เหลือ " + p.stock})`).join(" · ") + (low.length > 4 ? ` และอีก ${low.length - 4} รายการ` : "")]);
   const claimRows = typeof getSupplierClaimRows === "function" ? getSupplierClaimRows() : [];
   if (claimRows.length) {
-    const oldest = claimRows[0];
-    const days = oldest.row.ClaimedAt ? Math.max(0, Math.floor((Date.now() - new Date(oldest.row.ClaimedAt).getTime()) / 86400000)) : null;
-    items.push(`มีรายการรอเคลมจาก Supplier ${claimRows.length} รายการ${days !== null ? ` (ค้างนานสุด ${days} วัน — S/N ${oldest.serial})` : ""}`);
+    const o = claimRows[0];
+    const days = o.row.ClaimedAt ? psDaysSince(o.row.ClaimedAt) : null;
+    rows.push(["gray", "รอเคลม Supplier", `${claimRows.length} รายการ${days !== null ? ` — ค้างนานสุด ${days} วัน (${o.serial})` : ""}`]);
   }
-
-  return items;
+  const longLoans = openLoans.filter((l) => l.days > LONG_LOAN_DAYS);
+  if (longLoans.length) rows.push(["warn", "ยืมนาน", `เกิน ${LONG_LOAN_DAYS} วัน ${longLoans.length} รายการ — ${longLoans.slice(0, 3).map((l) => `${l.txn.CustomerName} · ${psSerialOf(l.item) || psItemName(l.item).name}`).join(", ")}`]);
+  return rows;
 }
 
 function buildFormalDashboardReportHtml(summaries) {
   const now = new Date();
-  // อ้างอิงรายงานอิงจากวันที่สร้าง ไม่ใช่เลขทะเบียนเอกสารจริง (ระบบนี้ไม่ได้มีทะเบียนเอกสารแบบรันเลขต่อเนื่อง)
   const docRef = `RPT-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-  const rows = computeFormalReportRows(summaries);
-  const totalAll = rows.reduce((s, r) => s + r.total, 0);
-  const stockAll = rows.reduce((s, r) => s + r.stock, 0);
-  const usedAll = rows.reduce((s, r) => s + r.used, 0);
+  const rows = computeFormalStatusRows(summaries).filter((r) => r.total > 0);
+  const sum = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
+  const totalAll = sum("total"), stockAll = sum("stock"), usedAll = sum("used");
   const utilAll = totalAll > 0 ? Math.round((usedAll / totalAll) * 100) : 0;
+  const hasWriteoff = rows.some((r) => r.writeoff > 0);
 
   const monthly = computeMonthlyIssuedComparison();
-  const monthlyDiff = monthly.current - monthly.previous;
-  const monthlyPct = monthly.previous > 0 ? Math.round((monthlyDiff / monthly.previous) * 100) : (monthly.current > 0 ? 100 : 0);
-  const monthlyTrendHtml = monthly.previous === 0 && monthly.current === 0
-    ? `เดือนก่อนไม่มีข้อมูล`
-    : `<b class="${monthlyDiff >= 0 ? "up" : "down"}">${monthlyDiff >= 0 ? "▲" : "▼"} ${Math.abs(monthlyPct)}%</b> จากเดือนก่อน`;
+  const diff = monthly.current - monthly.previous;
+  const pct = monthly.previous > 0 ? Math.round((diff / monthly.previous) * 100) : (monthly.current > 0 ? 100 : 0);
+  const trend = monthly.previous === 0 && monthly.current === 0 ? "เดือนก่อนไม่มีข้อมูล" : `<b class="${diff >= 0 ? "up" : "down"}">${diff >= 0 ? "▲" : "▼"} ${Math.abs(pct)}%</b> จากเดือนก่อน`;
 
-  const pending = (state.data.issuanceLog || []).filter((r) => r.RequestStatus === "PendingApproval").length;
-  const attentionItems = computeFormalReportAttentionItems();
+  const openLoans = computeOpenLoanItems();
+  const byCust = computeMonthlyByCustomer();
+  const attention = computeFormalAttentionRows(openLoans);
+  const num = (v) => (v === null ? `<span class="rp-dash">–</span>` : v);
+  const MAX_LOANS = 5, MAX_CUST = 5;
+  const custShown = byCust.slice(0, MAX_CUST - (byCust.length > MAX_CUST ? 1 : 0));
+  const custRest = byCust.slice(custShown.length);
+
+  const head = (sub) => `
+    <div class="rp-header">
+      <div class="rp-logo-col"><img src="assets/c2tech-logo.png" alt="C2TECH"></div>
+      <div class="rp-title-col">
+        <div class="rp-title-th">รายงานสรุปคลังอุปกรณ์และการเบิกจ่าย${sub ? ` <span class="rp-title-cont">${sub}</span>` : ""}</div>
+        <div class="rp-title-en">Equipment Inventory &amp; Issuance Summary Report</div>
+      </div>
+    </div>`;
+  const foot = (page) => `
+    <div class="rp-footer">
+      <div>บริษัท ซีทูเทค จำกัด (C2 Tech Company Limited) · 99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999 · www.c2tech.app</div>
+      <div class="rp-pageno">${escapeHtml(docRef)} · หน้า ${page}/2</div>
+    </div>`;
 
   return `
     <div class="rp-page">
     <div class="rp-body">
-    <div class="rp-header">
-      <div class="rp-logo-col"><img src="assets/c2tech-logo.png" alt="C2TECH"></div>
-      <div class="rp-title-col">
-        <div class="rp-title-th">รายงานสรุปคลังอุปกรณ์และการเบิกจ่าย</div>
-        <div class="rp-title-en">Equipment Inventory &amp; Issuance Summary Report</div>
-      </div>
-    </div>
+    ${head("")}
     <div class="rp-metabar">
       <div class="rp-meta-item">อ้างอิงรายงาน<b>${escapeHtml(docRef)}</b></div>
-      <div class="rp-meta-item">วันที่ออกรายงาน<b>${escapeHtml(formatDateTh(now.toISOString()))}</b></div>
+      <div class="rp-meta-item">ข้อมูล ณ<b>${escapeHtml(psDate(now.toISOString(), true))}</b></div>
       <div class="rp-meta-item">นำเสนอ<b>ผู้บริหาร บริษัท ซีทูเทค จำกัด</b></div>
       <div class="rp-meta-item">จัดทำโดย<b>ระบบ C2-Loop (อัตโนมัติ)</b></div>
     </div>
 
-    <div class="rp-exec-title">สรุปภาพรวม (Executive Summary)</div>
     <div class="rp-exec-grid">
-      <div class="rp-exec-cell">
-        <div class="rp-exec-label">อุปกรณ์ทั้งหมดในระบบ</div>
-        <div class="rp-exec-num">${totalAll} <small>ชิ้น</small></div>
-        <div class="rp-exec-sub">${rows.length} ประเภทหลัก</div>
-      </div>
-      <div class="rp-exec-cell">
-        <div class="rp-exec-label">อยู่ในคลัง พร้อมเบิก</div>
-        <div class="rp-exec-num">${stockAll} <small>ชิ้น</small></div>
-        <div class="rp-exec-sub">อัตราใช้งานรวม ${utilAll}%</div>
-      </div>
-      <div class="rp-exec-cell">
-        <div class="rp-exec-label">เบิกออกไปแล้ว (เดือนนี้)</div>
-        <div class="rp-exec-num">${monthly.current} <small>รายการ</small></div>
-        <div class="rp-exec-sub">${monthlyTrendHtml}</div>
-      </div>
-      <div class="rp-exec-cell">
-        <div class="rp-exec-label">ต้องติดตาม</div>
-        <div class="rp-exec-num">${attentionItems.length} <small>ประเด็น</small></div>
-        <div class="rp-exec-sub">${pending > 0 ? `<b class="warn">รออนุมัติ ${pending}</b>` : "ไม่มีคำขอค้างอนุมัติ"}</div>
-      </div>
+      <div class="rp-exec-cell"><div class="rp-exec-label">อุปกรณ์ทั้งหมดในระบบ</div><div class="rp-exec-num">${totalAll} <small>ชิ้น</small></div><div class="rp-exec-sub">${rows.length} ประเภท</div></div>
+      <div class="rp-exec-cell"><div class="rp-exec-label">พร้อมเบิก (อยู่ในคลัง)</div><div class="rp-exec-num">${stockAll} <small>ชิ้น</small></div><div class="rp-exec-sub">อัตราใช้งานรวม ${utilAll}%</div></div>
+      <div class="rp-exec-cell"><div class="rp-exec-label">ทำรายการเดือนนี้</div><div class="rp-exec-num">${monthly.current} <small>ใบ</small></div><div class="rp-exec-sub">${trend}</div></div>
+      <div class="rp-exec-cell"><div class="rp-exec-label">ของยืมอยู่ที่ลูกค้า</div><div class="rp-exec-num">${openLoans.length} <small>ชิ้น</small></div><div class="rp-exec-sub">${openLoans.length ? `นานสุด ${openLoans[0].days} วัน` : "ไม่มีของยืมค้าง"}</div></div>
     </div>
 
-    <div class="rp-section-title"><i class="fas fa-table"></i> สรุปคงคลังแยกตามประเภท</div>
-    <table class="rp-table">
-      <thead><tr><th>ประเภทอุปกรณ์</th><th class="num">ทั้งหมด</th><th class="num">อยู่ในคลัง</th><th class="num">เบิกออกไปแล้ว</th><th>อัตราใช้งาน</th></tr></thead>
+    <div class="rp-section-title">สรุปคงคลังแยกตามประเภทและสถานะ</div>
+    <table class="rp-table rp-status">
+      <thead><tr><th>ประเภทอุปกรณ์</th><th class="num">ทั้งหมด</th><th class="num">ในคลัง</th><th class="num">ใช้งาน/ติดตั้ง</th><th class="num">ยืม</th><th class="num">รอเคลม</th>${hasWriteoff ? `<th class="num">ตัดจำหน่าย</th>` : ""}<th>อัตราใช้งาน</th></tr></thead>
       <tbody>
         ${rows.map((r) => {
-          const pct = r.total > 0 ? Math.round((r.used / r.total) * 100) : 0;
-          return `<tr><td>${escapeHtml(r.label)}</td><td class="num">${r.total}</td><td class="num">${r.stock}</td><td class="num">${r.used}</td>
-            <td><div class="rp-util-cell"><span class="rp-util-bar"><span style="width:${pct}%"></span></span>${pct}%</div></td></tr>`;
+          const p = r.total > 0 ? Math.round((r.used / r.total) * 100) : 0;
+          return `<tr><td>${escapeHtml(r.label)}${r.sub ? `<span class="rp-sub">${escapeHtml(r.sub)}</span>` : ""}</td><td class="num">${r.total}</td><td class="num">${r.stock}</td><td class="num">${r.inUse}</td><td class="num">${num(r.loan)}</td><td class="num">${num(r.claim)}</td>${hasWriteoff ? `<td class="num">${r.part ? num(null) : r.writeoff}</td>` : ""}
+            <td><div class="rp-util-cell"><span class="rp-util-bar"><span style="width:${p}%"></span></span>${p}%</div></td></tr>`;
         }).join("")}
       </tbody>
-      <tfoot>
-        <tr><td>รวมทั้งหมด</td><td class="num">${totalAll}</td><td class="num">${stockAll}</td><td class="num">${usedAll}</td><td>${utilAll}%</td></tr>
-      </tfoot>
+      <tfoot><tr><td>รวมทั้งหมด</td><td class="num">${totalAll}</td><td class="num">${stockAll}</td><td class="num">${sum("inUse")}</td><td class="num">${sum("loan")}</td><td class="num">${sum("claim")}</td>${hasWriteoff ? `<td class="num">${sum("writeoff")}</td>` : ""}<td>${utilAll}%</td></tr></tfoot>
     </table>
 
-    <div class="rp-charts">
-      <div class="rp-chart-box">
-        ${formalTrendSvg()}
-        <div class="rp-fig-caption">รูปที่ 1 — แนวโน้มการเบิกรายเดือน (ธุรกรรมที่อนุมัติแล้ว)</div>
+    <div class="rp-two">
+      <div>
+        <div class="rp-section-title">ของยืมที่ยังอยู่ที่ลูกค้า</div>
+        ${openLoans.length ? `<table class="rp-table rp-mini"><thead><tr><th>ลูกค้า</th><th>รายการ · S/N</th><th class="num">วัน</th></tr></thead><tbody>
+          ${openLoans.slice(0, MAX_LOANS).map((l) => `<tr><td>${escapeHtml(l.txn.CustomerName || "-")}</td><td>${escapeHtml(psItemName(l.item).name)}${psSerialOf(l.item) ? ` <span class="rp-mono">${escapeHtml(psSerialOf(l.item))}</span>` : ""}</td><td class="num${l.days > LONG_LOAN_DAYS ? " rp-late" : ""}">${l.days}</td></tr>`).join("")}
+          ${openLoans.length > MAX_LOANS ? `<tr><td colspan="3" class="rp-more">และอีก ${openLoans.length - MAX_LOANS} รายการ (ดูได้ในหน้าประวัติ)</td></tr>` : ""}
+        </tbody></table>` : `<div class="rp-empty">ไม่มีของยืมค้างอยู่ที่ลูกค้า</div>`}
       </div>
-      <div class="rp-chart-box">
-        ${formalStockSvg(rows)}
-        <div class="rp-fig-caption">รูปที่ 2 — สัดส่วนคงคลัง ณ ปัจจุบัน</div>
+      <div>
+        <div class="rp-section-title">เบิก/ยืมเดือนนี้ แยกตามลูกค้า</div>
+        ${byCust.length ? `<table class="rp-table rp-mini"><thead><tr><th>ลูกค้า</th><th class="num">ใบ</th><th class="num">ชิ้น</th></tr></thead><tbody>
+          ${custShown.map((c) => `<tr><td>${escapeHtml(c.name)}</td><td class="num">${c.docs}</td><td class="num">${c.pieces}</td></tr>`).join("")}
+          ${custRest.length ? `<tr><td>อื่นๆ ${custRest.length} ราย</td><td class="num">${custRest.reduce((s, c) => s + c.docs, 0)}</td><td class="num">${custRest.reduce((s, c) => s + c.pieces, 0)}</td></tr>` : ""}
+        </tbody></table>` : `<div class="rp-empty">เดือนนี้ยังไม่มีการเบิก</div>`}
       </div>
     </div>
 
-    <div class="rp-attn">
-      <div class="rp-attn-head"><i class="fas fa-triangle-exclamation"></i> ประเด็นที่ควรติดตาม</div>
-      ${attentionItems.length ? `<ul>${attentionItems.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>` : `<div>ไม่มีประเด็นเร่งด่วนที่ต้องติดตามในขณะนี้</div>`}
-    </div>
+    <div class="rp-section-title">ประเด็นที่ควรติดตาม</div>
+    ${attention.length ? `<table class="rp-table rp-attn2"><tbody>${attention.map(([tone, tag, text]) => `<tr><td class="rp-attn-tag"><span class="rp-tag rp-tag-${tone}">${escapeHtml(tag)}</span></td><td>${escapeHtml(text)}</td></tr>`).join("")}</tbody></table>`
+      : `<div class="rp-empty">ไม่มีประเด็นเร่งด่วนที่ต้องติดตามในขณะนี้</div>`}
 
     <div class="rp-sign">
       <div class="rp-sign-cell"><div class="rp-sign-line"></div><div class="rp-sign-role">ผู้จัดทำรายงาน</div><div>ฝ่ายคลังอุปกรณ์</div></div>
@@ -2494,11 +2548,22 @@ function buildFormalDashboardReportHtml(summaries) {
       <div class="rp-sign-cell"><div class="rp-sign-line"></div><div class="rp-sign-role">รับทราบโดย</div><div>ผู้บริหาร</div></div>
     </div>
     </div>
-
-    <div class="rp-footer">
-      <div>บริษัท ซีทูเทค จำกัด (C2 Tech Company Limited) · 99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999 · www.c2tech.app</div>
-      <div class="rp-pageno">สร้างโดยระบบ C2-Loop อัตโนมัติ</div>
+    ${foot(1)}
     </div>
+
+    <div class="rp-page rp-page2">
+    <div class="rp-body">
+    ${head("(ต่อ)")}
+    <div class="rp-chart-full">
+      ${formalTrendSvg()}
+      <div class="rp-fig-caption">รูปที่ 1 — แนวโน้มการเบิกรายเดือน 6 เดือนล่าสุด (ธุรกรรมที่อนุมัติแล้ว)</div>
+    </div>
+    <div class="rp-chart-full">
+      ${formalStockSvg(computeFormalReportRows(summaries))}
+      <div class="rp-fig-caption">รูปที่ 2 — จำนวนอุปกรณ์แต่ละประเภท ณ ปัจจุบัน (ในคลัง / เบิกออก)</div>
+    </div>
+    </div>
+    ${foot(2)}
     </div>
   `;
 }
@@ -2545,7 +2610,7 @@ function formalTrendSvg() {
   const months = allMonths.slice(-6);
   if (!months.length) return `<div class="rp-chart-empty">ยังไม่มีข้อมูลการเบิกที่อนุมัติแล้ว</div>`;
   const types = FORMAL_TREND_TYPES.filter((t) => months.some((m) => (monthly[m][t] || 0) > 0));
-  const W = 360, H = 150, L = 26, R = 8, T = 8, B = 22;
+  const W = 360, H = 150, L = 26, R = 18, T = 8, B = 22;
   const max = Math.max(1, ...months.flatMap((m) => types.map((t) => monthly[m][t] || 0)));
   const step = Math.max(1, Math.ceil(max / 4));
   const yMax = step * 4;
@@ -2842,138 +2907,269 @@ function printSlip(transactionId) {
   return printIssuanceSlip(transactionId);
 }
 
-/** อุปกรณ์แบบมี S/N จริงที่ควรโชว์ในคอลัมน์ Serial ของใบเบิก — ไม่นับอะไหล่แบบนับจำนวน (SerialNo เป็น PartID ภายใน
- * ไม่ใช่ S/N จริง) และไม่นับของนอกระบบ (Other, ไม่มี Serial เลย) */
-function itemHasRealSerial(item) {
-  return !PART_QTY_DEVICE_LABEL[item.AssetType] && item.AssetType !== "Other" && !!String(item.SerialNo || "").trim();
+// ============================================================
+// เอกสารพิมพ์ชุดใหม่ (รอบ "รายงานอ่านง่าย" 4 พ.ย. 2569) — ใบเบิก / ใบยืม / ใบขาย / ใบย้าย / ใบเคลม ใช้แม่แบบเดียวกัน
+// (หัวกระดาษ + กล่องเลขที่เอกสาร + ข้อมูลลูกค้า + ผู้ขอ/ผู้อนุมัติ + ตาราง + หมายเหตุ + ลายเซ็น) คลาส ps-* ใน style.css
+// ข้อมูลที่แอปมีแต่ใบพิมพ์เดิมไม่มี: S/N ของนอกสต็อก, ผู้อนุมัติ+วันที่, ซิมใส่ Gateway ตัวไหน, จุดติดตั้งรายชิ้น,
+// ผลการยืมรายชิ้น, บันทึกย้อนหลัง, เส้นทางของใบ (ขอ → อนุมัติ → ซื้อ/คืน/ยกเลิก)
+// ============================================================
+const PS_MON = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+/** วันที่แบบอ่านง่ายสำหรับเอกสารพิมพ์ "4 พ.ย. 2569" (withTime → "4 พ.ย. 2569 10:12") */
+function psDate(iso, withTime) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const s = `${d.getDate()} ${PS_MON[d.getMonth()]} ${d.getFullYear() + 543}`;
+  return withTime ? `${s} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : s;
+}
+function psDaysSince(iso) {
+  const t = new Date(iso).getTime();
+  return isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
 }
 
-/** สร้างตารางรายการของใบเบิก (colgroup + thead + tbody) แบบซ่อนคอลัมน์อัตโนมัติ — เช็คระดับ "ทั้งใบเบิก" ไม่ใช่ทีละแถว:
- * คอลัมน์ Serial โชว์ก็ต่อเมื่อมีอย่างน้อย 1 รายการที่มี S/N จริง (ดู itemHasRealSerial), คอลัมน์ "นำไปใส่อุปกรณ์ไหน"
- * โชว์ก็ต่อเมื่อมีอย่างน้อย 1 รายการที่ระบุ ConnectTo ไว้ ถ้าใบเบิกนั้นไม่มีรายการไหนมีข้อมูลคอลัมน์ใดเลย ให้ตัด
- * คอลัมน์นั้นทิ้งทั้งตารางแทนที่จะโชว์ "-"/"—" เกะกะไปเปล่าๆ — คอลัมน์ #, ประเภทอุปกรณ์, จำนวน อยู่เสมอทุกกรณี */
-function buildIssuanceSlipTable(items) {
-  const hasSerial = items.some(itemHasRealSerial);
-  const hasConnect = items.some((i) => !!i.ConnectTo);
+/** ชนิดเอกสารตามรายการ — ชื่อหัวเอกสาร/สี/คำกริยาในสถานะ/ป้ายลายเซ็น */
+function psDocKind(txn) {
+  if (txn.MovementType === "Transfer") return { key: "transfer", th: "ใบย้ายอุปกรณ์", en: "Equipment Transfer Form", tone: "blue", done: "ย้ายแล้ว", reqLabel: "ผู้แจ้งคำขอ" };
+  if (txn.MovementType === "Claim") return { key: "claim", th: "ใบเคลมอุปกรณ์", en: "Equipment Claim Form", tone: "orange", done: "เคลมแล้ว", reqLabel: "ผู้แจ้งเคลม" };
+  if (txn.FromLoanTxn) return { key: "sale", th: "ใบขายอุปกรณ์", en: "Equipment Sale Form", tone: "blue", done: "ขายแล้ว", reqLabel: "ผู้ขอเบิก" };
+  if (txn.IssuanceType === "ยืม") return { key: "loan", th: "ใบยืมอุปกรณ์", en: "Equipment Loan Form", tone: "green", done: "ยืมอยู่", reqLabel: "ผู้ขอยืม" };
+  return { key: "issue", th: "ใบเบิกอุปกรณ์", en: "Equipment Issuance Form", tone: "green", done: "เบิกแล้ว", reqLabel: "ผู้ขอเบิก" };
+}
+function psStatusBadge(txn, kind) {
+  const m = {
+    PendingApproval: ["รออนุมัติ", "warn"], Issued: [kind.done, "ok"], Rejected: ["ถูกปฏิเสธ", "bad"],
+    Returned: ["คืนแล้ว", "info"], Cancelled: ["ยกเลิกแล้ว", "gray"],
+  }[txn.RequestStatus] || [txn.RequestStatus || "-", "gray"];
+  return `<span class="ps-badge ps-b-${m[1]}">${escapeHtml(m[0])}</span>`;
+}
 
-  const cols = [
-    { key: "no", label: "#", cls: "slip-col-no" },
-    { key: "type", label: "ประเภทอุปกรณ์", cls: "slip-col-type" },
-    ...(hasSerial ? [{ key: "serial", label: "Serial", cls: "slip-col-serial" }] : []),
-    ...(hasConnect ? [{ key: "connect", label: "นำไปใส่อุปกรณ์ไหน", cls: "slip-col-connect" }] : []),
-    { key: "qty", label: "จำนวน", cls: "slip-col-qty" },
-  ];
-
-  const colgroup = cols.map((c) => `<col class="${c.cls}">`).join("");
-  const thead = cols.map((c) => `<th>${c.label}</th>`).join("");
-  const rows = items.map((item, idx) => {
-    const cells = cols.map((c) => {
-      if (c.key === "no") return `<td>${idx + 1}</td>`;
-      if (c.key === "type") return `<td>${formatItemLabel(item, { withQty: false })}</td>`;
-      if (c.key === "serial") return `<td>${formatItemSerialLabel(item)}</td>`;
-      if (c.key === "connect") return `<td>${formatConnectColumn(item)}</td>`;
-      if (c.key === "qty") return `<td>${escapeHtml(String(item.AssetType === "Other" || PART_QTY_DEVICE_LABEL[item.AssetType] ? (Number(item.Quantity) || 1) : 1))}</td>`;
-      return "<td></td>";
-    }).join("");
-    return `<tr>${cells}</tr>`;
-  }).join("");
-
+function psLetterhead(kind, txn, extraBadge) {
+  const typeLabel = { issue: "เบิก", loan: "ยืม", sale: "ขาย (จากใบยืม)", transfer: "ย้าย", claim: "เคลม" }[kind.key];
   return `
-    <div class="slip-table-wrap">
-      <table class="slip-table2">
-        <colgroup>${colgroup}</colgroup>
-        <thead><tr>${thead}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
+    <div class="ps-head">
+      <div class="ps-brand">
+        <div class="ps-brand-top">
+          <img src="assets/c2tech-logo.png" class="ps-logo" alt="C2TECH">
+          <div><div class="ps-co">บริษัท ซีทูเทค จำกัด</div><div class="ps-co-en">C2 Tech Company Limited</div></div>
+        </div>
+        <div class="ps-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · <span class="ps-nw">063-929-1999</span>, <span class="ps-nw">064-654-5636</span></div>
+      </div>
+      <div class="ps-docbox">
+        <div class="ps-title ps-t-${kind.tone}">${kind.th}</div>
+        <div class="ps-title-en">${kind.en}</div>
+        <table>
+          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
+          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(psDate(txn.Timestamp) || "-")}</td></tr>
+          <tr><th>ประเภท / สถานะ</th><td>${escapeHtml(typeLabel)} ${psStatusBadge(txn, kind)}${extraBadge || ""}</td></tr>
+        </table>
+      </div>
+    </div>`;
+}
+function psCell(label, valueHtml, subHtml) {
+  return `<div class="ps-cell"><div class="ps-lab">${label}</div><div class="ps-val">${valueHtml}${subHtml ? ` <small>${subHtml}</small>` : ""}</div></div>`;
+}
+/** ผู้ขอ + ผู้อนุมัติ พร้อมวันเวลา (เป็นข้อมูล ไม่ใช่ช่องเซ็น — ช่องเซ็นผู้อนุมัติถูกตัดออกตามที่ผู้ใช้ขอเมื่อ 14 ต.ค.) */
+function psPeopleCells(txn, kind) {
+  const via = delegatedByText(txn);
+  const req = psCell(`${kind.reqLabel} · Requested by`, escapeHtml(txn.IssuedBy || "-"),
+    `· ${escapeHtml(psDate(txn.Timestamp, true))}${via ? ` · ${escapeHtml(via)}` : ""}`);
+  let appr;
+  if (kind.key === "sale") {
+    appr = psCell("บันทึกขายโดย · Recorded by", escapeHtml(txn.ConvertedBy || txn.ApprovedBy || "-"), txn.ApprovedAt ? `· ${escapeHtml(psDate(txn.ApprovedAt, true))}` : "");
+  } else if (txn.RequestStatus === "PendingApproval") {
+    appr = psCell("ผู้อนุมัติ · Approved by", `<span class="ps-muted">รออนุมัติ</span>`);
+  } else if (txn.RequestStatus === "Rejected") {
+    appr = psCell("ผู้ปฏิเสธ · Rejected by", escapeHtml(txn.ApprovedBy || "-"), txn.ApprovedAt ? `· ${escapeHtml(psDate(txn.ApprovedAt, true))}` : "");
+  } else {
+    appr = psCell("ผู้อนุมัติ · Approved by", escapeHtml(txn.ApprovedBy || "-"), txn.ApprovedAt ? `· ${escapeHtml(psDate(txn.ApprovedAt, true))}` : "");
+  }
+  return req + appr;
+}
+function psBackdateNote(txn) {
+  if (!txn.Backdated) return "";
+  return `<div class="ps-callout ps-c-orange"><b>ใบนี้บันทึกย้อนหลัง</b> · บันทึกเข้าระบบเมื่อ ${escapeHtml(psDate(txn.RecordedAt, true) || "-")}${txn.SubmittedBy ? ` โดย ${escapeHtml(txn.SubmittedBy)}` : ""} · ${txn.StockMode === "NOSTOCK" ? "ไม่ตัดสต็อก" : "ตัดสต็อก"}${txn.BackdateReason ? ` · เหตุผล: ${escapeHtml(txn.BackdateReason)}` : ""}</div>`;
+}
+function psRemark(label, text, tone) {
+  return `<div class="ps-remark${tone ? " ps-remark-" + tone : ""}"><div class="ps-lab">${label}</div><div class="ps-remark-text">${text ? escapeHtml(text) : "&nbsp;"}</div></div>`;
+}
+function psSignatures(boxes) {
+  return `<div class="ps-sign ps-sign-${boxes.length}">${boxes.map(([role, name, note]) => `
+    <div class="ps-sg"><div class="ps-sg-role">${role}</div><div class="ps-sg-name">${name ? escapeHtml(name) : "&nbsp;"}</div>${note ? `<div class="ps-sg-note">${escapeHtml(note)}</div>` : ""}
+      <div class="ps-sg-line"></div><div class="ps-sg-date">วันที่ ______ / ______ / ________</div></div>`).join("")}</div>`;
+}
+function psFooter() {
+  return `<div class="ps-foot"><span>เอกสารสร้างโดยระบบ C2-Loop · c2tech.app</span><span>พิมพ์เมื่อ ${escapeHtml(psDate(new Date().toISOString(), true))}</span></div>`;
+}
+/** เส้นทางของใบ 1 บรรทัด — แสดงเมื่อมีเหตุการณ์หลังอนุมัติ (คืน/ซื้อ/ยกเลิก) ไม่งั้นซ้ำกับช่องผู้ขอ/ผู้อนุมัติเฉยๆ */
+function psFlow(txn, items, kind) {
+  const steps = [[kind.key === "loan" ? "ขอยืม" : "ขอเบิก", txn.Timestamp]];
+  if (txn.ApprovedAt) steps.push([txn.RequestStatus === "Rejected" ? "ปฏิเสธ" : "อนุมัติ", txn.ApprovedAt]);
+  let after = 0;
+  if (kind.key === "loan") {
+    const bought = items.filter((i) => i.LoanOutcome === "bought");
+    const returned = items.filter((i) => i.LoanOutcome === "returned");
+    const lastAt = (arr) => arr.map((i) => i.LoanOutcomeAt).filter(Boolean).sort().pop();
+    if (bought.length) { steps.push([`ลูกค้าซื้อ ${bought.length} ชิ้น`, lastAt(bought) || txn.LoanConvertedAt]); after++; }
+    if (returned.length) { steps.push([`คืน ${returned.length} ชิ้น`, lastAt(returned) || txn.ReturnedAt || txn.LoanConvertedAt]); after++; }
+  }
+  if (txn.ReturnedAt && !(kind.key === "loan" && items.some((i) => i.LoanOutcome === "returned"))) { steps.push(["คืนของ", txn.ReturnedAt]); after++; }
+  if (txn.CancelledAt) { steps.push([`ยกเลิก${txn.CancelledBy ? " โดย " + txn.CancelledBy : ""}`, txn.CancelledAt]); after++; }
+  if (!after) return "";
+  return `<div class="ps-flow">${steps.map(([l, at]) => `<div>${escapeHtml(l)}<b>${escapeHtml(psDate(at) || "-")}</b></div>`).join("")}</div>`;
 }
 
-function printIssuanceSlip(transactionId) {
-  const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
-  if (!txn) return;
-  const items = getItemsForTransaction(transactionId);
-  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เบิกแล้ว", Rejected: "ถูกปฏิเสธ", Returned: "คืนแล้ว", Cancelled: "ยกเลิกแล้ว" };
-
-  // Phase: จัดฟอร์มใบเบิกใหม่สำหรับพิมพ์ (ตามที่ผู้ใช้ขอ) — ใช้คลาสชุดใหม่ .formal-doc2/.formal-letterhead/ฯลฯ
-  // (ดูคอมเมนต์อธิบายที่ style.css) เฉพาะใบเบิกเท่านั้น ใบย้าย/ใบเคลม (printTransferSlip/printClaimSlip) ยังใช้
-  // โครงเดิม (.formal-doc/.formal-header) อยู่ ไม่ได้แก้ไปด้วยในรอบนี้
-  const printedAt = formatDateTh(new Date().toISOString());
-  const html = `
-    <div class="print-slip report-doc formal-doc2">
-
-      <div class="formal-letterhead">
-        <div class="formal-brand">
-          <div class="formal-brand-top">
-            <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
-            <div class="formal-company">
-              <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
-              <div class="formal-company-sub">C2 Tech Company Limited</div>
-            </div>
-          </div>
-          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · <span style="white-space:nowrap">063-929-1999</span>, <span style="white-space:nowrap">064-654-5636</span></div>
-        </div>
-        <div class="formal-docbox">
-          <div class="formal-docbox-title">ใบเบิกอุปกรณ์</div>
-          <span class="formal-docbox-title-en">Equipment Issuance Form</span>
-          <table>
-            <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
-            <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
-            <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}${txn.IssuanceType === "ยืม" ? ` <span class="status-badge status-loan" style="margin-left:6px;">ยืม</span>` : ""}</td></tr>
-          </table>
-        </div>
-      </div>
-
-      <div class="formal-infogrid">
-        <div class="formal-infocell">
-          <div class="formal-infolabel">ลูกค้า · Customer</div>
-          <div class="formal-infovalue">${escapeHtml(txn.CustomerName)}</div>
-        </div>
-        <div class="formal-infocell">
-          <div class="formal-infolabel">สถานที่ติดตั้ง · Site Location</div>
-          <div class="formal-infovalue">${escapeHtml(txn.SiteLocation || "-")}</div>
-        </div>
-      </div>
-
-      ${buildIssuanceSlipTable(items)}
-      <div class="slip-table-summary2">รวมทั้งหมด ${items.length} รายการ</div>
-
-      <div class="formal-remark-box2">
-        <div class="formal-remark-label">หมายเหตุ · Remark</div>
-        <div class="formal-remark-text">${txn.Details ? escapeHtml(txn.Details) : "&nbsp;"}</div>
-      </div>
-
-      <div class="signature-row-3b">
-        <div class="signature-box2">
-          <div class="signature-role2">ผู้เบิก / ผู้ส่งมอบ</div>
-          <div class="signature-name2">${escapeHtml(txn.IssuedBy || "")}</div>
-          ${delegatedByText(txn) ? `<div class="signature-delegated-note">${escapeHtml(delegatedByText(txn))}</div>` : ""}
-          <div class="signature-line2"></div>
-          <div class="signature-date2">วันที่ ______ / ______ / ________</div>
-        </div>
-        <div class="signature-box2">
-          <div class="signature-role2">ผู้รับของ · Received by</div>
-          <div class="signature-name2">&nbsp;</div>
-          <div class="signature-line2"></div>
-          <div class="signature-date2">วันที่ ______ / ______ / ________</div>
-        </div>
-      </div>
-
-      <div class="formal-footer">
-        <span>เอกสารสร้างโดยระบบ C2-Loop · c2tech.app</span>
-        <span>พิมพ์เมื่อ ${escapeHtml(printedAt)}</span>
-      </div>
-    </div>
-  `;
-
-  if (isInIframe()) {
-    printSlipViaPopup(html);
-    return;
+// ----- รายการในตาราง -----
+function psIsPart(item) {
+  return !!PART_QTY_DEVICE_LABEL[item.AssetType] || !!Object.values(VIEW_CONFIG).find((c) => c.partCategory && c.assetType === item.AssetType);
+}
+function psItemGroup(item) { return item.AssetType === "Other" ? "other" : psIsPart(item) ? "part" : "main"; }
+/** S/N จริงของรายการ (ว่าง = ไม่มี) — แก้บั๊ก: ของนอกสต็อก (Other) ที่กรอก S/N ไว้ ใบพิมพ์เดิมไม่แสดงเลย
+ * (ตอนเพิ่มลงตะกร้า ถ้าไม่กรอก S/N ระบบเก็บเป็น "-") · อะไหล่แบบนับจำนวน SerialNo คือ PartID ภายใน ไม่ใช่ S/N */
+function psSerialOf(item) {
+  if (PART_QTY_DEVICE_LABEL[item.AssetType]) return "";
+  const s = String(item.SerialNo || "").trim();
+  return s === "-" ? "" : s;
+}
+function psQtyOf(item) {
+  return item.AssetType === "Other" || PART_QTY_DEVICE_LABEL[item.AssetType] ? (Number(item.Quantity) || 1) : 1;
+}
+function psItemName(item) {
+  if (item.AssetType === "Other") return { name: item.ItemName || "อื่นๆ", sub: "ของนอกสต็อก" };
+  const qtyLabel = PART_QTY_DEVICE_LABEL[item.AssetType];
+  if (qtyLabel) return { name: item.ItemName || "อะไหล่", sub: `อะไหล่ ${qtyLabel}` };
+  const unitCfg = Object.values(VIEW_CONFIG).find((c) => c.partCategory && c.assetType === item.AssetType);
+  if (unitCfg) {
+    const unit = (state.data[unitCfg.key] || []).find((r) => String(r.SerialNo) === String(item.SerialNo));
+    return { name: item.ItemName || (unit && unit.PartName) || "อะไหล่", sub: `อะไหล่ ${PART_CATEGORY_LABEL[unitCfg.partCategory] || unitCfg.partCategory}` };
   }
+  const cfg = viewConfigByAssetType(item.AssetType);
+  let sub = "";
+  if (item.AssetType === "Gateway") {
+    const row = (state.data.gateway || []).find((r) => String(r[VIEW_CONFIG.gateway.serialField]) === String(item.SerialNo));
+    const model = row && String(row[GATEWAY_MODEL_FIELD] || "").trim();
+    if (model) sub = `รุ่น ${model}`;
+  }
+  return { name: (cfg && cfg.title) || item.AssetType || "อุปกรณ์", sub };
+}
+/** "ใช้กับ / ติดตั้งที่" — การเชื่อมต่อ (SimCard บอก Gateway ที่ใส่อยู่จริง) + จุดติดตั้งรายชิ้นที่ต่างจากสถานที่หลัก */
+function psUseText(item, txn) {
+  const parts = [];
+  const conn = describeItemConnection(item);
+  if (conn) parts.push(item.AssetType === "SimCard" && item.InstalledGatewaySerial ? `ใส่ใน ${conn}` : conn);
+  const loc = String(item.NewLocation || "").trim();
+  if (loc && loc !== String(txn.SiteLocation || "").trim()) parts.push(`ติดตั้งที่ ${escapeHtml(loc)}`);
+  return parts.join(" · ");
+}
+/** ผลการยืมรายชิ้น (ใบยืม) */
+function psLoanOutcome(item, txn) {
+  if (item.LoanOutcome === "bought") {
+    const sale = (state.data.issuanceLog || []).find((t) => t.TransactionID === item.SaleTxn);
+    const bits = [psDate(item.LoanOutcomeAt || (sale && sale.Timestamp) || txn.LoanConvertedAt), item.SaleTxn ? `ใบขาย ${item.SaleTxn}` : "", sale && sale.SaleDocRef ? `เลขที่ ${sale.SaleDocRef}` : ""].filter(Boolean);
+    return { cls: "sale", label: "ลูกค้าซื้อ", sub: bits.join(" · "), key: "bought" };
+  }
+  if (item.LoanOutcome === "returned" || txn.RequestStatus === "Returned") {
+    return { cls: "info", label: "คืนแล้ว", sub: psDate(item.LoanOutcomeAt || txn.ReturnedAt), key: "returned" };
+  }
+  if (txn.RequestStatus === "Issued") {
+    const d = psDaysSince(txn.Timestamp);
+    return { cls: "warn", label: "อยู่ที่ลูกค้า", sub: d !== null ? `ยืมมาแล้ว ${d} วัน` : "", key: "open" };
+  }
+  return { cls: "gray", label: "—", sub: "", key: "none" };
+}
 
+/** ตารางรายการ — แบ่งกลุ่ม อุปกรณ์หลัก / อะไหล่ / ของนอกสต็อก (หัวกลุ่มโชว์เมื่อมีมากกว่า 1 กลุ่ม) · คอลัมน์ S/N และ
+ * "ใช้กับ / ติดตั้งที่" โชว์เมื่อมีอย่างน้อย 1 แถวที่มีข้อมูล · ใบยืมมีคอลัมน์ "ผลการยืม" (ย้ายการเชื่อมต่อไปเป็นบรรทัดรอง) */
+function psItemsTable(items, txn, kind) {
+  const isLoan = kind.key === "loan";
+  const hasSerial = items.some((i) => !!psSerialOf(i));
+  const hasUse = !isLoan && items.some((i) => !!psUseText(i, txn));
+  const order = ["main", "part", "other"];
+  const groupLabel = { main: "อุปกรณ์หลัก", part: "อะไหล่", other: "ของนอกสต็อก" };
+  const sorted = order.flatMap((g) => items.filter((i) => psItemGroup(i) === g));
+  const groupsUsed = order.filter((g) => sorted.some((i) => psItemGroup(i) === g));
+  const nCols = 3 + (hasSerial ? 1 : 0) + (hasUse ? 1 : 0) + (isLoan ? 1 : 0);
+  let lastGroup = "";
+  const rows = sorted.map((item, idx) => {
+    const g = psItemGroup(item);
+    const head = groupsUsed.length > 1 && g !== lastGroup ? `<tr class="ps-grp"><td colspan="${nCols}">${groupLabel[g]}</td></tr>` : "";
+    lastGroup = g;
+    const nm = psItemName(item);
+    const sn = psSerialOf(item);
+    const subLines = [nm.sub ? escapeHtml(nm.sub) : "", isLoan ? psUseText(item, txn) : ""].filter(Boolean);
+    let cells = `<td class="ps-n">${idx + 1}</td><td><span class="ps-nm">${escapeHtml(nm.name)}</span>${subLines.map((s) => `<span class="ps-sub">${s}</span>`).join("")}</td>`;
+    if (hasSerial) cells += `<td class="ps-sn">${sn ? escapeHtml(sn) : `<span class="ps-muted">—</span>`}</td>`;
+    if (hasUse) cells += `<td>${psUseText(item, txn) || `<span class="ps-muted">—</span>`}</td>`;
+    if (isLoan) {
+      const o = psLoanOutcome(item, txn);
+      cells += `<td><span class="ps-badge ps-b-${o.cls}">${escapeHtml(o.label)}</span>${o.sub ? `<span class="ps-sub">${escapeHtml(o.sub)}</span>` : ""}</td>`;
+    }
+    cells += `<td class="ps-q">${psQtyOf(item)}</td>`;
+    return `${head}<tr>${cells}</tr>`;
+  }).join("");
+  const th = `<th class="ps-n">#</th><th>รายการ</th>${hasSerial ? "<th>S/N</th>" : ""}${hasUse ? "<th>ใช้กับ / ติดตั้งที่</th>" : ""}${isLoan ? "<th>ผลการยืม</th>" : ""}<th class="ps-q">จำนวน</th>`;
+  return `<table class="ps-table"><thead><tr>${th}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+function psSummary(items, txn, kind) {
+  const pieces = items.reduce((s, i) => s + psQtyOf(i), 0);
+  const parts = [`รวม <b>${items.length}</b> รายการ`];
+  if (pieces !== items.length) parts.push(`รวม <b>${pieces}</b> ชิ้น`);
+  if (kind.key === "loan") {
+    const c = { bought: 0, returned: 0, open: 0 };
+    items.forEach((i) => { const k = psLoanOutcome(i, txn).key; if (c[k] !== undefined) c[k]++; });
+    if (c.bought) parts.push(`ซื้อ <b>${c.bought}</b>`);
+    if (c.returned) parts.push(`คืนแล้ว <b>${c.returned}</b>`);
+    if (c.open) parts.push(`ยังอยู่ที่ลูกค้า <b>${c.open}</b>`);
+  }
+  return `<div class="ps-sum">${parts.map((p) => `<span>${p}</span>`).join("")}</div>`;
+}
+function psLoanExtraBadge(items, txn) {
+  if (txn.RequestStatus !== "Issued") return "";
+  const done = items.filter((i) => i.LoanOutcome).length;
+  if (!done) return "";
+  return done < items.length ? ` <span class="ps-badge ps-b-gray">ปิดบางส่วน</span>` : ` <span class="ps-badge ps-b-gray">ปิดครบ</span>`;
+}
+function psOutput(html) {
+  if (isInIframe()) { printSlipViaPopup(html); return; }
   document.getElementById("printSlipRoot").innerHTML = html;
   document.body.classList.add("print-slip-active");
   printAfterImagesLoad(document.getElementById("printSlipRoot"));
+}
+
+// ----- ใบเบิก / ใบยืม / ใบขาย -----
+function buildIssuanceSlipHtml(txn, items) {
+  const kind = psDocKind(txn);
+  const extra = kind.key === "loan" ? psLoanExtraBadge(items, txn) : "";
+  const saleCells = kind.key === "sale"
+    ? psCell("อ้างอิงใบยืม · Loan ref.", escapeHtml(txn.FromLoanTxn)) + psCell("เลขที่เอกสารขาย · Sale doc.", txn.SaleDocRef ? escapeHtml(txn.SaleDocRef) : `<span class="ps-muted">—</span>`)
+    : "";
+  const sign = {
+    issue: [["ผู้เบิก / ผู้ส่งมอบ", txn.IssuedBy, delegatedByText(txn)], ["ผู้รับของ · Received by", "", ""]],
+    loan: [["ผู้ส่งมอบของให้ยืม", txn.IssuedBy, delegatedByText(txn)], ["ลูกค้าผู้ยืม · Borrower", "", ""]],
+    sale: [["ผู้ส่งมอบ", txn.IssuedBy, ""], ["ลูกค้าผู้ซื้อ · Buyer", "", ""]],
+  }[kind.key];
+  return `
+    <div class="print-slip ps-doc">
+      ${psLetterhead(kind, txn, extra)}
+      <div class="ps-grid">
+        ${psCell("ลูกค้า · Customer", escapeHtml(txn.CustomerName || "-"))}
+        ${psCell("สถานที่ติดตั้ง · Site", escapeHtml(txn.SiteLocation || "-"))}
+        ${psPeopleCells(txn, kind)}
+        ${saleCells}
+      </div>
+      ${psItemsTable(items, txn, kind)}
+      ${psSummary(items, txn, kind)}
+      ${psBackdateNote(txn)}
+      ${psRemark("หมายเหตุ · Remark", txn.Details)}
+      ${psFlow(txn, items, kind)}
+      <div class="ps-spacer"></div>
+      ${psSignatures(sign)}
+      ${psFooter()}
+    </div>`;
+}
+function printIssuanceSlip(transactionId) {
+  const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
+  if (!txn) return;
+  psOutput(buildIssuanceSlipHtml(txn, getItemsForTransaction(transactionId)));
 }
 
 /** หา VIEW_CONFIG ที่ตรงกับ AssetType จริง (เช่น "MoisturLyzer") — ใช้แทนการเดา key จาก AssetType ตรงๆ
@@ -2982,150 +3178,95 @@ function viewConfigByAssetType(assetType) {
   return Object.values(VIEW_CONFIG).find((c) => c.assetType === assetType);
 }
 
-/** ใบย้ายอุปกรณ์ — ฟอร์มใหม่ (สีฟ้า) เน้นบล็อก "ย้ายจาก → ย้ายไปที่" ให้เห็นชัดว่าอุปกรณ์ย้ายจากลูกค้า/ไซต์ไหนไปไหน */
+// ----- ใบย้าย -----
+function buildTransferSlipHtml(txn, items) {
+  const kind = psDocKind(txn);
+  const main = items[0];
+  const rows = items.map((item, idx) => {
+    const nm = psItemName(item);
+    let note;
+    if (idx === 0) {
+      const conn = describeItemConnection(item);
+      note = conn ? `เชื่อมกับ ${conn}` : "เครื่องหลัก";
+    } else {
+      const gw = item.InstalledGatewaySerial || (main && main.AssetType === "Gateway" ? main.SerialNo : "");
+      note = `ย้ายตามไปด้วย${gw ? ` (ใส่ใน Gateway ${escapeHtml(gw)})` : ""}`;
+    }
+    const sn = psSerialOf(item);
+    return `<tr><td class="ps-n">${idx + 1}</td><td><span class="ps-nm">${escapeHtml(nm.name)}</span>${nm.sub ? `<span class="ps-sub">${escapeHtml(nm.sub)}</span>` : ""}</td><td class="ps-sn">${sn ? escapeHtml(sn) : "—"}</td><td>${note}</td><td class="ps-q">1</td></tr>`;
+  }).join("");
+  // หมายเหตุอัตโนมัติ "ขอย้ายจาก ..." ซ้ำกับกล่องย้ายจาก → ย้ายไป จึงไม่พิมพ์ซ้ำ
+  const remark = /^ขอย้ายจาก /.test(String(txn.Details || "")) ? "" : txn.Details;
+  return `
+    <div class="print-slip ps-doc">
+      ${psLetterhead(kind, txn)}
+      <div class="ps-swap">
+        <div class="ps-sw ps-sw-out"><div class="ps-lab">ย้ายจาก (เดิม)</div><div class="ps-val">${escapeHtml(txn.FromCustomer || "-")}</div><div class="ps-sw-sub">${escapeHtml(txn.FromLocation || "-")}</div></div>
+        <div class="ps-arr">➜</div>
+        <div class="ps-sw ps-sw-in"><div class="ps-lab">ย้ายไปที่ (ใหม่)</div><div class="ps-val">${escapeHtml(txn.CustomerName || "-")}</div><div class="ps-sw-sub">${escapeHtml(txn.SiteLocation || "-")}</div></div>
+      </div>
+      <table class="ps-table"><thead><tr><th class="ps-n">#</th><th>รายการที่ย้าย</th><th>S/N</th><th>หมายเหตุ</th><th class="ps-q">จำนวน</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="ps-grid">${psPeopleCells(txn, kind)}</div>
+      ${psBackdateNote(txn)}
+      ${psRemark("หมายเหตุ · Remark", remark)}
+      ${psFlow(txn, items, kind)}
+      <div class="ps-spacer"></div>
+      ${psSignatures([["ผู้ดำเนินการย้าย", txn.IssuedBy, delegatedByText(txn)], ["ลูกค้าปลายทางผู้รับเครื่อง", "", ""]])}
+      ${psFooter()}
+    </div>`;
+}
 function printTransferSlip(transactionId) {
   const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
   if (!txn) return;
-  const items = getItemsForTransaction(transactionId);
-  const item = items[0];
-  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "ย้ายแล้ว", Rejected: "ถูกปฏิเสธ", Cancelled: "ยกเลิกแล้ว" };
-  const assetLabel = item ? `${escapeHtml(viewConfigByAssetType(item.AssetType)?.title || item.AssetType)} — ${escapeHtml(item.SerialNo)}` : "-";
-  const connectLine = item && item.ConnectSerial
-    ? `<div class="formal-field"><span class="formal-field-label">เชื่อมต่อกับ</span><span class="formal-field-value">${escapeHtml(item.ConnectTo || "")} — ${escapeHtml(item.ConnectSerial)} (ย้ายตามไปด้วย)</span></div>`
-    : "";
-
-  const html = `
-    <div class="print-slip report-doc formal-doc formal-transfer">
-      <div class="formal-page-tag">C2-LOOP</div>
-      <div class="formal-header">
-        <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
-        <div class="formal-company">
-          <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
-          <div class="formal-company-sub">C2 Tech Company Limited</div>
-          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999, 064-654-5636</div>
-        </div>
-      </div>
-      <div class="formal-doctitle">ใบย้ายอุปกรณ์ <span class="formal-doctitle-en">Equipment Transfer Form</span></div>
-
-      <div class="formal-toprow">
-        <div class="formal-toprow-left">
-          <div class="formal-field"><span class="formal-field-label">อุปกรณ์</span><span class="formal-field-value">${assetLabel}</span></div>
-          ${connectLine}
-        </div>
-        <table class="formal-docinfo">
-          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
-          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
-          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</td></tr>
-        </table>
-      </div>
-
-      <div class="formal-swap-row">
-        <div class="formal-swap-box out">
-          <div class="formal-swap-label">ย้ายจาก (เดิม)</div>
-          <div class="formal-swap-value">${escapeHtml(txn.FromCustomer || "-")}</div>
-          <div class="formal-swap-sub">${escapeHtml(txn.FromLocation || "-")}</div>
-        </div>
-        <div class="formal-swap-arrow">➜</div>
-        <div class="formal-swap-box in">
-          <div class="formal-swap-label">ย้ายไปที่ (ใหม่)</div>
-          <div class="formal-swap-value">${escapeHtml(txn.CustomerName || "-")}</div>
-          <div class="formal-swap-sub">${escapeHtml(txn.SiteLocation || "-")}</div>
-        </div>
-      </div>
-
-      ${txn.Details ? `<div class="formal-reason-box"><b>หมายเหตุ:</b> ${escapeHtml(txn.Details)}</div>` : ""}
-      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span>${delegatedByText(txn) ? `<div class="signature-delegated-note">${escapeHtml(delegatedByText(txn))}</div>` : ""}</div>
-
-      <div class="signature-row">
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ผู้ดำเนินการย้าย</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
-        </div>
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ลูกค้าปลายทางผู้รับเครื่อง</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  if (isInIframe()) { printSlipViaPopup(html); return; }
-  document.getElementById("printSlipRoot").innerHTML = html;
-  document.body.classList.add("print-slip-active");
-  printAfterImagesLoad(document.getElementById("printSlipRoot"));
+  psOutput(buildTransferSlipHtml(txn, getItemsForTransaction(transactionId)));
 }
 
-/** ใบเคลม — ฟอร์มใหม่ (สีส้ม) เน้นบล็อก "เครื่องเดิม (ถอดออก) ⇄ เครื่องทดแทน (ให้ใหม่)" คู่กันชัดเจน */
+// ----- ใบเคลม -----
+/** เครื่องเดิมที่ถอดออกตอนนี้อยู่ไหน (ดูจากสถานะปัจจุบันในคลัง) */
+function psClaimedWhereNow(txn, item) {
+  if (txn.RequestStatus === "PendingApproval") return "จะส่งกลับบริษัทเพื่อเคลม Supplier หลังอนุมัติ";
+  if (txn.RequestStatus !== "Issued") return "";
+  const cfg = item && viewConfigByAssetType(item.AssetType);
+  const row = cfg && (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField]) === String(txn.ClaimedSerial));
+  if (row && isClaimedRow(row, cfg)) return "ส่งกลับบริษัท → อยู่ระหว่างเคลม Supplier";
+  if (row && isPhysicalStockRow(row, cfg.stockField)) return "ส่งกลับบริษัท → กลับเข้าคลังแล้ว";
+  if (row && isWrittenOffRow(row, cfg)) return "ส่งกลับบริษัท → ตัดจำหน่ายแล้ว";
+  return "ส่งกลับบริษัท";
+}
+function buildClaimSlipHtml(txn, items) {
+  const kind = psDocKind(txn);
+  const outItem = items.find((i) => i.SerialNo === txn.ClaimedSerial) || items[0];
+  const inItem = items.find((i) => i.SerialNo === txn.ReplacementSerial);
+  const nmOut = outItem ? psItemName(outItem) : { name: "-" };
+  const nmIn = inItem ? psItemName(inItem) : nmOut;
+  const where = psClaimedWhereNow(txn, outItem);
+  return `
+    <div class="print-slip ps-doc">
+      ${psLetterhead(kind, txn)}
+      <div class="ps-grid">
+        ${psCell("ลูกค้า · Customer", escapeHtml(txn.CustomerName || "-"))}
+        ${psCell("สถานที่ติดตั้ง · Site", escapeHtml(txn.SiteLocation || "-"))}
+      </div>
+      <div class="ps-swap">
+        <div class="ps-sw ps-sw-out"><div class="ps-lab">เครื่องเดิม (ถอดออก)</div><div class="ps-val">${escapeHtml(nmOut.name)}</div><div class="ps-sw-sn">S/N ${escapeHtml(txn.ClaimedSerial || "-")}</div>${where ? `<div class="ps-sw-sub">${escapeHtml(where)}</div>` : ""}</div>
+        <div class="ps-arr">⇄</div>
+        <div class="ps-sw ps-sw-in"><div class="ps-lab">เครื่องทดแทน (ให้ใหม่)</div>${txn.ReplacementSerial
+          ? `<div class="ps-val">${escapeHtml(nmIn.name)}</div><div class="ps-sw-sn">S/N ${escapeHtml(txn.ReplacementSerial)}</div>`
+          : `<div class="ps-val ps-muted">ยังไม่เลือกเครื่องทดแทน</div>`}</div>
+      </div>
+      ${psRemark("อาการ / เหตุผลที่เคลม", txn.Details, "warn")}
+      <div class="ps-grid">${psPeopleCells(txn, kind)}</div>
+      ${psBackdateNote(txn)}
+      ${psFlow(txn, items, kind)}
+      <div class="ps-spacer"></div>
+      ${psSignatures([["ผู้ส่งมอบเครื่องทดแทน", txn.IssuedBy, delegatedByText(txn)], ["ลูกค้าผู้รับเครื่องทดแทน", "", ""], ["ผู้รับเครื่องเสียคืนเข้าบริษัท", "", ""]])}
+      ${psFooter()}
+    </div>`;
+}
 function printClaimSlip(transactionId) {
   const txn = (state.data.issuanceLog || []).find((t) => t.TransactionID === transactionId);
   if (!txn) return;
-  const items = getItemsForTransaction(transactionId);
-  const outItem = items.find((i) => i.SerialNo === txn.ClaimedSerial) || items[0];
-  const inItem = items.find((i) => i.SerialNo === txn.ReplacementSerial);
-  const statusLabel = { PendingApproval: "รออนุมัติ", Issued: "เคลมแล้ว", Rejected: "ถูกปฏิเสธ", Cancelled: "ยกเลิกแล้ว" };
-  const typeLabel = (assetType) => (assetType ? (viewConfigByAssetType(assetType)?.title || assetType) : "-");
-
-  const html = `
-    <div class="print-slip report-doc formal-doc formal-claim">
-      <div class="formal-page-tag">C2-LOOP</div>
-      <div class="formal-header">
-        <img src="assets/c2tech-logo.png" class="formal-logo" alt="C2TECH">
-        <div class="formal-company">
-          <div class="formal-company-name">บริษัท ซีทูเทค จำกัด</div>
-          <div class="formal-company-sub">C2 Tech Company Limited</div>
-          <div class="formal-company-addr">99/3 หมู่ 9 ต.วังไก่เถื่อน อ.หันคา จ.ชัยนาท 17130 · 063-929-1999, 064-654-5636</div>
-        </div>
-      </div>
-      <div class="formal-doctitle">ใบเคลมอุปกรณ์ <span class="formal-doctitle-en">Equipment Claim Form</span></div>
-
-      <div class="formal-toprow">
-        <div class="formal-toprow-left">
-          <div class="formal-field"><span class="formal-field-label">ลูกค้า</span><span class="formal-field-value">${escapeHtml(txn.CustomerName || "-")}</span></div>
-          <div class="formal-field"><span class="formal-field-label">สถานที่ติดตั้ง</span><span class="formal-field-value">${escapeHtml(txn.SiteLocation || "-")}</span></div>
-        </div>
-        <table class="formal-docinfo">
-          <tr><th>เลขที่เอกสาร</th><td>${escapeHtml(txn.TransactionID)}</td></tr>
-          <tr><th>วันที่เอกสาร</th><td>${escapeHtml(formatDateTh(txn.Timestamp))}</td></tr>
-          <tr><th>สถานะ</th><td>${escapeHtml(statusLabel[txn.RequestStatus] || txn.RequestStatus)}</td></tr>
-        </table>
-      </div>
-
-      <div class="formal-swap-row">
-        <div class="formal-swap-box out">
-          <div class="formal-swap-label">เครื่องเดิม (ถอดออก)</div>
-          <div class="formal-swap-value">${escapeHtml(typeLabel(outItem && outItem.AssetType))} — ${escapeHtml(txn.ClaimedSerial || "-")}</div>
-        </div>
-        <div class="formal-swap-arrow">⇄</div>
-        <div class="formal-swap-box in">
-          <div class="formal-swap-label">เครื่องทดแทน (ให้ใหม่)</div>
-          <div class="formal-swap-value">${txn.ReplacementSerial ? `${escapeHtml(typeLabel(inItem && inItem.AssetType))} — ${escapeHtml(txn.ReplacementSerial)}` : "(ยังไม่เลือกเครื่องทดแทน)"}</div>
-        </div>
-      </div>
-
-      ${txn.Details ? `<div class="formal-reason-box"><b>เหตุผลที่เคลม:</b> ${escapeHtml(txn.Details)}</div>` : ""}
-      <div class="formal-field" style="margin-bottom:16px;"><span class="formal-field-label">ผู้แจ้งคำขอ</span><span class="formal-field-value">${escapeHtml(txn.IssuedBy || "-")}${txn.ApprovedBy ? ` &nbsp;|&nbsp; อนุมัติโดย: ${escapeHtml(txn.ApprovedBy)}` : ""}</span>${delegatedByText(txn) ? `<div class="signature-delegated-note">${escapeHtml(delegatedByText(txn))}</div>` : ""}</div>
-
-      <div class="signature-row">
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ผู้ส่งมอบเครื่องทดแทน</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
-        </div>
-        <div class="signature-box">
-          <div class="signature-line"></div>
-          <div class="signature-role">ลูกค้าผู้รับเครื่องทดแทน</div>
-          <div class="signature-date">วันที่ ______/______/________</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  if (isInIframe()) { printSlipViaPopup(html); return; }
-  document.getElementById("printSlipRoot").innerHTML = html;
-  document.body.classList.add("print-slip-active");
-  printAfterImagesLoad(document.getElementById("printSlipRoot"));
+  psOutput(buildClaimSlipHtml(txn, getItemsForTransaction(transactionId)));
 }
 
 /**
@@ -3166,7 +3307,7 @@ function printSlipViaPopup(html) {
     return;
   }
   const styleHref = new URL("style.css", window.location.href).href;
-  popup.document.write(`<!DOCTYPE html><html><head><title>C2 LOOP — ใบเบิกอุปกรณ์</title><link rel="stylesheet" href="${styleHref}"></head><body class="print-slip-active"><div id="printSlipRoot">${html}</div></body></html>`);
+  popup.document.write(`<!DOCTYPE html><html><head><title>C2 LOOP — ${(html.match(/class="ps-title[^"]*">([^<]+)</) || [0, "เอกสาร"])[1]}</title><link rel="stylesheet" href="${styleHref}"></head><body class="print-slip-active"><div id="printSlipRoot">${html}</div></body></html>`);
   popup.document.close();
   setTimeout(() => {
     popup.focus();

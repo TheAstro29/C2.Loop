@@ -2104,3 +2104,150 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 [data-photo-wrap]:has(> img:not([src])) { background: linear-gradient(90deg, #eceff0 0%, #f7f8f8 40%, #eceff0 80%) !important; background-size: 300% 100% !important; animation: fx-sk 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .dash-pending-alert::before, .icon-badge-dot::after, .fx-new::after, .login-card h2, [data-photo-wrap] { animation: none !important; } }
 [data-photo-wrap] > img:not([src]) { visibility: hidden; }
+
+/* ============================================================
+   สถานะสต็อก 2 ระดับ: หมด (0, แดง + แสงวิ่ง) · ใกล้หมด (≤ เกณฑ์, ส้ม นิ่ง) — ดู stockLevel() ใน script.js
+   ============================================================ */
+.stk-out-pill { display: inline-block; position: relative; overflow: hidden; isolation: isolate; background: var(--danger); color: #fff;
+  font-size: 11px; font-weight: 800; line-height: 1; padding: 4px 9px; border-radius: 999px; vertical-align: middle; }
+.stk-out-pill::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 55%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.7), transparent); transform: translateX(-180%) skewX(-20deg); animation: fx-shine 3.4s ease-in-out infinite; }
+.part-stock-num.low { color: var(--warning); }
+.part-stock-num.out { color: var(--danger); }
+.lowstock-chip b { color: #b25b09; }
+.lowstock-chip.out { background: #fdeaea; border-color: #f3b8b8; }
+.lowstock-chip.out b { color: var(--danger); }
+.dm-chip.out { background: #fdeaea; border-color: #f3b8b8; }
+.dm-chip.out b { color: var(--danger); }
+.rp-stk.low b { color: var(--warning); }
+.rp-stk.out { color: var(--danger); font-weight: 700; }
+/* จุดตัวเลขบนไอคอน: ส้มนิ่ง = มีของใกล้หมด · แดง + แสงวิ่ง = มีของหมด */
+.icon-badge-dot:not(.out)::after { content: none; }
+.icon-badge-dot.out { background: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .stk-out-pill::after { animation: none !important; } }
+
+/* ===================================================================================
+ * เอกสารพิมพ์ชุดใหม่ (ps-*) — ใบเบิก / ใบยืม / ใบขาย / ใบย้าย / ใบเคลม ใช้แม่แบบเดียวกัน (4 พ.ย. 2569)
+ * ขนาดอ้างอิงกระดาษ A4 หักขอบ 15/16 มม. (~673px) · บนจอ (preview/popup) กว้างสุด 800px
+ * =================================================================================== */
+.ps-doc { font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; color: var(--text); font-size: 12.5px; display: flex; flex-direction: column; min-height: 262mm; background: #fff; page: slip; }
+.ps-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 12px; border-bottom: 2px solid var(--green); }
+.ps-brand { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.ps-brand-top { display: flex; align-items: center; gap: 10px; }
+.ps-logo { height: 28px; width: auto; object-fit: contain; flex-shrink: 0; }
+.ps-co { font-size: 15px; font-weight: 700; color: var(--green); line-height: 1.3; }
+.ps-co-en { font-size: 9.5px; color: var(--gray); letter-spacing: .05em; text-transform: uppercase; }
+.ps-addr { font-size: 10px; color: var(--gray); line-height: 1.5; }
+.ps-nw { white-space: nowrap; }
+.ps-docbox { text-align: right; flex-shrink: 0; }
+.ps-title { font-size: 20px; font-weight: 700; line-height: 1.2; }
+.ps-t-green { color: var(--green); } .ps-t-blue { color: #2f6fb0; } .ps-t-orange { color: #B4610A; }
+.ps-title-en { font-size: 9.5px; color: var(--gray); text-transform: uppercase; letter-spacing: .08em; margin: 2px 0 7px; }
+.ps-docbox table { margin-left: auto; border-collapse: collapse; font-size: 11px; }
+.ps-docbox th { font-weight: 500; color: var(--gray); text-align: right; padding: 2px 10px 2px 0; white-space: nowrap; }
+.ps-docbox td { font-weight: 700; text-align: left; padding: 2px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ps-badge { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 0 7px; line-height: 1.6; vertical-align: 1px; white-space: nowrap; }
+.ps-b-ok { background: #E2F2E8; color: #2E7D4F; } .ps-b-warn { background: #FFF1D6; color: #8a5a00; }
+.ps-b-bad { background: #FBE7E4; color: #B83A30; } .ps-b-info { background: #E3EEF8; color: #2f6fb0; }
+.ps-b-gray { background: #EEF0EF; color: #555; } .ps-b-sale { background: #E8EFFB; color: #1d4fb8; }
+.ps-grid { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 14px 0; }
+.ps-cell { padding: 8px 12px; border-right: 1px solid var(--border); border-top: 1px solid var(--border); min-width: 0; }
+.ps-cell:nth-child(2n) { border-right: 0; }
+.ps-cell:nth-child(-n+2) { border-top: 0; }
+.ps-lab { font-size: 9.5px; color: var(--gray); letter-spacing: .02em; }
+.ps-val { font-weight: 700; font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+.ps-val small { font-weight: 400; color: var(--gray); font-size: 10.5px; }
+.ps-muted { color: #9aa29e; font-weight: 400; }
+.ps-table { width: 100%; border-collapse: collapse; border: 1px solid var(--border); }
+.ps-table thead { display: table-header-group; }
+.ps-table th { background: var(--green); color: #fff; font-weight: 600; font-size: 10.5px; text-align: left; padding: 7px 9px; }
+.ps-table td { padding: 7px 9px; border-top: 1px solid var(--border); vertical-align: top; font-size: 12px; overflow-wrap: anywhere; }
+.ps-table tr { break-inside: avoid; }
+.ps-doc tbody tr:nth-child(even) { background: transparent; }
+.ps-table .ps-n { width: 26px; text-align: center; color: var(--gray); }
+.ps-table th.ps-n { color: #fff; }
+.ps-table .ps-q { width: 52px; text-align: center; font-weight: 700; }
+.ps-nm { font-weight: 600; }
+.ps-sub { display: block; font-size: 10.5px; color: var(--gray); margin-top: 1px; }
+.ps-sn { font-family: Consolas, "Chakra Petch", monospace; font-size: 11.5px; letter-spacing: .02em; white-space: nowrap; }
+.ps-table tr.ps-grp td { background: #F3F6F4; color: var(--green); font-weight: 700; font-size: 10.5px; padding: 4px 9px; }
+.ps-sum { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 16px; font-size: 11px; color: var(--gray); margin: 6px 2px 0; }
+.ps-sum b { color: var(--text); }
+.ps-callout { border-radius: 8px; padding: 7px 11px; font-size: 11px; margin-top: 10px; }
+.ps-c-orange { background: #FDF1E2; color: #8a4a06; }
+.ps-remark { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 12px; break-inside: avoid; }
+.ps-remark-warn { background: #FFF8F0; border-color: #ECD3BE; }
+.ps-remark-text { margin-top: 2px; min-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ps-flow { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-top: 12px; font-size: 10.5px; color: var(--gray); break-inside: avoid; }
+.ps-flow > div { flex: 1; padding: 6px 10px; border-right: 1px solid var(--border); min-width: 0; }
+.ps-flow > div:last-child { border-right: 0; }
+.ps-flow b { display: block; color: var(--text); font-size: 11.5px; margin-top: 1px; }
+.ps-swap { display: grid; grid-template-columns: 1fr 30px 1fr; align-items: stretch; margin: 14px 0; }
+.ps-sw { border: 1.5px solid var(--border); border-radius: 10px; padding: 9px 12px; min-width: 0; }
+.ps-sw-out { background: #FBF4EE; border-color: #ECD3BE; } .ps-sw-in { background: #EEF6F1; border-color: #C4DCCB; }
+.ps-sw .ps-lab { font-weight: 600; }
+.ps-sw-sn { font-family: Consolas, "Chakra Petch", monospace; font-size: 13px; margin-top: 2px; }
+.ps-sw-sub { font-size: 10.5px; color: var(--gray); margin-top: 3px; }
+.ps-arr { display: grid; place-items: center; font-size: 18px; color: var(--gray); }
+.ps-spacer { flex: 1; min-height: 14px; }
+.ps-sign { display: grid; gap: 28px; margin-top: 18px; break-inside: avoid; }
+.ps-sign-2 { grid-template-columns: 1fr 1fr; } .ps-sign-3 { grid-template-columns: 1fr 1fr 1fr; gap: 18px; }
+.ps-sg { text-align: center; font-size: 11px; }
+.ps-sg-role { font-weight: 700; }
+.ps-sg-name { min-height: 18px; font-size: 12px; margin-top: 3px; }
+.ps-sg-note { font-size: 9.5px; color: var(--gray); font-style: italic; }
+.ps-sg-line { border-bottom: 1px solid #999; height: 30px; margin: 0 8px; }
+.ps-sg-date { color: var(--gray); font-size: 10px; margin-top: 5px; }
+.ps-foot { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); margin-top: 14px; padding-top: 6px; font-size: 9px; color: var(--gray); }
+@media screen { .ps-doc { max-width: 800px; margin: 0 auto; padding: 24px; min-height: 0; } }
+@media screen and (max-width: 700px) {
+  .ps-head { flex-direction: column; } .ps-docbox { text-align: left; } .ps-docbox table { margin-left: 0; }
+  .ps-grid { grid-template-columns: 1fr; } .ps-cell { border-right: 0; } .ps-cell:nth-child(2) { border-top: 1px solid var(--border); }
+  .ps-swap { grid-template-columns: 1fr; } .ps-arr { transform: rotate(90deg); padding: 4px 0; }
+  .ps-sign-2, .ps-sign-3 { grid-template-columns: 1fr; }
+  .ps-doc { padding: 14px; }
+  .ps-table th, .ps-table td { padding: 6px 5px; font-size: 11px; }
+  .ps-table .ps-sn { white-space: normal; word-break: break-all; }
+  .ps-table .ps-q { width: 38px; }
+  .ps-table { display: block; overflow-x: auto; }
+}
+/* เลขหน้าท้ายกระดาษ เฉพาะเอกสารชุดนี้ (named page "slip" — ไม่กระทบป้าย Gateway/รายงาน Dashboard) */
+@page slip {
+  size: A4; margin: 15mm 16mm 14mm;
+  @bottom-right { content: "หน้า " counter(page) " / " counter(pages); font-family: "Chakra Petch", sans-serif; font-size: 8.5px; color: #777; }
+}
+
+/* ===== รายงานสรุป (Dashboard → พิมพ์) ชุดใหม่: แยกสถานะ · ของยืมค้าง · เบิกเดือนนี้ตามลูกค้า · ประเด็นเป็นตาราง · กราฟหน้า 2 ===== */
+.rp-page2 { break-before: page; page-break-before: always; }
+.rp-title-cont { font-size: 13px; font-weight: 600; color: var(--gray); }
+.rp-sub { display: block; font-size: 8.5px; color: var(--gray); font-weight: 400; margin-top: .5mm; }
+.rp-dash { color: #aab2ad; }
+.rp-note { font-size: 8.5px; color: var(--gray); margin: -4mm 0 5mm; }
+.rp-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; break-inside: avoid; }
+table.rp-table.rp-mini { margin-bottom: 5mm; }
+table.rp-mini th, table.rp-mini td { font-size: 9.5px; }
+.rp-mono { font-family: Consolas, "Chakra Petch", monospace; font-size: 9px; color: var(--gray); }
+.rp-late { color: #B83A30; font-weight: 700; }
+.rp-more { color: var(--gray); font-style: italic; }
+.rp-empty { font-size: 10px; color: var(--gray); border: 1px dashed var(--border); border-radius: 3px; padding: 3mm 4mm; margin-bottom: 5mm; }
+table.rp-attn2 { table-layout: fixed; }
+table.rp-attn2 td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.rp-attn-tag { width: 30mm; }
+.rp-tag { display: inline-block; font-size: 8.5px; font-weight: 700; border-radius: 3px; padding: .3mm 2mm; white-space: nowrap; }
+.rp-tag-warn { background: #FFF1D6; color: #8a5a00; } .rp-tag-orange { background: #F4EADB; color: #8a5a12; } .rp-tag-gray { background: #EEF0EF; color: #555; }
+table.rp-status td, table.rp-status th { padding-top: 1.1mm; padding-bottom: 1.1mm; }
+table.rp-mini td, table.rp-mini th, table.rp-attn2 td { padding-top: 1.2mm; padding-bottom: 1.2mm; }
+.rp-chart-full { border: 1px solid var(--border); border-radius: 3px; padding: 5mm; margin: 7mm 0 0; break-inside: avoid; }
+.rp-chart-full .rp-svg { height: 85mm; }
+.rp-chart-full .rp-chart-empty { height: 40mm; }
+/* หัวตารางในเอกสารพิมพ์ต้องไม่ sticky (กฎ thead th ทั่วไปของแอปทำให้หัวตารางไปทับแถวท้ายตอนพิมพ์หลายหน้า) */
+.rp-page thead th, .ps-doc thead th { position: static; }
+/* บีบระยะหน้า 1 ของรายงานสรุปชุดใหม่ให้พอดี A4 แม้ข้อมูลเต็ม (8 ประเภท + ของยืม 6 แถว + ประเด็น 4 แถว) */
+#formalReportArea .rp-page { padding-top: 10mm; padding-bottom: 8mm; }
+#formalReportArea .rp-metabar { margin-bottom: 4mm; }
+#formalReportArea .rp-exec-grid { margin-bottom: 4.5mm; }
+#formalReportArea .rp-sign { margin-top: 4mm; }
+#formalReportArea .rp-sign-line { height: 7mm; }
+#formalReportArea .rp-note { margin-bottom: 3.5mm; }
+#formalReportArea .rp-section-title { margin-bottom: 2.2mm; }
+#formalReportArea table.rp-mini { margin-bottom: 4mm; }
