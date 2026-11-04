@@ -2130,7 +2130,7 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
  * เอกสารพิมพ์ชุดใหม่ (ps-*) — ใบเบิก / ใบยืม / ใบขาย / ใบย้าย / ใบเคลม ใช้แม่แบบเดียวกัน (4 พ.ย. 2569)
  * ขนาดอ้างอิงกระดาษ A4 หักขอบ 15/16 มม. (~673px) · บนจอ (preview/popup) กว้างสุด 800px
  * =================================================================================== */
-.ps-doc { font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; color: var(--text); font-size: 12.5px; display: flex; flex-direction: column; min-height: 262mm; background: #fff; page: slip; }
+.ps-doc { font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; color: var(--text); font-size: 12.5px; display: flex; flex-direction: column; min-height: 262mm; background: #fff; }
 .ps-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 12px; border-bottom: 2px solid var(--green); }
 .ps-brand { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .ps-brand-top { display: flex; align-items: center; gap: 10px; }
@@ -2145,7 +2145,8 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
 .ps-title-en { font-size: 9.5px; color: var(--gray); text-transform: uppercase; letter-spacing: .08em; margin: 2px 0 7px; }
 .ps-docbox table { margin-left: auto; border-collapse: collapse; font-size: 11px; }
 .ps-docbox th { font-weight: 500; color: var(--gray); text-align: right; padding: 2px 10px 2px 0; white-space: nowrap; }
-.ps-docbox td { font-weight: 700; text-align: left; padding: 2px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ps-docbox { max-width: 52%; }
+.ps-docbox td { font-weight: 700; text-align: left; padding: 2px 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .ps-badge { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 0 7px; line-height: 1.6; vertical-align: 1px; white-space: nowrap; }
 .ps-b-ok { background: #E2F2E8; color: #2E7D4F; } .ps-b-warn { background: #FFF1D6; color: #8a5a00; }
 .ps-b-bad { background: #FBE7E4; color: #B83A30; } .ps-b-info { background: #E3EEF8; color: #2f6fb0; }
@@ -2211,11 +2212,6 @@ table.rp-table th, table.rp-table td { padding: 1.6mm 3mm; }
   .ps-table .ps-q { width: 38px; }
   .ps-table { display: block; overflow-x: auto; }
 }
-/* เลขหน้าท้ายกระดาษ เฉพาะเอกสารชุดนี้ (named page "slip" — ไม่กระทบป้าย Gateway/รายงาน Dashboard) */
-@page slip {
-  size: A4; margin: 15mm 16mm 14mm;
-  @bottom-right { content: "หน้า " counter(page) " / " counter(pages); font-family: "Chakra Petch", sans-serif; font-size: 8.5px; color: #777; }
-}
 
 /* ===== รายงานสรุป (Dashboard → พิมพ์) ชุดใหม่: แยกสถานะ · ของยืมค้าง · เบิกเดือนนี้ตามลูกค้า · ประเด็นเป็นตาราง · กราฟหน้า 2 ===== */
 .rp-page2 { break-before: page; page-break-before: always; }
@@ -2251,3 +2247,6 @@ table.rp-mini td, table.rp-mini th, table.rp-attn2 td { padding-top: 1.2mm; padd
 #formalReportArea .rp-note { margin-bottom: 3.5mm; }
 #formalReportArea .rp-section-title { margin-bottom: 2.2mm; }
 #formalReportArea table.rp-mini { margin-bottom: 4mm; }
+
+/* ตอนพิมพ์ใบเอกสาร: พื้นหลังขาวทั้งหน้า (เดิมพื้นเทาของแอปโผล่ใต้เอกสาร) */
+@media print { body.print-slip-active, html:has(body.print-slip-active) { background: #fff !important; } }

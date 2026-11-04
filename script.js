@@ -3128,8 +3128,19 @@ function psLoanExtraBadge(items, txn) {
   if (!done) return "";
   return done < items.length ? ` <span class="ps-badge ps-b-gray">ปิดบางส่วน</span>` : ` <span class="ps-badge ps-b-gray">ปิดครบ</span>`;
 }
+/** ขอบกระดาษ + เลขหน้าท้ายกระดาษ ใส่เฉพาะตอนพิมพ์ใบเอกสาร (ถอดออกตอน afterprint) — ไม่ใช้ named page
+ * เพราะ Chrome ไม่หักขอบกระดาษให้เนื้อหาใน named page (เอกสารชิดขอบ/ล้นขวา) */
+const PS_PAGE_CSS = '@page { size: A4; margin: 15mm 16mm 14mm; @bottom-right { content: "หน้า " counter(page) " / " counter(pages); font-family: "Chakra Petch", sans-serif; font-size: 8.5px; color: #777; } }';
+function injectSlipPageStyle() {
+  removeSlipPageStyle();
+  const st = document.createElement("style");
+  st.id = "slipPrintPageStyle"; st.textContent = PS_PAGE_CSS;
+  document.head.appendChild(st);
+}
+function removeSlipPageStyle() { const el = document.getElementById("slipPrintPageStyle"); if (el) el.remove(); }
 function psOutput(html) {
   if (isInIframe()) { printSlipViaPopup(html); return; }
+  injectSlipPageStyle();
   document.getElementById("printSlipRoot").innerHTML = html;
   document.body.classList.add("print-slip-active");
   printAfterImagesLoad(document.getElementById("printSlipRoot"));
@@ -3307,7 +3318,7 @@ function printSlipViaPopup(html) {
     return;
   }
   const styleHref = new URL("style.css", window.location.href).href;
-  popup.document.write(`<!DOCTYPE html><html><head><title>C2 LOOP — ${(html.match(/class="ps-title[^"]*">([^<]+)</) || [0, "เอกสาร"])[1]}</title><link rel="stylesheet" href="${styleHref}"></head><body class="print-slip-active"><div id="printSlipRoot">${html}</div></body></html>`);
+  popup.document.write(`<!DOCTYPE html><html><head><title>C2 LOOP — ${(html.match(/class="ps-title[^"]*">([^<]+)</) || [0, "เอกสาร"])[1]}</title><link rel="stylesheet" href="${styleHref}"><style>${PS_PAGE_CSS}</style></head><body class="print-slip-active"><div id="printSlipRoot">${html}</div></body></html>`);
   popup.document.close();
   setTimeout(() => {
     popup.focus();
@@ -3334,6 +3345,7 @@ window.addEventListener("afterprint", () => {
   document.getElementById("printLabelRoot").innerHTML = "";
   removeLabelPageStyle();
   removeDashboardPrintPageStyle();
+  removeSlipPageStyle();
 });
 
 // ============================================================
