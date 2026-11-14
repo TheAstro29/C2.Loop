@@ -717,17 +717,19 @@ tbody tr.row-clickable { cursor: pointer; }
    รีดีไซน์การ์ดหน้า "อนุมัติการเบิก" / "ประวัติการเบิก/คืน" (ดู renderApprovalsView / renderHistoryList)
    เพิ่มเติมจาก .txn-card เดิม ไม่ได้แทนที่ — เพื่อให้เห็นชัดว่า "ใครขอเบิก" และ "เบิกไปทำอะไร" ตั้งแต่แวบแรก
    ============================================================ */
-.req-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.req-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
 .req-avatar {
   width: 38px; height: 38px; border-radius: 50%; background: var(--green);
   color: #fff; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; font-weight: 700; font-size: 14px;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.req-text { flex: 1; min-width: 0; }
+.req-text { flex: 1 1 140px; min-width: 0; }
 .req-eyebrow { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--green); }
 .req-name { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; font-family: "Chakra Petch", "Segoe UI", "Sarabun", Tahoma, sans-serif; }
 .req-name .via { font-size: 12px; font-weight: 500; color: var(--gray); }
-.req-time { font-size: 11.5px; color: var(--gray); white-space: nowrap; text-align: right; }
+.req-time { font-size: 11.5px; color: var(--gray); text-align: right; display: flex; flex-direction: column; gap: 2px; margin-left: auto; }
+.req-no { overflow-wrap: anywhere; }
+.req-date { white-space: nowrap; }
 .req-time b { color: var(--text); font-weight: 600; }
 
 .dest-row {
@@ -771,8 +773,11 @@ tbody tr.row-clickable { cursor: pointer; }
 .timeline-row b { color: var(--text); font-weight: 600; }
 
 @media (max-width: 640px) {
-  .req-row { flex-wrap: wrap; }
-  .req-time { text-align: left; margin-left: 48px; }
+  .req-time { flex: 1 1 100%; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 8px; text-align: left; margin-left: 0; padding-top: 8px; border-top: 1px dashed var(--border); }
+}
+.txn-card { container-type: inline-size; }
+@container (max-width: 520px) {
+  .req-time { flex: 1 1 100%; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 8px; text-align: left; margin-left: 0; padding-top: 8px; border-top: 1px dashed var(--border); }
 }
 
 .txn-actions { display: flex; gap: 8px; margin-top: 10px; }

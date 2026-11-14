@@ -9466,7 +9466,7 @@ function renderApprovalsView() {
             <div class="req-eyebrow">ผู้ขอเบิก</div>
             <div class="req-name">${escapeHtml(requesterName)}${via ? ` <span class="via">· ${escapeHtml(via)}</span>` : ""}</div>
           </div>
-          <div class="req-time">เลขที่ ${escapeHtml(txn.TransactionID)}<br><b>${formatDateTh(txn.Timestamp)}</b></div>
+          <div class="req-time"><span class="req-no">เลขที่ ${escapeHtml(txn.TransactionID)}</span><b class="req-date">${formatDateTh(txn.Timestamp)}</b></div>
         </div>
         ${destCustomer ? `<div class="dest-row">${ICON_PIN}<div><span class="dest-kind">${destLabel}</span><b>${escapeHtml(destCustomer)}</b>${destLocation ? `<div class="dest-sub">${escapeHtml(destLocation)}</div>` : ""}</div></div>` : ""}
         ${originRow}
@@ -10014,7 +10014,7 @@ function renderHistoryList(logs, isAdmin, statusLabel) {
             <div class="req-eyebrow">ผู้ขอเบิก</div>
             <div class="req-name">${escapeHtml(requesterName)}</div>
           </div>
-          <div class="req-time">เลขที่ ${escapeHtml(txn.TransactionID)}<br><b>${formatDateTh(txn.Timestamp)}</b></div>
+          <div class="req-time"><span class="req-no">เลขที่ ${escapeHtml(txn.TransactionID)}</span><b class="req-date">${formatDateTh(txn.Timestamp)}</b></div>
         </div>
         ${txn.CustomerName ? `<div class="dest-row">${ICON_PIN}<div><b>${escapeHtml(txn.CustomerName)}</b>${txn.SiteLocation ? `<div class="dest-sub">${escapeHtml(txn.SiteLocation)}</div>` : ""}</div></div>` : ""}
         ${txn.Details ? `<div class="purpose-box">${ICON_NOTE}<div><div class="purpose-label">หมายเหตุ</div><div class="purpose-text">${escapeHtml(txn.Details)}</div></div></div>` : ""}
