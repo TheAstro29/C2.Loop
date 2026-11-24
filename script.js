@@ -638,6 +638,398 @@ function addItemToAddStockBasketGeneric() {
 }
 
 // ============================================================
+// Phase 4: หน้า "ตั้งค่าประเภทอุปกรณ์" (Admin) — สร้าง/แก้ประเภทใหม่เองได้โดยไม่ต้องเขียนโค้ด (ดู mockup ในแผน)
+// PC: รายการประเภทด้านซ้าย + หน้าแก้ไขด้านขวา · มือถือ: รายการก่อน กดแล้วเข้าหน้าแก้ไขเต็มจอ (มีปุ่มย้อนกลับ)
+// ค่าที่กรอกเก็บใน atState.draft ทันทีทุกครั้งที่พิมพ์ (ข้อมูลจาก Firestore อัปเดตสดแล้ววาดหน้าใหม่ได้โดยไม่หาย)
+// รหัสประเภท/รหัสฟิลด์ระบบสร้างให้อัตโนมัติ (ผู้ใช้ไม่ต้องตั้งชื่อภาษาอังกฤษ) — ตรวจทุกอย่างซ้ำที่ saveAssetType
+// ประเภทเดิม (MoisturLyzer/Gateway/SimCard/Panolyzer/Color Sorter) แสดงแบบล็อกไว้เท่านั้น ยังแก้จากหน้านี้ไม่ได้
+// ============================================================
+const AT_ICON_CHOICES = ["fa-box", "fa-fire", "fa-scale-balanced", "fa-flask", "fa-microchip", "fa-plug", "fa-fan", "fa-temperature-half",
+  "fa-gauge", "fa-bolt", "fa-solar-panel", "fa-wind", "fa-snowflake", "fa-droplet", "fa-seedling", "fa-wheat-awn", "fa-industry",
+  "fa-server", "fa-desktop", "fa-camera", "fa-print", "fa-wifi", "fa-satellite-dish", "fa-robot", "fa-battery-full", "fa-truck",
+  "fa-screwdriver-wrench", "fa-boxes-stacked"];
+const AT_FIELD_TYPE_LABEL = { text: "ข้อความสั้น", textarea: "ข้อความยาว", number: "ตัวเลข", date: "วันที่", select: "ตัวเลือก" };
+const AT_FLOW_META = [
+  { key: "issue", label: "เบิก", hint: "เบิกให้ลูกค้าแบบปกติ (ติดตั้ง/ขาย)" },
+  { key: "loan", label: "ยืม", hint: "เบิกแบบ \"ลูกค้ายืมไปทดลอง\"" },
+  { key: "sale", label: "ขาย (ยืม → ซื้อ)", hint: "เปลี่ยนของที่ลูกค้ายืมเป็นซื้อ" },
+  { key: "transfer", label: "ย้าย", hint: "ย้ายเครื่องไปลูกค้า/สถานที่ใหม่" },
+  { key: "claim", label: "เคลม", hint: "ถอดเครื่องเสียจากลูกค้า → รอเคลมจาก Supplier → คืนสต๊อก/ตัดจำหน่าย" },
+];
+const AT_LEGACY_TYPES = [
+  { label: "MoisturLyzer", icon: "fa-tint", color: "#17A672" }, { label: "Gateway", icon: "fa-broadcast-tower", color: "#2f6fb0" },
+  { label: "SimCard", icon: "fa-sim-card", color: "#8B5CF6" }, { label: "Panolyzer", icon: "fa-magnifying-glass-chart", color: "#EC6BAA" },
+  { label: "Color Sorter", icon: "fa-sliders", color: "#475569" },
+];
+// selected: typeId ที่เปิดอยู่ หรือ "__new" · draft: ค่าที่กำลังแก้ · loadedAt: updatedAt ของค่าตั้งตอนโหลดเข้า draft
+let atState = { selected: null, draft: null, dirty: false, tab: "general", mobileEditing: false, loadedAt: "", busy: false };
+
+function atDefs() {
+  return (state.data.assetTypesRaw || []).filter((d) => d && d.kind === "device" && d.typeId)
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.label).localeCompare(String(b.label), "th"));
+}
+function atDefById(typeId) { return atDefs().find((d) => d.typeId === typeId) || null; }
+function atItemCount(typeId) { return (state.data.assetItemsRaw || []).filter((r) => r && r.typeId === typeId).length; }
+function atClone(o) { return JSON.parse(JSON.stringify(o)); }
+function atNewFieldKey(existing) {
+  let key;
+  do { key = "f" + Math.random().toString(36).slice(2, 8); } while (existing.some((f) => f.key.toLowerCase() === key));
+  return key;
+}
+function atEmptyDraft() {
+  return {
+    __new: true, typeId: "t" + Date.now().toString(36), label: "", icon: "fa-box", unit: "เครื่อง", serialLabel: "S/N",
+    order: (atDefs().reduce((m, d) => Math.max(m, Number(d.order) || 0), 0) || 0) + 10, testOnly: false, active: true,
+    fields: [], flows: { issue: true, loan: true, sale: true, transfer: true, claim: true },
+  };
+}
+function atDraftFromDef(def) {
+  const d = atClone(def);
+  d.fields = (d.fields || []).map((f) => Object.assign({ required: false, perItem: false, unique: false, showInTable: true, hidden: false }, f, { __saved: true }));
+  d.flows = Object.assign({ issue: true, loan: true, sale: true, transfer: true, claim: true }, d.flows || {});
+  return d;
+}
+
+/** โหลด draft ให้ตรงกับประเภทที่เลือก — ถ้ายังไม่ได้แก้อะไร (ไม่ dirty) และค่าตั้งบนเซิร์ฟเวอร์เปลี่ยน ให้โหลดใหม่ตาม */
+function atSyncDraft() {
+  if (!atState.selected || atState.selected === "__new") return;
+  const def = atDefById(atState.selected);
+  if (!def) { if (!atState.dirty) { atState.selected = null; atState.draft = null; atState.mobileEditing = false; } return; }
+  if (!atState.draft || (!atState.dirty && (def.updatedAt || "") !== atState.loadedAt)) {
+    atState.draft = atDraftFromDef(def);
+    atState.loadedAt = def.updatedAt || "";
+  }
+}
+
+async function atConfirmDiscard() {
+  if (!atState.dirty) return true;
+  return showConfirm("มีการแก้ไขที่ยังไม่ได้บันทึก — ทิ้งการแก้ไขนี้หรือไม่?", { type: "warning", okText: "ทิ้งการแก้ไข", danger: true });
+}
+async function atSelect(typeId) {
+  if (typeId === atState.selected && atState.draft) { atState.mobileEditing = true; return renderAssetTypesView(); }
+  if (!(await atConfirmDiscard())) return;
+  atState = Object.assign(atState, { selected: typeId, dirty: false, tab: "general", mobileEditing: true, loadedAt: "" });
+  atState.draft = typeId === "__new" ? atEmptyDraft() : null;
+  renderAssetTypesView();
+}
+async function atBackToList() {
+  if (!(await atConfirmDiscard())) return;
+  atState = Object.assign(atState, { mobileEditing: false, dirty: false, draft: null, selected: isMobileViewport() ? null : atState.selected });
+  if (atState.selected === "__new") atState.selected = null;
+  renderAssetTypesView();
+}
+function atSetTab(tab) { atState.tab = tab; renderAssetTypesView(); }
+function atMarkDirty() {
+  atState.dirty = true;
+  const el = document.getElementById("at-dirtyNote");
+  if (el) el.style.display = "";
+}
+
+function renderAssetTypesView() {
+  const content = document.getElementById("viewContent");
+  if (!state.user || state.user.role !== "Admin") {
+    content.innerHTML = `<div class="empty-state">หน้านี้สำหรับ Admin เท่านั้น</div>`;
+    return;
+  }
+  atSyncDraft();
+  const mobile = isMobileViewport();
+  if (!mobile && !atState.selected) {
+    const first = atDefs()[0];
+    if (first) { atState.selected = first.typeId; atSyncDraft(); }
+  }
+  const showEditor = mobile ? atState.mobileEditing && atState.draft : !!atState.draft;
+  const listHtml = atListHtml();
+  const editorHtml = showEditor ? atEditorHtml() : `<div class="empty-state">เลือกประเภทด้านซ้าย หรือกด "+ เพิ่มประเภทใหม่"</div>`;
+  content.innerHTML = mobile
+    ? (showEditor ? `<div class="at-editor at-mobile">${editorHtml}</div>` : `<div class="at-list at-mobile">${listHtml}</div>`)
+    : `<div class="at-wrap"><aside class="at-list">${listHtml}</aside><section class="at-editor">${editorHtml}</section></div>`;
+  if (showEditor) atBindEditor();
+}
+
+function atChipHtml(icon, color, muted) {
+  return `<span class="at-chip" style="background:${muted ? "#b8bfc6" : color};"><i class="fas ${icon}"></i></span>`;
+}
+function atListHtml() {
+  const defs = atDefs();
+  const items = defs.map((d) => {
+    const n = atItemCount(d.typeId);
+    const off = d.active === false;
+    const tags = `${d.testOnly ? `<span class="at-tag test">ทดสอบ</span>` : ""}${off ? `<span class="at-tag off">ปิดใช้</span>` : ""}`;
+    return `<button type="button" class="at-item${atState.selected === d.typeId ? " on" : ""}" onclick="atSelect('${escapeAttr(d.typeId)}')">
+        ${atChipHtml(genericTypeIcon(d), genericTypeColor(d.typeId), off)}
+        <span class="at-item-txt"><b>${escapeHtml(d.label || d.typeId)}</b><small>${n} ${escapeHtml(d.unit || "ชิ้น")} · ${genericActiveFields(d).length} ฟิลด์</small></span>
+        ${tags}<i class="fas fa-chevron-right at-chev"></i>
+      </button>`;
+  }).join("");
+  const legacy = AT_LEGACY_TYPES.map((t) => `<div class="at-item locked">${atChipHtml(t.icon, t.color)}<span class="at-item-txt"><b>${escapeHtml(t.label)}</b><small>ประเภทเดิมของระบบ</small></span><i class="fas fa-lock at-chev"></i></div>`).join("");
+  return `
+    <div class="at-list-head"><b>ประเภทอุปกรณ์</b><button type="button" class="btn-sm btn-primary" onclick="atSelect('__new')"><i class="fas fa-plus"></i> เพิ่มประเภทใหม่</button></div>
+    <div class="at-sec">ประเภทใหม่ (ตั้งค่าได้)</div>
+    ${items || `<div class="cache-note at-empty">ยังไม่มีประเภทใหม่ — กด "+ เพิ่มประเภทใหม่" เพื่อเริ่ม</div>`}
+    ${atState.selected === "__new" ? `<div class="at-item on">${atChipHtml(atState.draft ? atState.draft.icon : "fa-box", "#3F654D")}<span class="at-item-txt"><b>${escapeHtml((atState.draft && atState.draft.label) || "ประเภทใหม่")}</b><small>ยังไม่ได้บันทึก</small></span></div>` : ""}
+    <div class="at-sec">ประเภทเดิม (แก้จากหน้านี้ไม่ได้)</div>
+    ${legacy}`;
+}
+
+function atEditorHtml() {
+  const d = atState.draft;
+  const isNew = !!d.__new;
+  const n = isNew ? 0 : atItemCount(d.typeId);
+  const tabs = [["general", "ข้อมูลทั่วไป"], ["fields", `ฟิลด์ (${d.fields.filter((f) => !f.hidden).length})`], ["flows", "ขั้นตอนที่ใช้"], ["preview", "ตัวอย่าง"]];
+  let body = "";
+  if (atState.tab === "general") body = atGeneralTabHtml(d, isNew);
+  else if (atState.tab === "fields") body = atFieldsTabHtml(d, n);
+  else if (atState.tab === "flows") body = atFlowsTabHtml(d);
+  else body = atPreviewTabHtml(d);
+  const off = d.active === false;
+  return `
+    <div class="at-ed-head">
+      ${isMobileViewport() ? `<button type="button" class="btn-sm btn-secondary" onclick="atBackToList()"><i class="fas fa-arrow-left"></i></button>` : ""}
+      ${atChipHtml(genericTypeIcon(d), isNew ? "#3F654D" : genericTypeColor(d.typeId), off)}
+      <div class="at-ed-title"><b>${escapeHtml(d.label || (isNew ? "ประเภทใหม่" : d.typeId))}</b>
+        <small>${isNew ? "ยังไม่ได้บันทึก" : `${n} ${escapeHtml(d.unit || "ชิ้น")}ในระบบ${off ? " · ปิดใช้งานอยู่" : ""}`}${d.testOnly ? " · ประเภททดสอบ (เห็นเฉพาะ Admin)" : ""}</small></div>
+    </div>
+    <div class="tc-tabs at-tabs">${tabs.map(([k, l]) => `<div class="tc-tab ${atState.tab === k ? "active" : ""}" onclick="atSetTab('${k}')">${escapeHtml(l)}</div>`).join("")}</div>
+    <div class="at-body">${body}</div>
+    <div id="at-msg" class="form-msg"></div>
+    <div class="at-foot">
+      <span id="at-dirtyNote" class="cache-note" style="${atState.dirty ? "" : "display:none;"}">มีการแก้ไขที่ยังไม่ได้บันทึก</span>
+      ${isNew ? "" : `<button type="button" class="btn-sm btn-secondary" onclick="atToggleActive()">${off ? "เปิดใช้งาน" : "ปิดใช้งาน"}</button>`}
+      ${!isNew && n === 0 ? `<button type="button" class="btn-sm btn-remove" onclick="atDeleteType()">ลบประเภท</button>` : ""}
+      ${atState.dirty && !isNew ? `<button type="button" class="btn-sm btn-secondary" onclick="atDiscard()">ยกเลิกการแก้ไข</button>` : ""}
+      <button type="button" class="btn-primary at-save" id="at-saveBtn" onclick="atSave()">${isNew ? "สร้างประเภท" : "บันทึก"}</button>
+    </div>`;
+}
+
+function atGeneralTabHtml(d, isNew) {
+  return `
+    <div class="form-grid">
+      <div class="form-field"><label>ชื่อประเภท *</label><input type="text" id="at-label" maxlength="60" value="${escapeAttr(d.label)}" placeholder="เช่น เครื่องอบแห้ง"></div>
+      <div class="form-field"><label>หน่วยนับ</label><input type="text" id="at-unit" maxlength="10" value="${escapeAttr(d.unit)}" placeholder="เช่น เครื่อง / ชิ้น / ตัว"></div>
+      <div class="form-field"><label>ชื่อช่อง S/N</label><input type="text" id="at-serialLabel" maxlength="40" value="${escapeAttr(d.serialLabel)}" placeholder="เช่น S/N เครื่อง"></div>
+      <div class="form-field"><label>ลำดับในเมนู (น้อยขึ้นก่อน)</label><input type="number" id="at-order" min="0" max="999" value="${escapeAttr(d.order)}"></div>
+    </div>
+    <div class="form-field"><label>ไอคอน</label>
+      <div class="at-icons">${AT_ICON_CHOICES.map((ic) => `<button type="button" class="at-icon${d.icon === ic ? " on" : ""}" data-icon="${ic}" title="${ic}"><i class="fas ${ic}"></i></button>`).join("")}</div>
+    </div>
+    <div class="form-field checkbox-field" style="margin-top:12px;"><label><input type="checkbox" id="at-testOnly" ${d.testOnly ? "checked" : ""}> ประเภททดสอบ — เห็นเฉพาะ Admin (ไว้ลองตั้งค่าก่อนเปิดให้พนักงานใช้)</label></div>
+    <div class="cache-note" style="margin-top:8px;">รหัสระบบ: <code>${escapeHtml(d.typeId)}</code>${isNew ? " (สร้างให้อัตโนมัติ)" : ""} · ลูกค้า สถานที่ สถานะ และลำดับสต๊อก เป็นช่องที่ทุกประเภทมีอยู่แล้ว ไม่ต้องเพิ่มเอง</div>`;
+}
+
+function atFieldsTabHtml(d, itemCount) {
+  const hasData = itemCount > 0;
+  const rows = d.fields.map((f, i) => {
+    const lockedType = hasData && f.__saved;
+    const canUnique = f.perItem && (f.type === "text" || f.type === "number");
+    return `
+      <div class="at-field${f.hidden ? " hidden-f" : ""}" data-i="${i}">
+        <div class="at-field-top">
+          <span class="at-field-no">${i + 1}</span>
+          <input type="text" class="at-f-label" maxlength="60" value="${escapeAttr(f.label)}" placeholder="ชื่อฟิลด์ เช่น รุ่น">
+          <select class="at-f-type" ${lockedType ? "disabled title=\"มีเครื่องในระบบแล้ว — เปลี่ยนชนิดไม่ได้\"" : ""}>
+            ${Object.keys(AT_FIELD_TYPE_LABEL).map((t) => `<option value="${t}" ${f.type === t ? "selected" : ""}>${AT_FIELD_TYPE_LABEL[t]}</option>`).join("")}
+          </select>
+          <span class="at-field-btns">
+            <button type="button" class="btn-sm btn-secondary at-f-up" ${i === 0 ? "disabled" : ""} title="เลื่อนขึ้น"><i class="fas fa-arrow-up"></i></button>
+            <button type="button" class="btn-sm btn-secondary at-f-down" ${i === d.fields.length - 1 ? "disabled" : ""} title="เลื่อนลง"><i class="fas fa-arrow-down"></i></button>
+            ${hasData && f.__saved ? "" : `<button type="button" class="btn-sm btn-remove at-f-del" title="ลบฟิลด์"><i class="fas fa-trash"></i></button>`}
+          </span>
+        </div>
+        ${f.type === "select" ? `<div class="form-field at-f-opts-wrap"><label>ตัวเลือก (บรรทัดละ 1 ตัวเลือก)</label><textarea class="at-f-opts" rows="3" placeholder="A1&#10;B2">${escapeHtml((f.options || []).join("\n"))}</textarea></div>` : ""}
+        <div class="at-field-flags">
+          <label><input type="checkbox" class="at-f-required" ${f.required ? "checked" : ""}> บังคับกรอก</label>
+          <label title="ติ๊ก = กรอกแยกทีละเครื่องตอนรับเข้า · ไม่ติ๊ก = ใช้ค่าเดียวกันทั้งชุด"><input type="checkbox" class="at-f-perItem" ${f.perItem ? "checked" : ""}> กรอกทีละเครื่อง</label>
+          <label class="${canUnique ? "" : "dis"}" title="ใช้ได้กับข้อความสั้น/ตัวเลข ที่กรอกทีละเครื่อง"><input type="checkbox" class="at-f-unique" ${f.unique ? "checked" : ""} ${canUnique ? "" : "disabled"}> ห้ามซ้ำ</label>
+          <label><input type="checkbox" class="at-f-showInTable" ${f.showInTable !== false ? "checked" : ""}> แสดงในตาราง</label>
+          ${f.__saved ? `<label title="ซ่อนจากทุกหน้า (ข้อมูลเดิมยังเก็บไว้)"><input type="checkbox" class="at-f-hidden" ${f.hidden ? "checked" : ""}> ซ่อน</label>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+  return `
+    <div class="at-fixed-field"><i class="fas fa-lock"></i> <b>${escapeHtml(d.serialLabel || "S/N")}</b> <span class="cache-note">— ช่องหลักของทุกเครื่อง (บังคับ · ห้ามซ้ำ · กรอกทีละเครื่อง)</span></div>
+    ${rows || `<div class="cache-note at-empty">ยังไม่มีฟิลด์เพิ่มเติม — มีแค่ S/N + ลูกค้า/สถานที่/สถานะ ก็ใช้งานได้แล้ว</div>`}
+    <button type="button" class="btn-sm btn-secondary at-add-field" id="at-addField"><i class="fas fa-plus"></i> เพิ่มฟิลด์</button>
+    ${hasData ? `<div class="cache-note" style="margin-top:8px;">ประเภทนี้มีเครื่องในระบบแล้ว ${itemCount} ${escapeHtml(d.unit || "ชิ้น")} — ฟิลด์เดิมลบหรือเปลี่ยนชนิดไม่ได้ (ใช้ "ซ่อน" แทน) ตัวเลือกที่มีเครื่องใช้อยู่ก็ลบไม่ได้</div>` : ""}`;
+}
+
+function atFlowsTabHtml(d) {
+  return `<div class="at-flows">${AT_FLOW_META.map((m) => `
+      <label class="at-flow"><input type="checkbox" class="at-flow-cb" data-flow="${m.key}" ${d.flows[m.key] !== false ? "checked" : ""}>
+        <span><b>${escapeHtml(m.label)}</b><small>${escapeHtml(m.hint)}</small></span></label>`).join("")}</div>
+    <div class="cache-note" style="margin-top:10px;">ปิดขั้นตอนไหน ปุ่ม/ตัวเลือกนั้นจะหายไปจากหน้าเบิก/ย้าย-เคลม และเซิร์ฟเวอร์จะไม่รับ — เครื่องที่เคลมค้างอยู่ยังปิดเคสได้เสมอ</div>`;
+}
+
+function atPreviewTabHtml(d) {
+  const def = Object.assign({}, d, { fields: d.fields.filter((f) => f.label.trim()) });
+  const cfg = buildGenericViewConfig(def);
+  const sample = (c) => {
+    if (c.field === "StockNo") return stockNoChipHtml("1");
+    if (c.field === "SerialNo") return "SN-0001";
+    if (c.field === "Customer_name") return "ลูกค้าตัวอย่าง";
+    if (c.field === "Location") return `<span class="badge-stock">Stock</span>`;
+    const f = def.fields.find((x) => x.key === c.field);
+    if (!f) return "";
+    return escapeHtml(f.type === "select" ? ((f.options || [])[0] || "") : f.type === "date" ? "01/11/2026" : f.type === "number" ? "15" : "ตัวอย่าง");
+  };
+  const cardRows = cfg.columns.filter((c) => !["StockNo", "SerialNo", "Location"].includes(c.field))
+    .map((c) => `<div class="mcard-row"><div class="mcard-label">${escapeHtml(c.label)}</div><div class="mcard-val">${sample(c)}</div></div>`).join("");
+  return `
+    <div class="cache-note" style="margin-bottom:6px;">ตาราง (PC)</div>
+    <div class="table-card"><div class="table-scroll"><table>
+      <thead><tr>${cfg.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
+      <tbody><tr>${cfg.columns.map((c) => `<td>${sample(c)}</td>`).join("")}</tr></tbody>
+    </table></div></div>
+    <div class="cache-note" style="margin:14px 0 6px;">การ์ด (มือถือ)</div>
+    <div class="mcard" style="max-width:340px;">
+      <div class="mcard-head"><div class="mcard-title">${stockNoChipHtml("1")}SN-0001</div><div class="mcard-pill-group"><span class="mcard-pill stock">อยู่ในคลัง</span></div></div>
+      ${cardRows}
+    </div>`;
+}
+
+function atBindEditor() {
+  const d = atState.draft;
+  const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
+  on("at-label", "input", (e) => { d.label = e.target.value; atMarkDirty(); });
+  on("at-unit", "input", (e) => { d.unit = e.target.value; atMarkDirty(); });
+  on("at-serialLabel", "input", (e) => { d.serialLabel = e.target.value; atMarkDirty(); });
+  on("at-order", "input", (e) => { d.order = e.target.value === "" ? "" : Number(e.target.value); atMarkDirty(); });
+  on("at-testOnly", "change", (e) => { d.testOnly = e.target.checked; atMarkDirty(); });
+  document.querySelectorAll(".at-icon").forEach((b) => b.addEventListener("click", () => {
+    d.icon = b.dataset.icon; atMarkDirty(); renderAssetTypesView();
+  }));
+  document.querySelectorAll(".at-flow-cb").forEach((cb) => cb.addEventListener("change", () => { d.flows[cb.dataset.flow] = cb.checked; atMarkDirty(); }));
+  on("at-addField", "click", () => {
+    d.fields.push({ key: atNewFieldKey(d.fields), label: "", type: "text", required: false, perItem: false, unique: false, showInTable: true, hidden: false });
+    atMarkDirty(); renderAssetTypesView();
+    const inputs = document.querySelectorAll(".at-f-label");
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  });
+  document.querySelectorAll(".at-field").forEach((row) => {
+    const i = Number(row.dataset.i);
+    const f = d.fields[i];
+    const q = (cls) => row.querySelector(cls);
+    q(".at-f-label").addEventListener("input", (e) => { f.label = e.target.value; atMarkDirty(); });
+    q(".at-f-type").addEventListener("change", (e) => {
+      f.type = e.target.value;
+      if (f.type === "select" && !f.options) f.options = [];
+      if (!(f.perItem && (f.type === "text" || f.type === "number"))) f.unique = false;
+      atMarkDirty(); renderAssetTypesView();
+    });
+    const opts = q(".at-f-opts");
+    if (opts) opts.addEventListener("input", (e) => { f.options = e.target.value.split("\n").map((s) => s.trim()).filter(Boolean); atMarkDirty(); });
+    const flag = (cls, key, rerender) => {
+      const el = q(cls);
+      if (el) el.addEventListener("change", (e) => {
+        f[key] = e.target.checked;
+        if (key === "perItem" && !f.perItem) f.unique = false;
+        atMarkDirty();
+        if (rerender) renderAssetTypesView();
+      });
+    };
+    flag(".at-f-required", "required"); flag(".at-f-perItem", "perItem", true); flag(".at-f-unique", "unique");
+    flag(".at-f-showInTable", "showInTable"); flag(".at-f-hidden", "hidden", true);
+    const move = (delta) => {
+      const j = i + delta;
+      if (j < 0 || j >= d.fields.length) return;
+      [d.fields[i], d.fields[j]] = [d.fields[j], d.fields[i]];
+      atMarkDirty(); renderAssetTypesView();
+    };
+    q(".at-f-up").addEventListener("click", () => move(-1));
+    q(".at-f-down").addEventListener("click", () => move(1));
+    const del = q(".at-f-del");
+    if (del) del.addEventListener("click", () => { d.fields.splice(i, 1); atMarkDirty(); renderAssetTypesView(); });
+  });
+}
+
+function atShowMsg(text, ok) {
+  const el = document.getElementById("at-msg");
+  if (!el) return;
+  el.className = "form-msg " + (ok ? "success" : "error");
+  el.textContent = text;
+}
+/** ตรวจเบื้องต้นฝั่งหน้าเว็บ (ข้อความเข้าใจง่าย) — เซิร์ฟเวอร์ตรวจละเอียดซ้ำอีกชั้นเสมอ */
+function atValidateDraft(d) {
+  if (!String(d.label || "").trim()) return { tab: "general", msg: "กรุณากรอกชื่อประเภท" };
+  for (let i = 0; i < d.fields.length; i++) {
+    const f = d.fields[i];
+    if (!String(f.label || "").trim()) return { tab: "fields", msg: `ฟิลด์ที่ ${i + 1}: กรุณากรอกชื่อฟิลด์` };
+    if (f.type === "select" && !(f.options || []).length) return { tab: "fields", msg: `ฟิลด์ "${f.label}": กรุณาใส่ตัวเลือกอย่างน้อย 1 ตัว` };
+  }
+  const labels = d.fields.map((f) => f.label.trim());
+  const dup = labels.find((l, i) => labels.indexOf(l) !== i);
+  if (dup) return { tab: "fields", msg: `ชื่อฟิลด์ "${dup}" ซ้ำกัน` };
+  return null;
+}
+async function atSave() {
+  if (atState.busy) return;
+  const d = atState.draft;
+  const err = atValidateDraft(d);
+  if (err) { if (atState.tab !== err.tab) { atState.tab = err.tab; renderAssetTypesView(); } return atShowMsg(err.msg, false); }
+  const isNew = !!d.__new;
+  const payload = {
+    typeId: d.typeId, kind: "device", label: d.label.trim(), icon: d.icon, unit: String(d.unit || "").trim(),
+    serialLabel: String(d.serialLabel || "").trim(), order: d.order === "" ? undefined : Number(d.order), testOnly: !!d.testOnly,
+    flows: d.flows,
+    fields: d.fields.map((f) => {
+      const o = { key: f.key, label: f.label.trim(), type: f.type, required: !!f.required, perItem: !!f.perItem, unique: !!f.unique, showInTable: f.showInTable !== false, hidden: !!f.hidden };
+      if (f.type === "select") o.options = f.options || [];
+      return o;
+    }),
+  };
+  atState.busy = true;
+  const btn = document.getElementById("at-saveBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "กำลังบันทึก..."; }
+  try {
+    const res = await apiPost({ action: "saveAssetType", token: state.token, mode: isNew ? "create" : "update", assetType: payload });
+    if (!res.ok) {
+      if (res.error === "unauthorized") return handleUnauthorized();
+      return atShowMsg(res.detail || assetErrorMessage(res.error), false);
+    }
+    atState.dirty = false;
+    atState.selected = res.typeId || d.typeId;
+    atState.draft = null; // โหลดใหม่จากค่าตั้งล่าสุดเมื่อ listener ส่งข้อมูลมา (atSyncDraft)
+    atState.loadedAt = "";
+    const saved = Object.assign({}, payload, { active: isNew ? true : d.active !== false, updatedAt: "__pending" });
+    if (!atDefById(atState.selected)) state.data.assetTypesRaw = [...(state.data.assetTypesRaw || []), saved];
+    renderAssetTypesView();
+    atShowMsg(isNew ? `สร้างประเภท "${payload.label}" แล้ว — เมนูจะขึ้นให้ทันที (รับเข้าสต๊อกได้ที่ "จัดการ Stock/อะไหล่")` : "บันทึกแล้ว", true);
+  } catch (e) {
+    atShowMsg("เกิดข้อผิดพลาด: " + e.message, false);
+  } finally {
+    atState.busy = false;
+    const b = document.getElementById("at-saveBtn");
+    if (b) { b.disabled = false; }
+  }
+}
+async function atDiscard() {
+  if (!(await atConfirmDiscard())) return;
+  atState.dirty = false; atState.draft = null; atState.loadedAt = "";
+  renderAssetTypesView();
+}
+async function atToggleActive() {
+  const d = atState.draft;
+  if (!d || d.__new) return;
+  const turnOn = d.active === false;
+  const ok = await showConfirm(turnOn
+    ? `เปิดใช้งาน "${d.label}" — กลับมารับเข้าสต๊อกและเบิกได้ตามปกติ`
+    : `ปิดใช้งาน "${d.label}" — รับเข้าสต๊อกและเลือกเบิกไม่ได้ แต่เครื่องเดิมยังดู/แก้ไข/คืน/ปิดเคสเคลมได้`, { type: "warning", okText: turnOn ? "เปิดใช้งาน" : "ปิดใช้งาน" });
+  if (!ok) return;
+  const res = await apiPost({ action: "setAssetTypeActive", token: state.token, typeId: d.typeId, active: turnOn });
+  if (!res.ok) { if (res.error === "unauthorized") return handleUnauthorized(); return atShowMsg(res.detail || assetErrorMessage(res.error), false); }
+  atShowMsg(turnOn ? "เปิดใช้งานแล้ว" : "ปิดใช้งานแล้ว", true);
+}
+async function atDeleteType() {
+  const d = atState.draft;
+  if (!d || d.__new) return;
+  const ok = await showConfirm(`ลบประเภท "${d.label}" ถาวร? (ลบได้เฉพาะประเภทที่ยังไม่มีเครื่องและไม่เคยมีประวัติเบิก)`, { type: "warning", okText: "ลบเลย", danger: true });
+  if (!ok) return;
+  const res = await apiPost({ action: "deleteAssetType", token: state.token, typeId: d.typeId });
+  if (!res.ok) { if (res.error === "unauthorized") return handleUnauthorized(); return atShowMsg(res.detail || assetErrorMessage(res.error), false); }
+  atState = Object.assign(atState, { selected: null, draft: null, dirty: false, mobileEditing: false, loadedAt: "" });
+  renderAssetTypesView();
+}
+
+// ============================================================
 // Phase 7: โมดัลยืนยัน/แจ้งเตือน C2TECH (แทน native confirm()/alert())
 // ใช้ Promise แทน blocking dialog — รองรับ Mobile (bottom sheet) + Desktop (card กลางจอ)
 // ============================================================
@@ -1089,6 +1481,7 @@ const MOBILE_HOME_ADMIN_TILES = [
   { key: "supplierclaim", label: "รอเคลมจาก Supplier", icon: "fa-truck-loading", color: "mh-c4", badge: true },
   { key: "users", label: "จัดการผู้ใช้งาน", icon: "fa-users-cog", color: "mh-c9" },
   { key: "manageparts", label: "จัดการ Stock/อะไหล่", icon: "fa-toolbox", color: "mh-c5" },
+  { key: "assettypes", label: "ตั้งค่าประเภทอุปกรณ์", icon: "fa-layer-group", color: "mh-c3" },
 ];
 
 /** สรุปยอดรวมสั้นๆ สำหรับแถบสถิติในหน้าแรก (รวมทุกประเภทอุปกรณ์เข้าด้วยกัน) */
@@ -1864,6 +2257,9 @@ function renderCurrentViewInner() {
   } else if (state.currentView === "supplierclaim") {
     titleEl.textContent = "รอเคลมจาก Supplier";
     renderSupplierClaimView();
+  } else if (state.currentView === "assettypes") {
+    titleEl.textContent = "ตั้งค่าประเภทอุปกรณ์";
+    renderAssetTypesView();
   } else if (state.currentView === "panolyzer") {
     titleEl.textContent = "Panolyzer";
     renderPanolyzerView();
