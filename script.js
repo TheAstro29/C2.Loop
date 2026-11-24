@@ -325,6 +325,299 @@ function isColorSorterStockRow(row) {
 }
 
 // ============================================================
+// ประเภทอุปกรณ์แบบตั้งค่าได้ (assetTypes) — Phase 2 หน้าเว็บ (แผนเต็ม: dev\c2-loop-firebase\PLAN-asset-types.md)
+// ค่าตั้งอยู่ที่ assetTypes/{typeId}, เครื่องอยู่ที่ assetTypes/{typeId}/assetItems/{S/N} (หลังบ้าน Group 7 ใน index.js)
+// หลักการ: "ลงทะเบียน" แต่ละประเภทเข้า VIEW_CONFIG ตอนรันไทม์ (key = "at_<typeId>") ให้หน้ารายการ/ตาราง/การ์ด/
+// หน้ารายละเอียด/ลบ/ตัวช่วยรับเข้าสต๊อกเดิมใช้ได้ทันทีโดยไม่ต้องเขียนหน้าใหม่ — ส่วนที่ต่างจริงๆ มีแค่ฟอร์มแก้ไข
+// (ตรวจตาม schema) และฟอร์มรับเข้า (ฟิลด์มาจาก schema) ซึ่งแยกฟังก์ชันไว้ด้านล่าง
+// ข้อจำกัด Phase 2: ยังเบิก/ย้าย/เคลมประเภทใหม่ไม่ได้ (Phase 3) — หน้าเบิกใช้รายการประเภทตายตัวอยู่แล้ว และ
+// TRANSFER_CLAIM_ASSET_KEYS ไม่มี key ของประเภทใหม่ ปุ่มเหล่านั้นจึงไม่โผล่เอง
+// testOnly = ประเภททดสอบ แสดงเฉพาะ Admin (มีป้าย "ทดสอบ")
+// ============================================================
+const GENERIC_VIEW_PREFIX = "at_";
+const GENERIC_TYPE_COLORS = ["#0EA5E9", "#F97316", "#14B8A6", "#A855F7", "#EF4444", "#84CC16", "#6366F1", "#D946EF", "#F59E0B", "#10B981"];
+let genericRegisteredKeys = []; // key ที่ลงทะเบียนไว้รอบล่าสุด (ไว้ถอดออกก่อนลงทะเบียนใหม่)
+
+function genericViewKey(typeId) { return GENERIC_VIEW_PREFIX + typeId; }
+function isGenericViewKey(key) { return !!(VIEW_CONFIG[key] && VIEW_CONFIG[key].generic); }
+function genericTypeColor(typeId) {
+  let h = 0;
+  for (const ch of String(typeId)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return GENERIC_TYPE_COLORS[h % GENERIC_TYPE_COLORS.length];
+}
+/** ชื่อไอคอน Font Awesome ที่ปลอดภัย (ค่าตั้งตรวจที่ server แล้ว แต่กันไว้อีกชั้นเพราะนำไปต่อเป็น class) */
+function genericTypeIcon(def) {
+  const icon = String((def && def.icon) || "");
+  return /^fa-[a-z0-9-]{1,40}$/.test(icon) ? icon : "fa-box";
+}
+/** ฟิลด์ที่ใช้งานอยู่ (ไม่ซ่อน) ตามลำดับใน schema */
+function genericActiveFields(def) { return ((def && def.fields) || []).filter((f) => !f.hidden); }
+
+function buildGenericViewConfig(def) {
+  const key = genericViewKey(def.typeId);
+  const fields = genericActiveFields(def);
+  const fieldCol = (f) => ({ field: f.key, label: f.label });
+  const head = [{ field: "StockNo", label: "ลำดับ" }, { field: "SerialNo", label: def.serialLabel || "S/N" }];
+  const tail = [{ field: "Customer_name", label: "ลูกค้า" }, { field: "Location", label: "สถานะ/ตำแหน่ง" }];
+  const testTag = def.testOnly ? " (ทดสอบ)" : "";
+  const offTag = def.active === false ? " (ปิดใช้งาน)" : "";
+  return {
+    title: (def.label || def.typeId) + testTag,
+    navLabel: (def.label || def.typeId) + testTag + offTag,
+    key, assetType: def.typeId, serialField: "SerialNo", connectField: null, stockField: "Location",
+    columns: [...head, ...fields.filter((f) => f.showInTable !== false).map(fieldCol), ...tail],
+    // หน้ารายละเอียดแสดงทุกฟิลด์ที่ไม่ซ่อน (ตาราง/การ์ดแสดงเฉพาะที่ติ๊ก "แสดงในตาราง")
+    detailColumns: [...head, ...fields.map(fieldCol), ...tail],
+    generic: true, typeDef: def, icon: genericTypeIcon(def), color: genericTypeColor(def.typeId),
+  };
+}
+
+/** ถอดประเภทใหม่ที่เคยลงทะเบียนออกจากตารางกลางทั้งหมด (ก่อนลงทะเบียนรอบใหม่ / ตอน logout) */
+function clearGenericAssetTypes() {
+  genericRegisteredKeys.forEach((key) => {
+    delete VIEW_CONFIG[key];
+    delete STOCK_NO_FIELD_BY_VIEW[key];
+    delete STOCK_NO_UNIT_BY_VIEW[key];
+    delete MP_TYPE_ICONS[key];
+    delete DASHBOARD_CATEGORY_META[key];
+    delete state.data[key];
+  });
+  for (let i = MANAGE_STOCK_ASSET_TYPES.length - 1; i >= 0; i--) {
+    if (MANAGE_STOCK_ASSET_TYPES[i].generic) MANAGE_STOCK_ASSET_TYPES.splice(i, 1);
+  }
+  genericRegisteredKeys = [];
+}
+
+/** ลงทะเบียนประเภทใหม่จาก state.data.assetTypesRaw + แจกเครื่องจาก state.data.assetItemsRaw เข้าแต่ละประเภท
+ * เรียกทุกครั้งที่ listener ของ 2 collection นี้ยิง และตอนเปิดแอปจาก cache */
+function syncGenericAssetTypes() {
+  clearGenericAssetTypes();
+  const isAdmin = !!(state.user && state.user.role === "Admin");
+  const defs = (state.data.assetTypesRaw || [])
+    .filter((d) => d && d.kind === "device" && d.typeId && (!d.testOnly || isAdmin))
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.label).localeCompare(String(b.label), "th"));
+  const byType = {};
+  (state.data.assetItemsRaw || []).forEach((r) => { if (r && r.typeId) (byType[r.typeId] = byType[r.typeId] || []).push(r); });
+  defs.forEach((def) => {
+    const cfg = buildGenericViewConfig(def);
+    VIEW_CONFIG[cfg.key] = cfg;
+    STOCK_NO_FIELD_BY_VIEW[cfg.key] = "StockNo";
+    STOCK_NO_UNIT_BY_VIEW[cfg.key] = def.unit || "ชิ้น";
+    MP_TYPE_ICONS[cfg.key] = cfg.icon;
+    DASHBOARD_CATEGORY_META[cfg.key] = { icon: cfg.icon, color: cfg.color };
+    if (def.active !== false) MANAGE_STOCK_ASSET_TYPES.push({ value: cfg.key, label: cfg.title, generic: true });
+    state.data[cfg.key] = byType[def.typeId] || [];
+    genericRegisteredKeys.push(cfg.key);
+  });
+  renderGenericAssetNav();
+  // ประเภทที่กำลังเปิดดูอยู่ถูกลบ/ซ่อนไปแล้ว — กลับหน้า Dashboard แทนหน้าว่าง
+  if (state.user && String(state.currentView).startsWith(GENERIC_VIEW_PREFIX) && !VIEW_CONFIG[state.currentView]) {
+    state.currentView = "dashboard";
+    document.querySelectorAll(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.view === "dashboard"));
+  }
+}
+
+/** เมนูซ้าย (PC) — ใส่ประเภทใหม่ต่อจาก Color Sorter ใน <div id="genericAssetNav"> */
+function renderGenericAssetNav() {
+  const wrap = document.getElementById("genericAssetNav");
+  if (!wrap) return;
+  wrap.innerHTML = genericRegisteredKeys.map((key) => {
+    const cfg = VIEW_CONFIG[key];
+    return `<div class="nav-item${state.currentView === key ? " active" : ""}" data-view="${escapeAttr(key)}" onclick="switchView('${escapeAttr(key)}')">
+        <span class="nav-icon-chip" style="background:${cfg.color};"><i class="fas ${cfg.icon}"></i></span> <span>${escapeHtml(cfg.navLabel)}</span>
+      </div>`;
+  }).join("");
+}
+
+/** ไอคอนหน้าแรกมือถือของประเภทใหม่ (แทรกต่อจาก Color Sorter ใน renderMobileHome) */
+function genericMobileHomeTiles() {
+  return genericRegisteredKeys.map((key) => {
+    const cfg = VIEW_CONFIG[key];
+    return { key, label: cfg.navLabel, icon: cfg.icon, colorStyle: cfg.color };
+  });
+}
+
+/** listener ของค่าตั้ง + เครื่องทุกประเภทใหม่ (collectionGroup อ่านทุก assetTypes/{id}/assetItems ในคำสั่งเดียว) */
+function attachAssetTypeListeners() {
+  const onData = () => {
+    syncGenericAssetTypes();
+    state.cachedAt = new Date().toISOString();
+    try { localStorage.setItem(LS_CACHE, JSON.stringify({ data: state.data, cachedAt: state.cachedAt })); } catch (e) { /* เต็ม quota ก็ปล่อยผ่าน */ }
+    renderCurrentViewFromSync();
+    if (state.mobileHomeVisible && isMobileViewport()) renderMobileHome();
+  };
+  const onErr = (name) => (err) => console.error(`[firestore listener] ${name} error:`, err);
+  firestoreListeners.push(fbDb.collection("assetTypes").onSnapshot((snap) => {
+    state.data.assetTypesRaw = snap.docs.map(translateRaw);
+    onData();
+  }, onErr("assetTypes")));
+  firestoreListeners.push(fbDb.collectionGroup("assetItems").onSnapshot((snap) => {
+    state.data.assetItemsRaw = snap.docs.map(translateRaw);
+    onData();
+  }, onErr("assetItems")));
+}
+
+/** ฟอร์มแก้ไขของประเภทใหม่ — ช่องตาม schema (ชนิดตัวเลือก/วันที่/ข้อความยาว) + ลูกค้า + S/N
+ * (สถานะ/สถานที่ เปลี่ยนผ่านขั้นตอนเบิก/คืนเท่านั้น server ไม่รับ) */
+function openEditAssetGeneric(cfg, row, serial) {
+  const def = cfg.typeDef;
+  const fields = [
+    { key: "SerialNo", label: def.serialLabel || "S/N", value: serial, type: "text", group: "other", locked: true,
+      hint: "รหัสอ้างอิงหลัก — แก้ไขได้เฉพาะเครื่องที่ยังไม่มีประวัติเบิก" },
+  ];
+  genericActiveFields(def).forEach((f) => {
+    const raw = row[f.key];
+    const val = raw === undefined || raw === null ? "" : raw;
+    const label = f.label + (f.required ? " *" : "");
+    if (f.type === "select") {
+      const opts = (f.options || []).slice();
+      if (val !== "" && opts.indexOf(String(val)) === -1) opts.unshift(String(val)); // ค่าเดิมที่ไม่อยู่ในตัวเลือกแล้ว
+      fields.push({ key: f.key, label, type: "select", plain: true, value: String(val), group: "product",
+        options: [...(f.required ? [] : [{ value: "", label: "— ไม่ระบุ —" }]), ...opts.map((o) => ({ value: o, label: o }))] });
+    } else if (f.type === "date") {
+      const iso = thaiDateToIso(val);
+      fields.push({ key: f.key, label, type: iso || !val ? "date" : "text", value: iso || val, group: "product", _genericDate: true });
+    } else if (f.type === "textarea") {
+      fields.push({ key: f.key, label, type: "textarea", value: val, group: "product", span2: true, maxLength: 1000 });
+    } else {
+      fields.push({ key: f.key, label, type: "text", value: val, group: "product", hint: f.type === "number" ? "ตัวเลข" : "" });
+    }
+  });
+  fields.push({ key: "Customer_name", label: "ลูกค้า", type: "text", value: row.Customer_name || "", group: "customer", span2: true });
+
+  openGenericFormModal(cfg.title, fields, async (values) => {
+    const updates = {};
+    fields.forEach((f, i) => {
+      updates[f.key] = f._genericDate && f.type === "date" ? isoDateToThai(values[i]) : values[i];
+    });
+    const msg = document.getElementById("genericFormModalMsg");
+    try {
+      const res = await apiPost({ action: "updateAsset", token: state.token, assetType: cfg.assetType, serialNo: serial, updates });
+      if (!res.ok) {
+        if (res.error === "unauthorized") return handleUnauthorized();
+        throw new Error(assetErrorMessage(res.error) + (res.conflicts && res.conflicts.length ? "\n" + res.conflicts.join("\n") : ""));
+      }
+      await refreshInBackground(true);
+      closeGenericFormModal();
+      renderCurrentView();
+    } catch (err) {
+      msg.className = "form-msg error";
+      msg.textContent = err.message;
+    }
+  }, { groups: ASSET_FIELD_GROUP_META, serial });
+}
+
+/** ฟอร์มรับเข้าสต๊อกของประเภทใหม่ (ขั้นที่ 2 ของตัวช่วย "จัดการ Stock/อะไหล่") — ใช้ addStockForm/ตะกร้า/ขั้นตรวจสอบ/
+ * submitAddStockBasket ตัวเดิมทั้งหมด ต่างแค่ช่องกรอกมาจาก schema: ฟิลด์ "ต่อชิ้น" อยู่แถวกรอกตะกร้า, ที่เหลือใช้ร่วมทั้งชุด */
+function renderAddStockGenericUI(area, assetKey) {
+  const cfg = VIEW_CONFIG[assetKey];
+  const def = cfg.typeDef;
+  const fields = genericActiveFields(def);
+  const commonFields = fields.filter((f) => !f.perItem).map((f) => ({
+    key: f.key, label: f.label + (f.required ? " *" : ""), type: f.type, options: f.options || [], required: !!f.required,
+  }));
+  const itemFields = [{ field: "SerialNo", label: def.serialLabel || "S/N", type: "text", required: true, unique: true },
+    ...fields.filter((f) => f.perItem).map((f) => ({ field: f.key, label: f.label, type: f.type, options: f.options || [], required: !!f.required, unique: !!f.unique }))];
+  addStockForm = { assetKey, cfg, commonFields, itemFields, common: Object.fromEntries(commonFields.map((f) => [f.key, ""])), items: [], generic: true };
+
+  const inputHtml = (id, f, value) => {
+    if (f.type === "select") {
+      return `<select id="${id}"><option value="">${f.required ? "— เลือก —" : "— ไม่ระบุ —"}</option>${f.options.map((o) => `<option value="${escapeAttr(o)}" ${o === value ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}</select>`;
+    }
+    if (f.type === "date") return `<input type="date" id="${id}">`;
+    if (f.type === "textarea") return `<textarea id="${id}" rows="2" maxlength="1000"></textarea>`;
+    return `<input type="text" id="${id}" ${f.type === "number" ? `inputmode="decimal"` : ""} placeholder="${escapeAttr(f.type === "number" ? "ตัวเลข" : "")}">`;
+  };
+  const commonHtml = commonFields.map((f, i) => `<div class="form-field"><label>${escapeHtml(f.label)} — ใช้ค่าเดียวกันทั้งตะกร้า</label>${inputHtml(`as-common-${i}`, f, "")}</div>`).join("");
+  const itemHtml = itemFields.map((f, i) => `<div class="form-field"><label>${escapeHtml(f.label)}${f.required ? " *" : ""}</label>${inputHtml(`as-item-${i}`, f, "")}</div>`).join("");
+
+  area.innerHTML = `
+    ${commonFields.length ? `<div class="form-grid full">${commonHtml}</div>` : ""}
+    <div class="picker-row" style="margin-top:2px; align-items:flex-end; flex-wrap:wrap;">
+      ${itemHtml}
+      <button type="button" class="btn-sm btn-add" id="as-addBtn">+ เพิ่ม</button>
+    </div>
+    <div class="table-card" style="margin-top:10px;">
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>ลำดับ (อัตโนมัติ)</th>${itemFields.map((f) => `<th>${escapeHtml(f.label)}</th>`).join("")}<th></th></tr></thead>
+          <tbody id="as-basketBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cache-note" id="as-countNote" style="margin-top:8px;"></div>
+    <div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">
+      ${escapeHtml(cfg.title)}ทุก${escapeHtml(def.unit || "ชิ้น")}ที่เพิ่มจะเข้าสถานะ "Stock" ทันที<br>ลำดับระบบกำหนดให้อัตโนมัติต่อจากเลขล่าสุด (ตอนนี้ล่าสุดคือ ${getMaxStockNo(assetKey) || "-"})
+    </div>
+    <div id="as-msg" class="form-msg"></div>
+    <button class="btn-primary" id="as-submitBtn" style="margin-top:12px;">บันทึกเข้าสต๊อก</button>
+  `;
+
+  commonFields.forEach((f, i) => {
+    const el = document.getElementById(`as-common-${i}`);
+    const upd = () => { addStockForm.common[f.key] = f.type === "date" ? isoDateToThai(el.value) : el.value; };
+    el.addEventListener(f.type === "select" || f.type === "date" ? "change" : "input", upd);
+  });
+  itemFields.forEach((f, i) => {
+    document.getElementById(`as-item-${i}`).addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && f.type !== "textarea") { e.preventDefault(); addItemToAddStockBasketGeneric(); }
+    });
+  });
+  document.getElementById("as-addBtn").addEventListener("click", addItemToAddStockBasketGeneric);
+  document.getElementById("as-submitBtn").addEventListener("click", submitAddStockBasket);
+  renderAddStockBasketOnly();
+}
+
+/** เพิ่ม 1 ชิ้นลงตะกร้า (ประเภทใหม่) — ช่องที่ไม่บังคับเว้นว่างได้, เช็คซ้ำ S/N + ฟิลด์ "ห้ามซ้ำ" กับในระบบและในตะกร้า
+ * (ผลชี้ขาดจริงยังตรวจที่เซิร์ฟเวอร์อีกชั้นตอนบันทึก) */
+function addItemToAddStockBasketGeneric() {
+  const { itemFields, items, assetKey } = addStockForm;
+  const msg = document.getElementById("as-msg");
+  msg.className = "form-msg";
+  msg.textContent = "";
+  const values = itemFields.map((f, i) => {
+    const v = document.getElementById(`as-item-${i}`).value.trim();
+    return f.type === "date" ? isoDateToThai(v) : v;
+  });
+  if (values.every((v) => !v)) return;
+  const missing = itemFields.filter((f, i) => f.required && !values[i]);
+  if (missing.length) {
+    msg.className = "form-msg error";
+    msg.textContent = `กรุณากรอก ${missing.map((f) => f.label).join(" และ ")}`;
+    return;
+  }
+  if (values[0].includes("/")) {
+    msg.className = "form-msg error";
+    msg.textContent = `${itemFields[0].label} ห้ามมีเครื่องหมาย /`;
+    return;
+  }
+  const candidate = {};
+  itemFields.forEach((f, i) => { candidate[f.field] = values[i]; });
+  const existingRows = state.data[assetKey] || [];
+  for (const f of itemFields.filter((x) => x.unique)) {
+    const v = String(candidate[f.field] || "").toLowerCase();
+    if (!v) continue;
+    if (items.some((it) => String(it[f.field] || "").toLowerCase() === v)) {
+      msg.className = "form-msg error";
+      msg.textContent = `"${candidate[f.field]}" (${f.label}) ถูกเพิ่มไว้ในตะกร้าแล้ว`;
+      return;
+    }
+    if (existingRows.some((r) => String(r[f.field] === undefined || r[f.field] === null ? "" : r[f.field]).trim().toLowerCase() === v)) {
+      msg.className = "form-msg error";
+      msg.textContent = `"${candidate[f.field]}" (${f.label}) มีอยู่ในระบบแล้ว กรุณาตรวจสอบอีกครั้ง`;
+      return;
+    }
+  }
+  items.push(candidate);
+  itemFields.forEach((f, i) => {
+    const el = document.getElementById(`as-item-${i}`);
+    if (i === 0 || f.unique) el.value = ""; // ค่าที่มักซ้ำกันทุกชิ้น (เช่นวันผลิต) คงไว้ให้กรอกชิ้นถัดไปเร็วขึ้น
+  });
+  renderAddStockBasketOnly();
+  document.getElementById("as-item-0").focus();
+}
+
+// ============================================================
 // Phase 7: โมดัลยืนยัน/แจ้งเตือน C2TECH (แทน native confirm()/alert())
 // ใช้ Promise แทน blocking dialog — รองรับ Mobile (bottom sheet) + Desktop (card กลางจอ)
 // ============================================================
@@ -446,6 +739,7 @@ function init() {
       } catch (e) { /* ignore corrupt cache */ }
     }
     if (!state.data.users) state.data.users = [];
+    syncGenericAssetTypes(); // ลงทะเบียนประเภทใหม่จาก cache ทันที (เมนู/หน้ารายการใช้ได้ก่อน listener ตอบกลับ)
 
     showApp();
     if (state.user.mustChangePassword) showForcedPasswordChange();
@@ -639,6 +933,8 @@ function logout() {
   localStorage.removeItem(LS_USER);
   localStorage.removeItem(LS_CACHE);
   // หมายเหตุ: ไม่ลบ LS_QUEUE ตอน logout เผื่อมีคำขอค้างส่งอยู่ (จะส่งต่อเมื่อ login กลับเข้ามาและออนไลน์)
+  clearGenericAssetTypes(); // ถอดประเภทใหม่ออก (ผู้ใช้คนถัดไปอาจเป็น Staff ที่ไม่เห็นประเภททดสอบ)
+  renderGenericAssetNav();
   state = {
     token: null, user: null,
     data: {
@@ -820,6 +1116,9 @@ function renderMobileHome() {
   const stats = computeMobileHomeStats();
   const pending = stats.pending;
   const tiles = MOBILE_HOME_TILES.filter((t) => !t.adminOnly || isAdmin);
+  // ประเภทอุปกรณ์แบบตั้งค่าได้ — แทรกต่อจาก Color Sorter (กลุ่มเครื่อง ก่อนกลุ่มอะไหล่)
+  const csIdx = tiles.findIndex((t) => t.key === COLORSORTER_KEY);
+  tiles.splice(csIdx >= 0 ? csIdx + 1 : tiles.length, 0, ...genericMobileHomeTiles());
 
   wrap.innerHTML = `
     <div class="mh-header">
@@ -858,9 +1157,9 @@ function renderMobileHome() {
       <div class="mh-section-title">เมนูหลัก</div>
       <div class="mh-grid">
         ${tiles.map((t) => `
-          <div class="mh-tile" onclick="switchView('${t.key}'); hideMobileHome();">
+          <div class="mh-tile" onclick="switchView('${escapeAttr(t.key)}'); hideMobileHome();">
             ${t.badge && pending > 0 ? `<span class="mh-tile-badge">${pending}</span>` : ""}
-            <div class="mh-tile-icon ${t.color}"><i class="fas ${t.icon}"></i></div>
+            <div class="mh-tile-icon ${t.color || ""}"${t.colorStyle ? ` style="background:${t.colorStyle};"` : ""}><i class="fas ${t.icon}"></i></div>
             <div class="mh-tile-lbl">${escapeHtml(t.label)}</div>
           </div>`).join("")}
       </div>
@@ -1219,6 +1518,9 @@ function attachFirestoreListeners() {
   // Color Sorter (เครื่อง): มิเรอร์มาจากแท็บ "Sorter_Data" ผ่าน syncColorSorterNow/colorSorterScheduledSync
   // ฝั่ง Cloud Functions — เก็บชื่อคอลัมน์ดิบตามหัวชีตเป๊ะ (เช่น "S/N Sorter", "Client name") เหมือน Panolyzer ทุกประการ
   bind("colorSorter", "colorSorter", translateRaw);
+
+  // ประเภทอุปกรณ์แบบตั้งค่าได้ (ค่าตั้ง + เครื่องทุกประเภทใหม่) — ดู attachAssetTypeListeners
+  attachAssetTypeListeners();
 }
 
 function detachFirestoreListeners() {
@@ -1549,7 +1851,14 @@ function renderCurrentViewInner() {
     titleEl.textContent = "Color Sorter";
     renderColorSorterView();
   } else {
-    const cfg = VIEW_CONFIG[state.currentView];
+    let cfg = VIEW_CONFIG[state.currentView];
+    if (!cfg) {
+      // หน้าที่ไม่มีอยู่แล้ว (เช่นประเภทใหม่ที่ถูกลบ/ซ่อน หรือยังโหลดค่าตั้งไม่เสร็จ) — กลับ Dashboard แทนหน้าพัง
+      state.currentView = "dashboard";
+      titleEl.textContent = "Dashboard";
+      renderDashboard();
+      return;
+    }
     titleEl.textContent = cfg.title.replace(" (มี S/N)", "");
     if (cfg.partCategory) {
       renderPartsListView(state.currentView, cfg);
@@ -4401,7 +4710,8 @@ function buildAssetRowActionButtonsHtml(cfg, row, isAdmin) {
  * "ดูรายละเอียด" (openAssetDetailModal, Part 2) เท่านั้น ต่างจากการ์ดมือถือ (renderRowsAsCards) ตรงที่ "ไม่ข้าม"
  * คอลัมน์ serial/สถานะ ออก เพราะโมดัลนี้ตั้งใจให้เห็นข้อมูลครบทุกฟิลด์จริงๆ ไม่ใช่แค่สรุปย่อ */
 function buildAssetDetailFieldsHtml(cfg, row) {
-  return cfg.columns.map((c) => {
+  // detailColumns: ประเภทใหม่แสดงทุกฟิลด์ใน schema (ตารางแสดงเฉพาะที่ติ๊ก "แสดงในตาราง") — ประเภทเดิมไม่มี ใช้ columns เหมือนเดิม
+  return (cfg.detailColumns || cfg.columns).map((c) => {
     let valHtml;
     if (c.computed) {
       const linked = (c.compute || computeLinkedAccessories)(row);
@@ -5270,9 +5580,11 @@ function mpToReview() {
   const isAdd = !(mpAssetType === "simcard" && mpSimTab === "activate");
   document.getElementById("mp-p3").innerHTML = `
     <div class="form-card">
-      <div class="mp-total"><span>${escapeHtml(mpTypeLabel(mpAssetType))}</span><b>${d.total} ชิ้น</b></div>
+      <div class="mp-total"><span>${escapeHtml(mpTypeLabel(mpAssetType))}</span><b>${d.total} ${escapeHtml(isGenericViewKey(mpAssetType) ? STOCK_NO_UNIT_BY_VIEW[mpAssetType] || "ชิ้น" : "ชิ้น")}</b></div>
       ${kvHtml}${listHtml}
-      ${isAdd && !(!!PART_CATEGORY_BY_VIEW[mpAssetType]) ? `<div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">ทุกชิ้นจะเข้าสถานะ "Stock" ทันที พร้อมให้เลือกเบิกได้เลย</div>` : ""}
+      ${isAdd && !(!!PART_CATEGORY_BY_VIEW[mpAssetType]) ? `<div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">${isGenericViewKey(mpAssetType)
+        ? `ทุกชิ้นจะเข้าสถานะ "Stock" ทันที (ประเภทนี้ยังเบิกผ่านหน้า "เบิกอุปกรณ์" ไม่ได้ — กำลังพัฒนา)`
+        : `ทุกชิ้นจะเข้าสถานะ "Stock" ทันที พร้อมให้เลือกเบิกได้เลย`}</div>` : ""}
       <div id="mp-reviewMsg" class="form-msg"></div>
     </div>`;
   mpGoStep(3);
@@ -5321,6 +5633,8 @@ function renderMpSubArea() {
     renderPartsSubUI(area);
   } else if (mpAssetType === "simcard") {
     renderMpSimTabs(area);
+  } else if (isGenericViewKey(mpAssetType)) {
+    renderAddStockGenericUI(area, mpAssetType);
   } else {
     renderAddStockInlineUI(area, mpAssetType);
   }
@@ -6230,6 +6544,7 @@ function openEditAsset(assetKey, serial) {
   const cfg = VIEW_CONFIG[assetKey];
   const row = (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField]) === String(serial));
   if (!row) return;
+  if (cfg.generic) return openEditAssetGeneric(cfg, row, serial); // ประเภทใหม่ — ฟอร์มตาม schema
   (EXTRA_EDITABLE_FIELDS[assetKey] || []).forEach((k) => { if (!(k in row)) row[k] = ""; });
   // Phase 21 (แก้บัค): เอกสารบางรายการ (เช่น Gateway ที่เพิ่มเข้าสต๊อกตรงๆ ไม่เคยผ่านการเบิกเลย) จะไม่มี field ที่
   // ระบุไว้ใน VIEW_CONFIG.columns ครบทุกตัวเก็บอยู่ใน Firestore จริง (เช่นไม่มี Customer_name/Location/
@@ -6926,7 +7241,7 @@ function confirmSimCsvImport() {
 let stockNoBackfillState = { viewKey: "simcard", plan: [], filter: "all" };
 // ชื่อเรียกแต่ละหมวดในข้อความ
 function stockNoWhatLabel(viewKey) {
-  return { simcard: "ซิม", moisturlyzer: "MoisturLyzer", gateway: "Gateway", colorSorterParts: "อะไหล่ Color Sorter (มี S/N)", panolyzerParts: "อะไหล่ Panolyzer (มี S/N)", moisturlyzerParts: "อะไหล่ MoisturLyzer (มี S/N)" }[viewKey] || viewKey;
+  return { simcard: "ซิม", moisturlyzer: "MoisturLyzer", gateway: "Gateway", colorSorterParts: "อะไหล่ Color Sorter (มี S/N)", panolyzerParts: "อะไหล่ Panolyzer (มี S/N)", moisturlyzerParts: "อะไหล่ MoisturLyzer (มี S/N)" }[viewKey] || (VIEW_CONFIG[viewKey] && VIEW_CONFIG[viewKey].title) || viewKey;
 }
 
 function getRowsMissingStockNo(viewKey) {
@@ -7399,6 +7714,11 @@ function assetErrorMessage(code) {
     case "invalid_model": return "กรุณาเลือกรุ่น (Model) ให้ถูกต้อง";
     case "item_conflict": return "มีรายการที่ซ้ำในตะกร้า กรุณาตรวจสอบ";
     case "invalid_date": return "วันเปิดใช้บริการไม่ถูกต้อง (ต้องเป็น วว/ดด/ปปปป)";
+    // ประเภทอุปกรณ์แบบตั้งค่าได้ (หลังบ้าน Group 7)
+    case "invalid_fields": return "ข้อมูลบางช่องไม่ถูกต้อง";
+    case "asset_type_inactive": return "ประเภทนี้ถูกปิดใช้งานอยู่ — รับเข้าสต๊อกไม่ได้";
+    case "too_many": return "รายการมากเกินไปในครั้งเดียว กรุณาแบ่งบันทึก";
+    case "asset_has_history": return "เครื่องนี้มีประวัติเบิกแล้ว — เปลี่ยน S/N ไม่ได้";
     default: return "ดำเนินการไม่สำเร็จ กรุณาลองใหม่";
   }
 }
