@@ -2317,3 +2317,11 @@ table.rp-mini td, table.rp-mini th, table.rp-attn2 td { padding-top: 1.2mm; padd
   .at-foot .at-save { flex: 1 1 100%; }
   .at-tabs .tc-tab { font-size: 12px; padding: 8px 4px; }
 }
+
+/* หน้าต่าง "จัดการ Gateway" ของ Panolyzer — ดู openAttachGatewayToPanolyzerModal ใน script.js */
+.pg-current { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.pg-cur-label { font-size: 12px; color: var(--gray); }
+.pg-cur-val b { font-size: 15px; color: var(--green-dark); }
+.pg-warn { background: #FFF4E5; color: #8a5300; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pg-hist { font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.pg-hist span:first-child { color: var(--gray); margin-right: 4px; }

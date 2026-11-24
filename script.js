@@ -4500,7 +4500,7 @@ function renderPanolyzerRowsAsTable() {
       ? `<div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="retryPanolyzerSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}`
       : "";
     const attachBtn = isAdmin
-      ? `<button class="btn-sm btn-secondary" onclick="openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">ผูก Gateway เพิ่มทีหลัง</button>`
+      ? `<button class="btn-sm btn-secondary" onclick="openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">จัดการ Gateway</button>`
       : "";
     // Phase 2 (ดูรายละเอียด): เปลี่ยนจากปุ่มแยกมาเป็นกดที่แถวได้เลยทั้งแถว (เหมือนตารางอุปกรณ์อื่น) — เซลล์ที่มี
     // ปุ่ม/ลิงก์ของตัวเอง (Gateway ที่ผูกไว้, ผูก Gateway เพิ่ม, กดลองใหม่) กัน propagation ไว้ไม่ให้ชนกัน
@@ -4541,7 +4541,7 @@ function renderPanolyzerRowsAsCards() {
       ? `<div class="mcard-row"><div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="retryPanolyzerSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}</div>`
       : "";
     const attachBtn = isAdmin
-      ? `<button class="btn-sm btn-secondary" onclick="openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">ผูก Gateway เพิ่มทีหลัง</button>`
+      ? `<button class="btn-sm btn-secondary" onclick="openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">จัดการ Gateway</button>`
       : "";
     const rowsHtml = [
       ["ลูกค้า", row["Client name"]],
@@ -4968,37 +4968,140 @@ async function retryColorSorterSync(serial) {
  * (ทั้ง Lab/Real-time ใช้ปุ่มนี้ได้เหมือนกันหมด — ไม่มีรุ่นไหนมากับ Gateway ติดตั้งสำเร็จรูปเลย ตามที่ผู้ใช้ยืนยัน)
  * มีผลทันที ไม่ต้องผ่านคำขอ/อนุมัติ (ดูเหตุผลที่คอมเมนต์ exports.attachGatewayToPanolyzer ฝั่ง backend) และไม่เรียก
  * Sheet API เลย (ชีตไม่มีฟิลด์ที่มีความหมายสำหรับข้อมูลนี้ ตามที่ผู้ใช้ยืนยันชัดเจน) */
-function openAttachGatewayToPanolyzerModal(panolyzerSerial) {
-  const availableGw = getAvailableGatewaysByModel(GATEWAY_MODEL_PANOLYZER, -1);
-  if (!availableGw.length) {
-    showAlert(`ไม่มี Gateway รุ่น ${GATEWAY_MODEL_PANOLYZER} ว่างในสต๊อกตอนนี้`, "error");
-    return;
-  }
+// ============================================================
+// "จัดการ Gateway ที่ผูก" (แทนปุ่ม "ผูก Gateway เพิ่มทีหลัง" เดิม — ชื่อฟังก์ชันเดิมคงไว้เพราะปุ่มหลายจุดเรียกอยู่)
+// ผูก/เปลี่ยน Gateway ได้จาก 4 กลุ่ม (ว่างในสต๊อก / ติดตั้งที่ลูกค้าเดียวกันแต่ยังไม่ผูก / ผูกกับ Panolyzer เครื่องอื่น /
+// ติดตั้งอยู่ที่อื่น), ยกเลิกการผูก, และแก้สถานะ Gateway ที่ผูกไว้ด้วยปุ่มเดิมก่อนแก้บั๊ก (ช่องสถานะยังเป็น "Stock")
+// Gateway ตัวเดิม: เลือกคืนเข้าสต๊อก หรือคงไว้ที่ลูกค้า — ถ้าเสียให้ใช้ "เคลม" ที่หน้า Gateway แทน
+// หลังบ้าน: managePanolyzerGateway (ล้างการผูกทั้ง 2 ฝั่ง กันรอบ sync ผูกกลับเอง + เก็บประวัติใน gatewayLinkHistory)
+// ============================================================
+const PANO_GW_ERROR_TEXT = {
+  not_found: "ไม่พบเครื่อง Panolyzer นี้ในระบบ", not_linked: "เครื่องนี้ยังไม่ได้ผูก Gateway",
+  already_linked: "Gateway ตัวนี้ผูกกับเครื่องนี้อยู่แล้ว", gateway_not_found: "ไม่พบ Gateway นี้ในระบบ",
+  wrong_gateway_model: `ผูกได้เฉพาะ Gateway รุ่น ${GATEWAY_MODEL_PANOLYZER}`, gateway_unavailable: "Gateway ตัวนี้อยู่ระหว่างเคลมหรือตัดจำหน่ายแล้ว",
+  forbidden: "การดำเนินการนี้สำหรับ Admin เท่านั้น", missing_fields: "กรุณาเลือก Gateway",
+};
+const PANO_GW_HISTORY_TEXT = { link: "ผูก", replace: "เปลี่ยน", unlink: "ยกเลิกการผูก", repair: "แก้สถานะ", moved_away: "ย้ายไปเครื่องอื่น" };
+
+/** แบ่ง Gateway รุ่น EPG-001S เป็นกลุ่มสำหรับเลือกผูกกับ Panolyzer เครื่องนี้ */
+function getPanolyzerGatewayChoices(panoRow) {
   const gwCfg = VIEW_CONFIG.gateway;
-  const fields = [{
-    key: "gatewaySerial",
-    label: "เลือก Gateway (ว่างในสต๊อก)",
-    type: "select",
-    value: String(availableGw[0][gwCfg.serialField]),
-    options: availableGw.map((g) => ({ value: String(g[gwCfg.serialField]), label: String(g[gwCfg.serialField]) })),
-  }];
-  openGenericFormModal(`ผูก Gateway เพิ่มทีหลัง — Panolyzer ${panolyzerSerial}`, fields, async (values) => {
-    const gatewaySerial = values[0];
-    const msg = document.getElementById("genericFormModalMsg");
+  const panoSerial = String(panoRow[PANOLYZER_SERIAL_FIELD] || "");
+  const client = String(panoRow["Client name"] || "").trim().toLowerCase();
+  const linkedTo = {}; // S/N Gateway → S/N Panolyzer ที่ผูกอยู่
+  (state.data.panolyzer || []).forEach((p) => { const g = String(p.linkedGatewaySerial || "").trim(); if (g) linkedTo[g] = String(p[PANOLYZER_SERIAL_FIELD] || ""); });
+  const groups = { stock: [], sameCustomer: [], otherPano: [], elsewhere: [] };
+  (state.data.gateway || []).forEach((row) => {
+    if (normalizeGatewayModel(row[GATEWAY_MODEL_FIELD]) !== GATEWAY_MODEL_PANOLYZER) return;
+    if (isClaimedRow(row, gwCfg) || isWrittenOffRow(row, gwCfg)) return;
+    const serial = String(row[gwCfg.serialField] || "");
+    if (!serial) return;
+    const linkedPano = linkedTo[serial];
+    if (linkedPano === panoSerial) return; // ตัวที่ผูกกับเครื่องนี้อยู่แล้ว
+    const item = { serial, row, linkedPano, customer: String(row.Customer_name || "").trim(), sim: String(row[GATEWAY_SIMCARD_FIELD] || "").trim() };
+    if (linkedPano) groups.otherPano.push(item);
+    else if (isPhysicalStockRow(row, gwCfg.stockField)) groups.stock.push(item);
+    else if (client && item.customer.toLowerCase() === client) groups.sameCustomer.push(item);
+    else groups.elsewhere.push(item);
+  });
+  Object.values(groups).forEach((arr) => arr.sort((a, b) => a.serial.localeCompare(b.serial)));
+  return groups;
+}
+
+function openAttachGatewayToPanolyzerModal(panolyzerSerial) {
+  if (!state.user || state.user.role !== "Admin") return;
+  const pano = (state.data.panolyzer || []).find((p) => String(p[PANOLYZER_SERIAL_FIELD] || "") === String(panolyzerSerial));
+  if (!pano) return showAlert("ไม่พบเครื่อง Panolyzer นี้ในระบบ (อาจยังไม่ได้ซิงค์)", "error");
+  const gwCfg = VIEW_CONFIG.gateway;
+  const curSerial = String(pano.linkedGatewaySerial || "").trim();
+  const curRow = curSerial ? (state.data.gateway || []).find((g) => String(g[gwCfg.serialField]) === curSerial) : null;
+  // ผูกด้วยปุ่มเดิมก่อนแก้บั๊ก: ช่องสถานะยังเป็น "Stock" หรือ S/N Device ไม่ตรงเครื่องนี้ → เสนอปุ่มแก้สถานะ
+  const needsRepair = !!(curRow && (isPhysicalStockRow(curRow, gwCfg.stockField) || String(curRow[gwCfg.deviceSerialField] || "").trim() !== String(panolyzerSerial)));
+  const groups = getPanolyzerGatewayChoices(pano);
+  const opt = (it, extra) => `<option value="${escapeAttr(it.serial)}">${escapeHtml(it.serial)}${extra ? " — " + escapeHtml(extra) : ""}${it.sim ? ` · ซิม ${escapeHtml(it.sim)}` : ""}</option>`;
+  const groupHtml = (label, arr, extraFn) => arr.length ? `<optgroup label="${escapeAttr(label)} (${arr.length})">${arr.map((it) => opt(it, extraFn(it))).join("")}</optgroup>` : "";
+  const choicesHtml = groupHtml("ว่างในสต๊อก", groups.stock, () => "")
+    + groupHtml("ติดตั้งที่ลูกค้าเดียวกัน (ยังไม่ผูก)", groups.sameCustomer, (it) => it.customer)
+    + groupHtml("ผูกกับ Panolyzer เครื่องอื่นอยู่ (จะย้ายมาเครื่องนี้)", groups.otherPano, (it) => `เครื่อง ${it.linkedPano}`)
+    + groupHtml("ติดตั้งอยู่ที่อื่น (ยังไม่ผูก)", groups.elsewhere, (it) => it.customer || "-");
+  const totalChoices = groups.stock.length + groups.sameCustomer.length + groups.otherPano.length + groups.elsewhere.length;
+  const history = (Array.isArray(pano.gatewayLinkHistory) ? pano.gatewayLinkHistory : []).slice(-5).reverse();
+
+  const modalBox = document.querySelector("#genericFormModal .image-modal");
+  if (modalBox) { modalBox.classList.remove("gfm-wide", "lts-modal"); modalBox.classList.add("am-modal"); }
+  document.getElementById("genericFormModalTitle").textContent = `จัดการ Gateway — Panolyzer ${panolyzerSerial}`;
+  document.getElementById("genericFormModalBody").innerHTML = `
+    <div class="am-form">
+      <div class="am-hint">${escapeHtml(pano["Client name"] || "ยังไม่มีลูกค้า")}${pano.Location ? " · " + escapeHtml(pano.Location) : ""}${pano.Type ? " · " + escapeHtml(pano.Type) : ""} · สถานะ ${escapeHtml(pano.Status || "-")}</div>
+      <div class="pg-current">
+        <div class="pg-cur-label">Gateway ที่ผูกอยู่</div>
+        ${curSerial
+          ? `<div class="pg-cur-val"><b>${escapeHtml(curSerial)}</b>${curRow && curRow[GATEWAY_SIMCARD_FIELD] ? ` <span class="cache-note">· ซิม ${escapeHtml(curRow[GATEWAY_SIMCARD_FIELD])}</span>` : ""}${curRow ? "" : ` <span class="cache-note">(ไม่พบ Gateway นี้ในระบบแล้ว)</span>`}</div>
+             ${needsRepair ? `<div class="pg-warn">⚠ สถานะของ Gateway ตัวนี้ยังไม่ตรงกับการผูก (ยังนับเป็น "Stock" — อาจถูกเลือกเบิก/ผูกซ้ำได้)<button type="button" class="btn-sm btn-primary" id="pg-repairBtn">แก้สถานะให้ตรง</button></div>` : ""}
+             <button type="button" class="btn-sm btn-remove" id="pg-unlinkBtn">ยกเลิกการผูก</button>`
+          : `<div class="pg-cur-val cache-note">ยังไม่ได้ผูก Gateway</div>`}
+      </div>
+      <div class="am-f"><label for="pg-new">${curSerial ? "เปลี่ยนเป็น Gateway" : "ผูก Gateway"} (รุ่น ${GATEWAY_MODEL_PANOLYZER})</label>
+        ${totalChoices ? `<select id="pg-new"><option value="">— เลือก Gateway —</option>${choicesHtml}</select>` : `<div class="cache-note">ไม่มี Gateway รุ่น ${GATEWAY_MODEL_PANOLYZER} ให้เลือก</div>`}
+      </div>
+      ${curSerial ? `<div class="am-f"><label>Gateway ตัวเดิม (${escapeHtml(curSerial)}) เมื่อเปลี่ยนหรือยกเลิกการผูก</label>
+        <div class="am-seg pg-old-seg">
+          <label class="on"><input type="radio" name="pg-old" value="stock" checked>คืนเข้าสต๊อก</label>
+          <label><input type="radio" name="pg-old" value="keep">คงไว้ที่ลูกค้า (ไม่ผูก)</label>
+        </div>
+        <div class="cache-note" style="margin-top:6px;">ซิมที่เสียบอยู่ย้ายตาม Gateway เสมอ · ถ้า Gateway ตัวเดิมเสีย ให้กด "เคลม" ที่หน้า Gateway แทน (ระบบยกเลิกการผูกให้เอง) แล้วค่อยกลับมาผูกตัวใหม่</div></div>` : ""}
+      ${history.length ? `<div class="am-f"><label>ประวัติการเปลี่ยนล่าสุด</label><div class="pg-hist">${history.map((h) => `<div><span>${escapeHtml(formatDateTh(h.at))}</span> ${escapeHtml(PANO_GW_HISTORY_TEXT[h.action] || h.action)} ${h.from && h.from !== h.to ? escapeHtml(h.from) + " → " : ""}${escapeHtml(h.to || (h.action === "moved_away" ? `เครื่อง ${h.toPanolyzer || ""}` : "-"))} <span class="cache-note">โดย ${escapeHtml(h.by || "-")}</span></div>`).join("")}</div></div>` : ""}
+    </div>`;
+  const msgEl = document.getElementById("genericFormModalMsg");
+  msgEl.className = "form-msg"; msgEl.textContent = "";
+  const showErr = (t) => { msgEl.className = "form-msg error"; msgEl.textContent = t; };
+  document.querySelectorAll(".pg-old-seg input").forEach((r) => r.addEventListener("change", () => {
+    document.querySelectorAll(".pg-old-seg label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+  }));
+  const oldAction = () => { const el = document.querySelector('input[name="pg-old"]:checked'); return el ? el.value : "stock"; };
+
+  const run = async (payload, btn, busyText) => {
+    const original = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = busyText; }
     try {
-      const res = await apiPost({ action: "attachGatewayToPanolyzer", token: state.token, panolyzerSerial, gatewaySerial });
+      const res = await apiPost(Object.assign({ action: "managePanolyzerGateway", token: state.token, panolyzerSerial }, payload));
       if (!res.ok) {
         if (res.error === "unauthorized") return handleUnauthorized();
-        throw new Error(res.error || "internal_error");
+        return showErr(PANO_GW_ERROR_TEXT[res.error] || ("บันทึกไม่สำเร็จ: " + (res.error || "unknown_error")));
       }
-      await refreshInBackground(true);
       closeGenericFormModal();
+      await refreshInBackground(true);
       renderCurrentView();
+      if (res.sheetError) await showAlert(`บันทึกในระบบแล้ว แต่อัปเดตช่อง "S/N Gateway" ใน Google Sheet ไม่สำเร็จ (${res.sheetError}) — แก้ในชีตเองได้`, "warning");
     } catch (err) {
-      msg.className = "form-msg error";
-      msg.textContent = err.message;
+      showErr("เกิดข้อผิดพลาด: " + err.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = original; }
     }
+  };
+  const repairBtn = document.getElementById("pg-repairBtn");
+  if (repairBtn) repairBtn.addEventListener("click", () => run({ mode: "repair" }, repairBtn, "กำลังแก้..."));
+  const unlinkBtn = document.getElementById("pg-unlinkBtn");
+  if (unlinkBtn) unlinkBtn.addEventListener("click", async () => {
+    const act = oldAction();
+    const ok = await showConfirm(`ยกเลิกการผูก Gateway ${curSerial} กับ Panolyzer ${panolyzerSerial}? — Gateway ตัวเดิมจะ${act === "stock" ? "คืนเข้าสต๊อก (ซิมที่เสียบอยู่คืนด้วย)" : "คงไว้ที่ลูกค้า แค่ไม่ผูกกับเครื่องนี้"}`, { type: "warning", okText: "ยกเลิกการผูก", danger: true });
+    if (ok) run({ mode: "unlink", oldGatewayAction: act }, unlinkBtn, "กำลังยกเลิก...");
   });
+
+  const saveBtn = document.getElementById("genericFormSaveBtn");
+  saveBtn.textContent = curSerial ? "เปลี่ยน Gateway" : "ผูก Gateway";
+  saveBtn.onclick = async () => {
+    const sel = document.getElementById("pg-new");
+    const gatewaySerial = sel ? sel.value : "";
+    if (!gatewaySerial) return showErr("กรุณาเลือก Gateway");
+    const moving = groups.otherPano.find((it) => it.serial === gatewaySerial);
+    if (moving) {
+      const ok = await showConfirm(`Gateway ${gatewaySerial} ผูกกับ Panolyzer ${moving.linkedPano} อยู่ — ย้ายมาผูกกับเครื่องนี้? (เครื่อง ${moving.linkedPano} จะไม่มี Gateway ผูก)`, { type: "warning", okText: "ย้ายมาเครื่องนี้" });
+      if (!ok) return;
+    }
+    run({ mode: "link", gatewaySerial, oldGatewayAction: curSerial ? oldAction() : undefined }, saveBtn, "กำลังบันทึก...");
+  };
+  document.getElementById("genericFormModal").style.display = "flex";
 }
 
 /** แบนเนอร์ "มี … ยังไม่มีลำดับ" + ปุ่มเติมลำดับย้อนหลัง (Admin เท่านั้น, ขึ้นเฉพาะตอนที่ยังมีรายการไม่มีลำดับ) */
@@ -5772,7 +5875,7 @@ function openPanolyzerDetailModal(serial) {
     ? `<div class="mcard-row"><div class="badge-sync-failed">การอัปเดตไปยัง Sheet ไม่สำเร็จ${row.lastSheetSyncError ? " — " + escapeHtml(String(row.lastSheetSyncError)) : ""}</div>${isAdmin ? `<button class="btn-sm btn-secondary sync-retry-btn" onclick="closeAssetDetailModal(); retryPanolyzerSync('${escapeAttr(serial)}')">กดลองใหม่</button>` : ""}</div>`
     : "";
   const attachBtn = isAdmin
-    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">ผูก Gateway เพิ่มทีหลัง</button>`
+    ? `<button class="btn-sm btn-secondary" onclick="closeAssetDetailModal(); openAttachGatewayToPanolyzerModal('${escapeAttr(serial)}')">จัดการ Gateway</button>`
     : "";
 
   document.getElementById("assetDetailModalBody").innerHTML = `
