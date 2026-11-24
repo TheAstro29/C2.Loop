@@ -371,8 +371,83 @@ function buildGenericViewConfig(def) {
   };
 }
 
+// ===== Phase 5: หมวดอะไหล่ที่สร้างเอง (kind "partCategory") — ลงทะเบียนเหมือนหมวดเดิม 3 หมวด (VIEW_CONFIG key "pc_<id>"
+// + PART_* maps) ให้หน้ารายการอะไหล่/ตัวช่วยเพิ่มอะไหล่/หน้าเบิก/Dashboard/ประวัติอะไหล่เดิมใช้ได้ทันที
+// asset type: "<id>Part" (มี S/N) / "<id>PartQty" (นับจำนวน) — ต้องตรงกับ preloadGenericAssetCfgs ฝั่ง Cloud Functions
+const GENERIC_PART_PREFIX = "pc_";
+let genericPartKeys = [];
+function genericPartViewKey(id) { return GENERIC_PART_PREFIX + id; }
+/** ชิ้นอะไหล่ S/N ของหมวดใหม่ (เอกสารดิบจาก collectionGroup) → รูปแบบเดียวกับ translatePartUnit ของหมวดเดิม */
+function translateGenericPartUnit(d) {
+  return {
+    PartID: d.partId || "", PartName: d.partName || "", SerialNo: d.SerialNo || "",
+    Customer_name: d.customerName || "", Location: d.location || "",
+    StockNo: d.stockNo === undefined || d.stockNo === null ? "" : d.stockNo,
+  };
+}
+function clearGenericPartCategories() {
+  genericPartKeys.forEach((key) => {
+    const cfg = VIEW_CONFIG[key];
+    if (cfg) {
+      delete PART_CATEGORY_LABEL[cfg.partCategory];
+      delete PART_VIEW_BY_CATEGORY[cfg.partCategory];
+      delete PART_QTY_DEVICE_LABEL[PART_QTY_ASSET_TYPE_BY_VIEW[key]];
+    }
+    delete VIEW_CONFIG[key];
+    delete PART_QTY_ASSET_TYPE_BY_VIEW[key];
+    delete PART_CATEGORY_BY_VIEW[key];
+    delete STOCK_NO_FIELD_BY_VIEW[key];
+    delete STOCK_NO_UNIT_BY_VIEW[key];
+    delete MP_TYPE_ICONS[key];
+    delete DASHBOARD_CATEGORY_META[key];
+    delete state.data[key];
+  });
+  for (let i = MANAGE_STOCK_ASSET_TYPES.length - 1; i >= 0; i--) {
+    if (MANAGE_STOCK_ASSET_TYPES[i].genericPart) MANAGE_STOCK_ASSET_TYPES.splice(i, 1);
+  }
+  genericPartKeys = [];
+}
+function registerGenericPartCategories(defs, byType) {
+  defs.forEach((def) => {
+    const id = def.typeId;
+    const key = genericPartViewKey(id);
+    const label = (def.label || id) + (def.testOnly ? " (ทดสอบ)" : "");
+    const icon = genericTypeIcon(def), color = genericTypeColor(id);
+    VIEW_CONFIG[key] = {
+      title: `${label} (มี S/N)`, navLabel: label + (def.active === false ? " (ปิดใช้งาน)" : ""), key, assetType: `${id}Part`,
+      serialField: "SerialNo", connectField: null, partCategory: id, stockField: "Location",
+      columns: [
+        { field: "StockNo", label: "ลำดับ" }, { field: "PartName", label: "ชื่ออะไหล่" }, { field: "SerialNo", label: "S/N" },
+        { field: "Customer_name", label: "ลูกค้า" }, { field: "Location", label: "สถานะ/ตำแหน่ง" },
+      ],
+      genericPart: true, typeDef: def, icon, color,
+    };
+    PART_QTY_ASSET_TYPE_BY_VIEW[key] = `${id}PartQty`;
+    PART_CATEGORY_BY_VIEW[key] = id;
+    PART_VIEW_BY_CATEGORY[id] = key;
+    // ป้ายเหล่านี้ถูกต่อหลังคำว่า "อะไหล่ ..." อยู่แล้ว (เช่น "(อะไหล่ Color Sorter)") — ตัดคำว่า "อะไหล่" นำหน้าชื่อหมวดออก
+    // กันขึ้นซ้ำเป็น "(อะไหล่ อะไหล่ Gateway)" (เจอตอนทดสอบ)
+    const shortLabel = label.replace(/^อะไหล่\s*/, "") || label;
+    PART_CATEGORY_LABEL[id] = shortLabel;
+    PART_QTY_DEVICE_LABEL[`${id}PartQty`] = shortLabel;
+    STOCK_NO_FIELD_BY_VIEW[key] = "StockNo";
+    STOCK_NO_UNIT_BY_VIEW[key] = "ชิ้น";
+    MP_TYPE_ICONS[key] = icon;
+    DASHBOARD_CATEGORY_META[key] = { icon, color };
+    if (def.active !== false) MANAGE_STOCK_ASSET_TYPES.push({ value: key, label, genericPart: true });
+    state.data[key] = (byType[id] || []).map(translateGenericPartUnit);
+    genericPartKeys.push(key);
+  });
+}
+/** ตัวเลือกหมวดอะไหล่ใหม่ในขั้นที่ 2 ของหน้าเบิก (เฉพาะที่เปิดใช้งาน) */
+function genericPartIssueOptionsHtml() {
+  return genericPartKeys.map((k) => VIEW_CONFIG[k]).filter((c) => c && c.typeDef.active !== false)
+    .map((c) => `<option value="${escapeAttr(c.key)}">${escapeHtml(c.navLabel)}</option>`).join("");
+}
+
 /** ถอดประเภทใหม่ที่เคยลงทะเบียนออกจากตารางกลางทั้งหมด (ก่อนลงทะเบียนรอบใหม่ / ตอน logout) */
 function clearGenericAssetTypes() {
+  clearGenericPartCategories();
   genericRegisteredKeys.forEach((key) => {
     delete VIEW_CONFIG[key];
     delete STOCK_NO_FIELD_BY_VIEW[key];
@@ -400,6 +475,9 @@ function syncGenericAssetTypes() {
     .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.label).localeCompare(String(b.label), "th"));
   const byType = {};
   (state.data.assetItemsRaw || []).forEach((r) => { if (r && r.typeId) (byType[r.typeId] = byType[r.typeId] || []).push(r); });
+  registerGenericPartCategories((state.data.assetTypesRaw || [])
+    .filter((d) => d && d.kind === "partCategory" && d.typeId && (!d.testOnly || isAdmin))
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.label).localeCompare(String(b.label), "th")), byType);
   defs.forEach((def) => {
     const cfg = buildGenericViewConfig(def);
     VIEW_CONFIG[cfg.key] = cfg;
@@ -416,8 +494,9 @@ function syncGenericAssetTypes() {
     genericRegisteredKeys.push(cfg.key);
   });
   renderGenericAssetNav();
-  // ประเภทที่กำลังเปิดดูอยู่ถูกลบ/ซ่อนไปแล้ว — กลับหน้า Dashboard แทนหน้าว่าง
-  if (state.user && String(state.currentView).startsWith(GENERIC_VIEW_PREFIX) && !VIEW_CONFIG[state.currentView]) {
+  // ประเภท/หมวดที่กำลังเปิดดูอยู่ถูกลบ/ซ่อนไปแล้ว — กลับหน้า Dashboard แทนหน้าว่าง
+  const cv = String(state.currentView);
+  if (state.user && (cv.startsWith(GENERIC_VIEW_PREFIX) || cv.startsWith(GENERIC_PART_PREFIX)) && !VIEW_CONFIG[state.currentView]) {
     state.currentView = "dashboard";
     document.querySelectorAll(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.view === "dashboard"));
   }
@@ -425,14 +504,17 @@ function syncGenericAssetTypes() {
 
 /** เมนูซ้าย (PC) — ใส่ประเภทใหม่ต่อจาก Color Sorter ใน <div id="genericAssetNav"> */
 function renderGenericAssetNav() {
-  const wrap = document.getElementById("genericAssetNav");
-  if (!wrap) return;
-  wrap.innerHTML = genericRegisteredKeys.map((key) => {
+  const navHtml = (keys) => keys.map((key) => {
     const cfg = VIEW_CONFIG[key];
     return `<div class="nav-item${state.currentView === key ? " active" : ""}" data-view="${escapeAttr(key)}" onclick="switchView('${escapeAttr(key)}')">
-        <span class="nav-icon-chip" style="background:${cfg.color};"><i class="fas ${cfg.icon}"></i></span> <span>${escapeHtml(cfg.navLabel)}</span>
+        <span class="nav-icon-chip" style="background:${cfg.color};"><i class="fas ${cfg.genericPart ? "fa-cogs" : cfg.icon}"></i></span> <span>${escapeHtml(cfg.navLabel)}</span>
       </div>`;
   }).join("");
+  const wrap = document.getElementById("genericAssetNav");
+  if (wrap) wrap.innerHTML = navHtml(genericRegisteredKeys);
+  // หมวดอะไหล่ใหม่ — ต่อจาก "อะไหล่ MoisturLyzer" (ไอคอนเฟืองเหมือนหมวดอะไหล่เดิม สีต่างกันตามหมวด)
+  const partWrap = document.getElementById("genericPartNav");
+  if (partWrap) partWrap.innerHTML = navHtml(genericPartKeys);
 }
 
 /** Phase 3: ขั้นตอนนี้เปิดอยู่สำหรับประเภทนี้หรือไม่ (ประเภทเดิม = เปิดเสมอ) — flow: issue | loan | sale | transfer | claim
@@ -662,24 +744,34 @@ const AT_LEGACY_TYPES = [
   { label: "Color Sorter", icon: "fa-sliders", color: "#475569" },
 ];
 // selected: typeId ที่เปิดอยู่ หรือ "__new" · draft: ค่าที่กำลังแก้ · loadedAt: updatedAt ของค่าตั้งตอนโหลดเข้า draft
-let atState = { selected: null, draft: null, dirty: false, tab: "general", mobileEditing: false, loadedAt: "", busy: false };
+// flash: ข้อความผลการบันทึก { text, ok } — เก็บไว้ใน state เพราะหน้าจะถูกวาดใหม่ทันทีที่ Firestore ส่งค่าตั้งล่าสุดมา
+// (ถ้าเขียนลง DOM ตรงๆ ข้อความจะหายไปในเสี้ยววินาที — เจอตอนทดสอบจริง 24 พ.ย. 69) ล้างเมื่อเปลี่ยนประเภท/แท็บ/เริ่มแก้ใหม่
+let atState = { selected: null, draft: null, dirty: false, tab: "general", mobileEditing: false, loadedAt: "", busy: false, flash: null };
 
-function atDefs() {
-  return (state.data.assetTypesRaw || []).filter((d) => d && d.kind === "device" && d.typeId)
+function atDefsOfKind(kind) {
+  return (state.data.assetTypesRaw || []).filter((d) => d && d.kind === kind && d.typeId)
     .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.label).localeCompare(String(b.label), "th"));
 }
-function atDefById(typeId) { return atDefs().find((d) => d.typeId === typeId) || null; }
+function atDefs() { return atDefsOfKind("device"); }
+function atDefById(typeId) { return (state.data.assetTypesRaw || []).find((d) => d && d.typeId === typeId && (d.kind === "device" || d.kind === "partCategory")) || null; }
 function atItemCount(typeId) { return (state.data.assetItemsRaw || []).filter((r) => r && r.typeId === typeId).length; }
+/** Phase 5: จำนวนรายชื่ออะไหล่ในหมวด (ลบหมวดได้เมื่อเป็น 0) */
+function atPartNameCount(typeId) { return (state.data.partsCatalog || []).filter((p) => p.Category === typeId).length; }
+const AT_LEGACY_PART_CATS = [
+  { label: "อะไหล่ Color Sorter", color: "#e08e0b" }, { label: "อะไหล่ Panolyzer", color: "#EC6BAA" }, { label: "อะไหล่ MoisturLyzer", color: "#0F8B6E" },
+];
 function atClone(o) { return JSON.parse(JSON.stringify(o)); }
 function atNewFieldKey(existing) {
   let key;
   do { key = "f" + Math.random().toString(36).slice(2, 8); } while (existing.some((f) => f.key.toLowerCase() === key));
   return key;
 }
-function atEmptyDraft() {
+function atEmptyDraft(kind) {
+  const isPart = kind === "partCategory";
   return {
-    __new: true, typeId: "t" + Date.now().toString(36), label: "", icon: "fa-box", unit: "เครื่อง", serialLabel: "S/N",
-    order: (atDefs().reduce((m, d) => Math.max(m, Number(d.order) || 0), 0) || 0) + 10, testOnly: false, active: true,
+    __new: true, kind: isPart ? "partCategory" : "device", typeId: (isPart ? "p" : "t") + Date.now().toString(36), label: isPart ? "อะไหล่ " : "",
+    icon: isPart ? "fa-screwdriver-wrench" : "fa-box", unit: isPart ? "ชิ้น" : "เครื่อง", serialLabel: "S/N",
+    order: (atDefsOfKind(isPart ? "partCategory" : "device").reduce((m, d) => Math.max(m, Number(d.order) || 0), 0) || 0) + 10, testOnly: false, active: true,
     fields: [], flows: { issue: true, loan: true, sale: true, transfer: true, claim: true },
   };
 }
@@ -692,7 +784,7 @@ function atDraftFromDef(def) {
 
 /** โหลด draft ให้ตรงกับประเภทที่เลือก — ถ้ายังไม่ได้แก้อะไร (ไม่ dirty) และค่าตั้งบนเซิร์ฟเวอร์เปลี่ยน ให้โหลดใหม่ตาม */
 function atSyncDraft() {
-  if (!atState.selected || atState.selected === "__new") return;
+  if (!atState.selected || atState.selected === "__new" || atState.selected === "__newpart") return;
   const def = atDefById(atState.selected);
   if (!def) { if (!atState.dirty) { atState.selected = null; atState.draft = null; atState.mobileEditing = false; } return; }
   if (!atState.draft || (!atState.dirty && (def.updatedAt || "") !== atState.loadedAt)) {
@@ -708,19 +800,20 @@ async function atConfirmDiscard() {
 async function atSelect(typeId) {
   if (typeId === atState.selected && atState.draft) { atState.mobileEditing = true; return renderAssetTypesView(); }
   if (!(await atConfirmDiscard())) return;
-  atState = Object.assign(atState, { selected: typeId, dirty: false, tab: "general", mobileEditing: true, loadedAt: "" });
-  atState.draft = typeId === "__new" ? atEmptyDraft() : null;
+  atState = Object.assign(atState, { selected: typeId, dirty: false, tab: "general", mobileEditing: true, loadedAt: "", flash: null });
+  atState.draft = typeId === "__new" ? atEmptyDraft("device") : typeId === "__newpart" ? atEmptyDraft("partCategory") : null;
   renderAssetTypesView();
 }
 async function atBackToList() {
   if (!(await atConfirmDiscard())) return;
   atState = Object.assign(atState, { mobileEditing: false, dirty: false, draft: null, selected: isMobileViewport() ? null : atState.selected });
-  if (atState.selected === "__new") atState.selected = null;
+  if (atState.selected === "__new" || atState.selected === "__newpart") atState.selected = null;
   renderAssetTypesView();
 }
-function atSetTab(tab) { atState.tab = tab; renderAssetTypesView(); }
+function atSetTab(tab) { atState.tab = tab; atState.flash = null; renderAssetTypesView(); }
 function atMarkDirty() {
   atState.dirty = true;
+  if (atState.flash) { atState.flash = null; const m = document.getElementById("at-msg"); if (m) { m.className = "form-msg"; m.textContent = ""; } }
   const el = document.getElementById("at-dirtyNote");
   if (el) el.style.display = "";
 }
@@ -734,7 +827,7 @@ function renderAssetTypesView() {
   atSyncDraft();
   const mobile = isMobileViewport();
   if (!mobile && !atState.selected) {
-    const first = atDefs()[0];
+    const first = atDefs()[0] || atDefsOfKind("partCategory")[0];
     if (first) { atState.selected = first.typeId; atSyncDraft(); }
   }
   const showEditor = mobile ? atState.mobileEditing && atState.draft : !!atState.draft;
@@ -762,20 +855,44 @@ function atListHtml() {
       </button>`;
   }).join("");
   const legacy = AT_LEGACY_TYPES.map((t) => `<div class="at-item locked">${atChipHtml(t.icon, t.color)}<span class="at-item-txt"><b>${escapeHtml(t.label)}</b><small>ประเภทเดิมของระบบ</small></span><i class="fas fa-lock at-chev"></i></div>`).join("");
+  const newRow = (sel, fallback) => atState.selected === sel ? `<div class="at-item on">${atChipHtml(atState.draft ? atState.draft.icon : "fa-box", "#3F654D")}<span class="at-item-txt"><b>${escapeHtml((atState.draft && atState.draft.label.trim()) || fallback)}</b><small>ยังไม่ได้บันทึก</small></span></div>` : "";
+  // Phase 5: หมวดอะไหล่ที่สร้างเอง
+  const partItems = atDefsOfKind("partCategory").map((d) => {
+    const n = atPartNameCount(d.typeId);
+    const off = d.active === false;
+    const tags = `${d.testOnly ? `<span class="at-tag test">ทดสอบ</span>` : ""}${off ? `<span class="at-tag off">ปิดใช้</span>` : ""}`;
+    return `<button type="button" class="at-item${atState.selected === d.typeId ? " on" : ""}" onclick="atSelect('${escapeAttr(d.typeId)}')">
+        ${atChipHtml(genericTypeIcon(d), genericTypeColor(d.typeId), off)}
+        <span class="at-item-txt"><b>${escapeHtml(d.label || d.typeId)}</b><small>${n} รายชื่ออะไหล่</small></span>
+        ${tags}<i class="fas fa-chevron-right at-chev"></i>
+      </button>`;
+  }).join("");
+  const legacyParts = AT_LEGACY_PART_CATS.map((t) => `<div class="at-item locked">${atChipHtml("fa-cogs", t.color)}<span class="at-item-txt"><b>${escapeHtml(t.label)}</b><small>หมวดเดิมของระบบ</small></span><i class="fas fa-lock at-chev"></i></div>`).join("");
   return `
     <div class="at-list-head"><b>ประเภทอุปกรณ์</b><button type="button" class="btn-sm btn-primary" onclick="atSelect('__new')"><i class="fas fa-plus"></i> เพิ่มประเภทใหม่</button></div>
     <div class="at-sec">ประเภทใหม่ (ตั้งค่าได้)</div>
     ${items || `<div class="cache-note at-empty">ยังไม่มีประเภทใหม่ — กด "+ เพิ่มประเภทใหม่" เพื่อเริ่ม</div>`}
-    ${atState.selected === "__new" ? `<div class="at-item on">${atChipHtml(atState.draft ? atState.draft.icon : "fa-box", "#3F654D")}<span class="at-item-txt"><b>${escapeHtml((atState.draft && atState.draft.label) || "ประเภทใหม่")}</b><small>ยังไม่ได้บันทึก</small></span></div>` : ""}
+    ${newRow("__new", "ประเภทใหม่")}
     <div class="at-sec">ประเภทเดิม (แก้จากหน้านี้ไม่ได้)</div>
-    ${legacy}`;
+    ${legacy}
+    <div class="at-list-head" style="margin-top:18px;"><b>หมวดอะไหล่</b><button type="button" class="btn-sm btn-secondary" onclick="atSelect('__newpart')"><i class="fas fa-plus"></i> เพิ่มหมวดอะไหล่</button></div>
+    <div class="at-sec">หมวดใหม่ (ตั้งค่าได้)</div>
+    ${partItems || `<div class="cache-note at-empty">ยังไม่มีหมวดอะไหล่ใหม่</div>`}
+    ${newRow("__newpart", "หมวดอะไหล่ใหม่")}
+    <div class="at-sec">หมวดเดิม (แก้จากหน้านี้ไม่ได้)</div>
+    ${legacyParts}`;
 }
 
 function atEditorHtml() {
   const d = atState.draft;
   const isNew = !!d.__new;
-  const n = isNew ? 0 : atItemCount(d.typeId);
-  const tabs = [["general", "ข้อมูลทั่วไป"], ["fields", `ฟิลด์ (${d.fields.filter((f) => !f.hidden).length})`], ["flows", "ขั้นตอนที่ใช้"], ["preview", "ตัวอย่าง"]];
+  const isPart = d.kind === "partCategory";
+  // หมวดอะไหล่: นับเป็นจำนวนรายชื่ออะไหล่ (ลบหมวดได้เมื่อไม่มีรายชื่ออะไหล่และไม่มีชิ้น S/N เหลือ)
+  const n = isNew ? 0 : isPart ? atPartNameCount(d.typeId) : atItemCount(d.typeId);
+  const countText = isPart ? `${n} รายชื่ออะไหล่` : `${n} ${escapeHtml(d.unit || "ชิ้น")}ในระบบ`;
+  const tabs = isPart ? [["general", "ข้อมูลทั่วไป"]]
+    : [["general", "ข้อมูลทั่วไป"], ["fields", `ฟิลด์ (${d.fields.filter((f) => !f.hidden).length})`], ["flows", "ขั้นตอนที่ใช้"], ["preview", "ตัวอย่าง"]];
+  if (isPart) atState.tab = "general";
   let body = "";
   if (atState.tab === "general") body = atGeneralTabHtml(d, isNew);
   else if (atState.tab === "fields") body = atFieldsTabHtml(d, n);
@@ -787,21 +904,33 @@ function atEditorHtml() {
       ${isMobileViewport() ? `<button type="button" class="btn-sm btn-secondary" onclick="atBackToList()"><i class="fas fa-arrow-left"></i></button>` : ""}
       ${atChipHtml(genericTypeIcon(d), isNew ? "#3F654D" : genericTypeColor(d.typeId), off)}
       <div class="at-ed-title"><b>${escapeHtml(d.label || (isNew ? "ประเภทใหม่" : d.typeId))}</b>
-        <small>${isNew ? "ยังไม่ได้บันทึก" : `${n} ${escapeHtml(d.unit || "ชิ้น")}ในระบบ${off ? " · ปิดใช้งานอยู่" : ""}`}${d.testOnly ? " · ประเภททดสอบ (เห็นเฉพาะ Admin)" : ""}</small></div>
+        <small>${isNew ? "ยังไม่ได้บันทึก" : `${countText}${off ? " · ปิดใช้งานอยู่" : ""}`}${d.testOnly ? " · ทดสอบ (เห็นเฉพาะ Admin)" : ""}</small></div>
     </div>
     <div class="tc-tabs at-tabs">${tabs.map(([k, l]) => `<div class="tc-tab ${atState.tab === k ? "active" : ""}" onclick="atSetTab('${k}')">${escapeHtml(l)}</div>`).join("")}</div>
     <div class="at-body">${body}</div>
-    <div id="at-msg" class="form-msg"></div>
+    <div id="at-msg" class="form-msg${atState.flash ? (atState.flash.ok ? " success" : " error") : ""}">${atState.flash ? escapeHtml(atState.flash.text) : ""}</div>
     <div class="at-foot">
       <span id="at-dirtyNote" class="cache-note" style="${atState.dirty ? "" : "display:none;"}">มีการแก้ไขที่ยังไม่ได้บันทึก</span>
       ${isNew ? "" : `<button type="button" class="btn-sm btn-secondary" onclick="atToggleActive()">${off ? "เปิดใช้งาน" : "ปิดใช้งาน"}</button>`}
-      ${!isNew && n === 0 ? `<button type="button" class="btn-sm btn-remove" onclick="atDeleteType()">ลบประเภท</button>` : ""}
+      ${!isNew && n === 0 ? `<button type="button" class="btn-sm btn-remove" onclick="atDeleteType()">${isPart ? "ลบหมวด" : "ลบประเภท"}</button>` : ""}
       ${atState.dirty && !isNew ? `<button type="button" class="btn-sm btn-secondary" onclick="atDiscard()">ยกเลิกการแก้ไข</button>` : ""}
-      <button type="button" class="btn-primary at-save" id="at-saveBtn" onclick="atSave()">${isNew ? "สร้างประเภท" : "บันทึก"}</button>
+      <button type="button" class="btn-primary at-save" id="at-saveBtn" onclick="atSave()">${isNew ? (isPart ? "สร้างหมวดอะไหล่" : "สร้างประเภท") : "บันทึก"}</button>
     </div>`;
 }
 
 function atGeneralTabHtml(d, isNew) {
+  if (d.kind === "partCategory") {
+    return `
+    <div class="form-grid">
+      <div class="form-field"><label>ชื่อหมวดอะไหล่ *</label><input type="text" id="at-label" maxlength="60" value="${escapeAttr(d.label)}" placeholder="เช่น อะไหล่ Gateway"></div>
+      <div class="form-field"><label>ลำดับในเมนู (น้อยขึ้นก่อน)</label><input type="number" id="at-order" min="0" max="999" value="${escapeAttr(d.order)}"></div>
+    </div>
+    <div class="form-field"><label>ไอคอน (ใช้บนการ์ด Dashboard / ตัวช่วยเพิ่มอะไหล่)</label>
+      <div class="at-icons">${AT_ICON_CHOICES.map((ic) => `<button type="button" class="at-icon${d.icon === ic ? " on" : ""}" data-icon="${ic}" title="${ic}"><i class="fas ${ic}"></i></button>`).join("")}</div>
+    </div>
+    <div class="form-field checkbox-field" style="margin-top:12px;"><label><input type="checkbox" id="at-testOnly" ${d.testOnly ? "checked" : ""}> หมวดทดสอบ — เห็นเฉพาะ Admin</label></div>
+    <div class="cache-note" style="margin-top:8px;">รหัสระบบ: <code>${escapeHtml(d.typeId)}</code>${isNew ? " (สร้างให้อัตโนมัติ)" : ""} · หมวดใหม่ทำงานเหมือนหมวดอะไหล่เดิมทุกอย่าง (ชื่อ/รายละเอียด/รูป, นับจำนวนหรือมี S/N, เบิก/คืน, ประวัติ, ใกล้หมด) — เพิ่มรายชื่ออะไหล่ได้ที่ "จัดการ Stock/อะไหล่"</div>`;
+  }
   return `
     <div class="form-grid">
       <div class="form-field"><label>ชื่อประเภท *</label><input type="text" id="at-label" maxlength="60" value="${escapeAttr(d.label)}" placeholder="เช่น เครื่องอบแห้ง"></div>
@@ -942,6 +1071,7 @@ function atBindEditor() {
 }
 
 function atShowMsg(text, ok) {
+  atState.flash = { text, ok: !!ok };
   const el = document.getElementById("at-msg");
   if (!el) return;
   el.className = "form-msg " + (ok ? "success" : "error");
@@ -966,8 +1096,9 @@ async function atSave() {
   const err = atValidateDraft(d);
   if (err) { if (atState.tab !== err.tab) { atState.tab = err.tab; renderAssetTypesView(); } return atShowMsg(err.msg, false); }
   const isNew = !!d.__new;
+  const isPart = d.kind === "partCategory";
   const payload = {
-    typeId: d.typeId, kind: "device", label: d.label.trim(), icon: d.icon, unit: String(d.unit || "").trim(),
+    typeId: d.typeId, kind: isPart ? "partCategory" : "device", label: d.label.trim(), icon: d.icon, unit: String(d.unit || "").trim(),
     serialLabel: String(d.serialLabel || "").trim(), order: d.order === "" ? undefined : Number(d.order), testOnly: !!d.testOnly,
     flows: d.flows,
     fields: d.fields.map((f) => {
@@ -992,7 +1123,9 @@ async function atSave() {
     const saved = Object.assign({}, payload, { active: isNew ? true : d.active !== false, updatedAt: "__pending" });
     if (!atDefById(atState.selected)) state.data.assetTypesRaw = [...(state.data.assetTypesRaw || []), saved];
     renderAssetTypesView();
-    atShowMsg(isNew ? `สร้างประเภท "${payload.label}" แล้ว — เมนูจะขึ้นให้ทันที (รับเข้าสต๊อกได้ที่ "จัดการ Stock/อะไหล่")` : "บันทึกแล้ว", true);
+    atShowMsg(isNew
+      ? (isPart ? `สร้างหมวด "${payload.label}" แล้ว — เพิ่มรายชื่ออะไหล่ได้ที่ "จัดการ Stock/อะไหล่"` : `สร้างประเภท "${payload.label}" แล้ว — เมนูจะขึ้นให้ทันที (รับเข้าสต๊อกได้ที่ "จัดการ Stock/อะไหล่")`)
+      : "บันทึกแล้ว", true);
   } catch (e) {
     atShowMsg("เกิดข้อผิดพลาด: " + e.message, false);
   } finally {
@@ -1532,6 +1665,9 @@ function renderMobileHome() {
   // ประเภทอุปกรณ์แบบตั้งค่าได้ — แทรกต่อจาก Color Sorter (กลุ่มเครื่อง ก่อนกลุ่มอะไหล่)
   const csIdx = tiles.findIndex((t) => t.key === COLORSORTER_KEY);
   tiles.splice(csIdx >= 0 ? csIdx + 1 : tiles.length, 0, ...genericMobileHomeTiles());
+  // หมวดอะไหล่ใหม่ (Phase 5) — ต่อจาก "อะไหล่ MoisturLyzer"
+  const mpIdx = tiles.findIndex((t) => t.key === "moisturlyzerParts");
+  tiles.splice(mpIdx >= 0 ? mpIdx + 1 : tiles.length, 0, ...genericPartKeys.map((key) => ({ key, label: VIEW_CONFIG[key].navLabel, icon: "fa-cogs", colorStyle: VIEW_CONFIG[key].color })));
 
   wrap.innerHTML = `
     <div class="mh-header">
@@ -5998,8 +6134,8 @@ function mpToReview() {
     <div class="form-card">
       <div class="mp-total"><span>${escapeHtml(mpTypeLabel(mpAssetType))}</span><b>${d.total} ${escapeHtml(isGenericViewKey(mpAssetType) ? STOCK_NO_UNIT_BY_VIEW[mpAssetType] || "ชิ้น" : "ชิ้น")}</b></div>
       ${kvHtml}${listHtml}
-      ${isAdd && !(!!PART_CATEGORY_BY_VIEW[mpAssetType]) ? `<div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">${isGenericViewKey(mpAssetType)
-        ? `ทุกชิ้นจะเข้าสถานะ "Stock" ทันที (ประเภทนี้ยังเบิกผ่านหน้า "เบิกอุปกรณ์" ไม่ได้ — กำลังพัฒนา)`
+      ${isAdd && !(!!PART_CATEGORY_BY_VIEW[mpAssetType]) ? `<div class="form-msg" style="display:block; background:var(--green-light); color:var(--green-dark); margin-top:14px;">${isGenericViewKey(mpAssetType) && !genericFlowOn(VIEW_CONFIG[mpAssetType], "issue") && !genericFlowOn(VIEW_CONFIG[mpAssetType], "loan")
+        ? `ทุกชิ้นจะเข้าสถานะ "Stock" ทันที (ประเภทนี้ปิดการเบิก/ยืมไว้ในค่าตั้ง)`
         : `ทุกชิ้นจะเข้าสถานะ "Stock" ทันที พร้อมให้เลือกเบิกได้เลย`}</div>` : ""}
       <div id="mp-reviewMsg" class="form-msg"></div>
     </div>`;
@@ -8439,6 +8575,7 @@ function renderIssueView() {
             <option value="colorSorterParts">อะไหล่ Color Sorter</option>
             <option value="panolyzerParts">อะไหล่ Panolyzer</option>
             <option value="moisturlyzerParts">อะไหล่ MoisturLyzer</option>
+            ${genericPartIssueOptionsHtml()}
             <option value="other">อื่นๆ (พิมพ์เอง)</option>
           </select>
           <input type="text" id="f-itemSearch" placeholder="ค้นหา Serial / รุ่น...">
