@@ -330,8 +330,7 @@ function isColorSorterStockRow(row) {
 // หลักการ: "ลงทะเบียน" แต่ละประเภทเข้า VIEW_CONFIG ตอนรันไทม์ (key = "at_<typeId>") ให้หน้ารายการ/ตาราง/การ์ด/
 // หน้ารายละเอียด/ลบ/ตัวช่วยรับเข้าสต๊อกเดิมใช้ได้ทันทีโดยไม่ต้องเขียนหน้าใหม่ — ส่วนที่ต่างจริงๆ มีแค่ฟอร์มแก้ไข
 // (ตรวจตาม schema) และฟอร์มรับเข้า (ฟิลด์มาจาก schema) ซึ่งแยกฟังก์ชันไว้ด้านล่าง
-// ข้อจำกัด Phase 2: ยังเบิก/ย้าย/เคลมประเภทใหม่ไม่ได้ (Phase 3) — หน้าเบิกใช้รายการประเภทตายตัวอยู่แล้ว และ
-// TRANSFER_CLAIM_ASSET_KEYS ไม่มี key ของประเภทใหม่ ปุ่มเหล่านั้นจึงไม่โผล่เอง
+// Phase 3: เบิก/ยืม/ย้าย/เคลม/ยืม→ซื้อ ได้ตาม flows ในค่าตั้ง (genericFlowOn) — ทำงานแบบ MoisturLyzer แต่ไม่ผูก Gateway/SimCard
 // testOnly = ประเภททดสอบ แสดงเฉพาะ Admin (มีป้าย "ทดสอบ")
 // ============================================================
 const GENERIC_VIEW_PREFIX = "at_";
@@ -380,7 +379,10 @@ function clearGenericAssetTypes() {
     delete STOCK_NO_UNIT_BY_VIEW[key];
     delete MP_TYPE_ICONS[key];
     delete DASHBOARD_CATEGORY_META[key];
+    delete SUPPLIER_CLAIM_TYPE_META[key];
     delete state.data[key];
+    const tcIdx = TRANSFER_CLAIM_ASSET_KEYS.indexOf(key);
+    if (tcIdx !== -1) TRANSFER_CLAIM_ASSET_KEYS.splice(tcIdx, 1);
   });
   for (let i = MANAGE_STOCK_ASSET_TYPES.length - 1; i >= 0; i--) {
     if (MANAGE_STOCK_ASSET_TYPES[i].generic) MANAGE_STOCK_ASSET_TYPES.splice(i, 1);
@@ -406,6 +408,10 @@ function syncGenericAssetTypes() {
     MP_TYPE_ICONS[cfg.key] = cfg.icon;
     DASHBOARD_CATEGORY_META[cfg.key] = { icon: cfg.icon, color: cfg.color };
     if (def.active !== false) MANAGE_STOCK_ASSET_TYPES.push({ value: cfg.key, label: cfg.title, generic: true });
+    // Phase 3: ใส่ใน TRANSFER_CLAIM_ASSET_KEYS เสมอ (ป้าย "อยู่ระหว่างเคลม/ตัดจำหน่าย" + หน้ารอเคลม Supplier ต้องเห็นเครื่องที่
+    // เคลมค้างอยู่แม้ภายหลังจะปิดการเคลมไปแล้ว) — ส่วนปุ่ม/ค้นหา "ย้าย/เคลม" กรองตาม flows แยกที่ genericTransferClaimAllowed
+    TRANSFER_CLAIM_ASSET_KEYS.push(cfg.key);
+    SUPPLIER_CLAIM_TYPE_META[cfg.key] = { label: cfg.title, color: cfg.color };
     state.data[cfg.key] = byType[def.typeId] || [];
     genericRegisteredKeys.push(cfg.key);
   });
@@ -427,6 +433,20 @@ function renderGenericAssetNav() {
         <span class="nav-icon-chip" style="background:${cfg.color};"><i class="fas ${cfg.icon}"></i></span> <span>${escapeHtml(cfg.navLabel)}</span>
       </div>`;
   }).join("");
+}
+
+/** Phase 3: ขั้นตอนนี้เปิดอยู่สำหรับประเภทนี้หรือไม่ (ประเภทเดิม = เปิดเสมอ) — flow: issue | loan | sale | transfer | claim
+ * ต้องตรงกับ genericFlowBlocked ฝั่ง Cloud Functions (server ตรวจซ้ำอีกชั้นเสมอ) */
+function genericFlowOn(cfg, flow) {
+  return !(cfg && cfg.generic && cfg.typeDef && cfg.typeDef.flows && cfg.typeDef.flows[flow] === false);
+}
+/** ปุ่ม/ค้นหา "ย้าย/เคลม" ใช้ได้กับประเภทนี้หรือไม่ (ประเภทใหม่ต้องเปิดอย่างน้อย 1 ใน 2) */
+function genericTransferClaimAllowed(cfg) { return genericFlowOn(cfg, "transfer") || genericFlowOn(cfg, "claim"); }
+/** ตัวเลือกประเภทใหม่ในขั้นที่ 2 ของหน้าเบิก (เฉพาะที่เปิดใช้งานและเปิดเบิกหรือยืมไว้) */
+function genericIssueTypeOptionsHtml() {
+  return genericRegisteredKeys.map((k) => VIEW_CONFIG[k])
+    .filter((c) => c && c.typeDef.active !== false && (genericFlowOn(c, "issue") || genericFlowOn(c, "loan")))
+    .map((c) => `<option value="${escapeAttr(c.key)}">${escapeHtml(c.title)}</option>`).join("");
 }
 
 /** ไอคอนหน้าแรกมือถือของประเภทใหม่ (แทรกต่อจาก Color Sorter ใน renderMobileHome) */
@@ -4688,7 +4708,7 @@ function buildAssetRowActionButtonsHtml(cfg, row, isAdmin) {
   const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
   // ใช้ isPhysicalStockRow (ไม่ใช่ isStockRow) เพื่อไม่ให้ซิมที่อยู่ในคลังจริงแต่ยังไม่ Activate ถูกเข้าใจผิดว่า
   // "เบิกออกไปแล้ว" จนโชว์ปุ่ม "ย้าย/เคลม" ซึ่งมีไว้สำหรับของที่เบิกไปหาลูกค้าแล้วเท่านั้น
-  const issued = isTransferClaimType && !claimed && !writtenOff && !isPhysicalStockRow(row, cfg.stockField);
+  const issued = isTransferClaimType && genericTransferClaimAllowed(cfg) && !claimed && !writtenOff && !isPhysicalStockRow(row, cfg.stockField);
   if (isAdmin && claimed) {
     return `<button class="btn-sm btn-primary" onclick="closeAssetDetailModal(); resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'toStock')">คืนเข้าสต็อก</button>
          <button class="btn-sm btn-remove" onclick="closeAssetDetailModal(); resolveClaimAction('${escapeAttr(cfg.key)}', '${escapeAttr(serial)}', 'writeOff')">ตัดจำหน่าย</button>`;
@@ -4751,7 +4771,7 @@ function renderRowsAsCards(cfg, filtered, isAdmin) {
     const isTransferClaimType = TRANSFER_CLAIM_ASSET_KEYS.includes(cfg.key);
     const claimed = isTransferClaimType && isClaimedRow(row, cfg);
     const writtenOff = isTransferClaimType && isWrittenOffRow(row, cfg);
-    const issued = isTransferClaimType && !claimed && !writtenOff && !stock;
+    const issued = isTransferClaimType && genericTransferClaimAllowed(cfg) && !claimed && !writtenOff && !stock;
     const noChip = hasStockNo(cfg.key) ? stockNoChipHtml(stockNoOf(cfg.key, row)) : "";
 
     let bodyRows = cfg.columns
@@ -6612,7 +6632,8 @@ function openTransferClaimModal(assetKey, serial) {
   const cfg = VIEW_CONFIG[assetKey];
   const row = (state.data[cfg.key] || []).find((r) => String(r[cfg.serialField]) === String(serial));
   if (!row) return;
-  transferClaimState = { assetKey, cfg, serial, row, tab: "transfer", issuedByOverride: "" };
+  // ประเภทใหม่: เปิดที่แท็บที่ใช้ได้ (ปิดย้ายไว้ → เริ่มที่เคลม)
+  transferClaimState = { assetKey, cfg, serial, row, tab: genericFlowOn(cfg, "transfer") ? "transfer" : "claim", issuedByOverride: "" };
   document.getElementById("transferClaimModalTitle").textContent = `ย้าย/เคลม — ${cfg.title} ${serial}`;
   renderTransferClaimModalBody();
   document.getElementById("transferClaimModal").style.display = "flex";
@@ -6623,6 +6644,7 @@ function closeTransferClaimModal() {
 }
 
 function switchTransferClaimTab(tab) {
+  if (!genericFlowOn(transferClaimState.cfg, tab)) return; // ประเภทใหม่ที่ปิดขั้นตอนนี้ไว้
   transferClaimState.tab = tab;
   renderTransferClaimModalBody();
 }
@@ -6647,10 +6669,12 @@ function renderTransferClaimModalBody() {
   const fromCustomer = String(row.Customer_name || "").trim();
   const fromLocation = String(row.Location || "").trim();
 
+  // ประเภทใหม่ที่ปิดขั้นตอนใดไว้ — ไม่แสดงแท็บนั้น (ประเภทเดิมแสดงครบ 2 แท็บเหมือนเดิม)
+  const tcCfg = transferClaimState.cfg;
   const tabsHtml = `
     <div class="tc-tabs">
-      <div class="tc-tab ${tab === "transfer" ? "active" : ""}" onclick="switchTransferClaimTab('transfer')">ย้ายอุปกรณ์</div>
-      <div class="tc-tab ${tab === "claim" ? "active" : ""}" onclick="switchTransferClaimTab('claim')">เคลม (เปลี่ยนเครื่องให้ลูกค้า)</div>
+      ${genericFlowOn(tcCfg, "transfer") ? `<div class="tc-tab ${tab === "transfer" ? "active" : ""}" onclick="switchTransferClaimTab('transfer')">ย้ายอุปกรณ์</div>` : ""}
+      ${genericFlowOn(tcCfg, "claim") ? `<div class="tc-tab ${tab === "claim" ? "active" : ""}" onclick="switchTransferClaimTab('claim')">เคลม (เปลี่ยนเครื่องให้ลูกค้า)</div>` : ""}
     </div>`;
 
   let fieldsHtml = "";
@@ -7725,7 +7749,7 @@ function assetErrorMessage(code) {
 
 /** ข้อความ error สำหรับฟีเจอร์ "ย้าย/เคลม" */
 function transferClaimErrorMessage(code, conflicts) {
-  if (code === "item_conflict" && conflicts && conflicts.length) return conflicts.join("\n");
+  if ((code === "item_conflict" || code === "flow_disabled") && conflicts && conflicts.length) return conflicts.join("\n");
   switch (code) {
     case "not_issued": return "อุปกรณ์นี้ไม่ได้อยู่ในสถานะเบิกออกแล้ว (อาจเป็น Stock หรืออยู่ระหว่างเคลมอยู่แล้ว)";
     case "asset_claimed": return "อุปกรณ์นี้อยู่ระหว่างเคลมอยู่แล้ว";
@@ -8015,6 +8039,7 @@ function renderIssueView() {
             <option value="simcard">SimCard</option>
             <option value="panolyzer">Panolyzer</option>
             <option value="colorSorter">Color Sorter</option>
+            ${genericIssueTypeOptionsHtml()}
             <option value="colorSorterParts">อะไหล่ Color Sorter</option>
             <option value="panolyzerParts">อะไหล่ Panolyzer</option>
             <option value="moisturlyzerParts">อะไหล่ MoisturLyzer</option>
@@ -8616,6 +8641,14 @@ function addToBasket(assetKey, serial) {
   }
 
   const cfg = VIEW_CONFIG[assetKey];
+  // ประเภทใหม่ (Phase 3): ต้องเปิดการเบิก/ยืมไว้ตามที่ติ๊ก "ลูกค้ายืม" — server ตรวจซ้ำอีกชั้นตอนส่งคำขอ
+  if (cfg.generic) {
+    const flow = issuanceForm.isLoan ? "loan" : "issue";
+    if (!genericFlowOn(cfg, flow)) {
+      showAlert(`${cfg.title} ปิดการ${flow === "loan" ? "ยืม" : "เบิก"}ไว้ในค่าตั้งของประเภทนี้`, "warning");
+      return;
+    }
+  }
   const item = {
     assetType: cfg.assetType, assetKey, serialNo: serial,
     connectTo: cfg.connectOptions ? cfg.connectOptions[0] : "",
@@ -9528,6 +9561,9 @@ function formatItemLabel(item, opts) {
     const name = item.ItemName || (unit && unit.PartName) || "อะไหล่";
     return escapeHtml(name) + ` <span class="cache-note">(อะไหล่ ${escapeHtml(PART_CATEGORY_LABEL[unitCfg.partCategory] || unitCfg.partCategory)})</span>`;
   }
+  // ประเภทอุปกรณ์แบบตั้งค่าได้ — แสดงชื่อประเภทแทนรหัส typeId (เช่น "เครื่องอบแห้ง" แทน "dryer")
+  const genericCfg = viewConfigByAssetType(item.AssetType);
+  if (genericCfg && genericCfg.generic) return escapeHtml(genericCfg.title);
   return escapeHtml(item.AssetType);
 }
 
@@ -9564,6 +9600,8 @@ function assetIconSvg(assetType) {
   if (assetType === "Gateway") return ASSET_ICON_GATEWAY;
   if (assetType === "SimCard") return ASSET_ICON_SIM;
   if (assetType === "MoisturLyzer") return ASSET_ICON_DEVICE;
+  const genericCfg = viewConfigByAssetType(assetType);
+  if (genericCfg && genericCfg.generic) return ASSET_ICON_DEVICE; // ประเภทใหม่ = เครื่อง
   return ASSET_ICON_PART;
 }
 
@@ -9823,6 +9861,7 @@ function getTransferClaimSearchableRows() {
   const rows = [];
   TRANSFER_CLAIM_ASSET_KEYS.forEach((assetKey) => {
     const cfg = VIEW_CONFIG[assetKey];
+    if (!genericTransferClaimAllowed(cfg)) return; // ประเภทใหม่ที่ปิดทั้งย้ายและเคลม
     (state.data[assetKey] || []).forEach((row) => {
       // ใช้ isPhysicalStockRow เพื่อไม่ให้ซิมที่อยู่ในคลังจริงแต่ยังไม่ Activate โผล่มาเป็นตัวเลือกให้ย้าย/เคลม
       // (ของที่ยังไม่เคยถูกเบิกไม่ควรอยู่ในรายการนี้เลย — เหตุผลเดียวกับ buildAssetRowActionButtonsHtml/renderRowsAsCards)
@@ -10147,13 +10186,15 @@ function openLoanToSale(transactionId) {
   const loanMs = Date.parse(txn.Timestamp || "");
   const loanDate = isNaN(loanMs) ? "" : new Date(loanMs + 7 * 3600e3).toISOString().slice(0, 10); // วันที่ยืม (เวลาไทย)
   const decisions = {};
-  items.forEach((i) => { decisions[i.ItemDocID] = "buy"; });
+  // ประเภทใหม่ที่ปิด "ขาย" ไว้ — ไม่มีตัวเลือก "ซื้อ" ให้ชิ้นนั้น เริ่มต้นที่ "คืนเข้า Stock" แทน (server ตรวจซ้ำ)
+  const canBuy = (i) => genericFlowOn(viewConfigByAssetType(i.AssetType), "sale");
+  items.forEach((i) => { decisions[i.ItemDocID] = canBuy(i) ? "buy" : "return"; });
 
   const rowsHtml = items.map((i) => `
     <div class="lts-row">
       <div class="lts-nm">${formatItemLabel(i, { withQty: true })}${PART_QTY_DEVICE_LABEL[i.AssetType] ? "" : `<small>S/N ${formatItemSerialLabel(i)}</small>`}</div>
       <div class="am-seg lts-seg" data-item="${escapeAttr(i.ItemDocID)}">
-        ${LOAN_DECISIONS.map((d) => `<label class="lts-${d.value} ${d.value === "buy" ? "on" : ""}"><input type="radio" name="lts-${escapeAttr(i.ItemDocID)}" value="${d.value}" ${d.value === "buy" ? "checked" : ""}>${d.label}</label>`).join("")}
+        ${LOAN_DECISIONS.filter((d) => d.value !== "buy" || canBuy(i)).map((d) => `<label class="lts-${d.value} ${d.value === decisions[i.ItemDocID] ? "on" : ""}"><input type="radio" name="lts-${escapeAttr(i.ItemDocID)}" value="${d.value}" ${d.value === decisions[i.ItemDocID] ? "checked" : ""}>${d.label}</label>`).join("")}
       </div>
     </div>`).join("");
 
@@ -10217,6 +10258,7 @@ function openLoanToSale(transactionId) {
         sale_date_in_future: "วันที่ซื้อต้องไม่เกินวันนี้", sale_before_loan: "วันที่ซื้อต้องไม่ก่อนวันที่ยืม", invalid_sale_date: "วันที่ซื้อไม่ถูกต้อง",
         nothing_open: "ไม่มีอุปกรณ์ที่ยังยืมอยู่แล้ว",
       };
+      if (res.error === "flow_disabled" && res.conflicts && res.conflicts.length) return showErr(res.conflicts.join("\n"));
       return showErr(map[res.error] || ("บันทึกไม่สำเร็จ: " + (res.error || "unknown_error")));
     }
     closeGenericFormModal();
